@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Podcast Watch LaunchAgent — drains the podcast drop folder.
+
+  To install:
+    1. Edit ProgramArguments below: replace YOUR_USERNAME with your macOS
+       short username (and adjust the vault path if you didn't put the
+       vault at ~/Obsidian/).
+    2. cp Templates/Scripts/com.obsidian.podcast-watch.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.obsidian.podcast-watch.plist
+
+  To reload after changes:
+    launchctl unload ~/Library/LaunchAgents/com.obsidian.podcast-watch.plist
+    launchctl load ~/Library/LaunchAgents/com.obsidian.podcast-watch.plist
+
+  Drops go in ~/SourceMedia/PodcastInput — an ordinary local folder, filled
+  either by hand or by source_mail_pull.py draining a signed `type: podcast`
+  email from a phone (see docs/Source-Mail-Transport.md). Transcripts are
+  written to <vault>/Clippings/ so tag-clippings tags them like any other clip.
+
+  (Comment style note: never put two consecutive hyphens inside these XML
+  comments. plutil and launchd tolerate it, but plistlib rejects the file,
+  which silently hides the job from the morning dashboard's health view.)
+
+  StartInterval is 900, not the 300 the cheaper watchers use: transcription
+  costs real CPU for real minutes. podcast_watch.py takes one drop per run by
+  default and holds a single-instance lock, so a tick that fires while a long
+  episode is still running exits immediately rather than piling on.
+
+  Requires ffmpeg on PATH (brew install ffmpeg) — it decodes the audio before
+  transcription. On Apple Silicon transcription itself goes through
+  mlx-whisper; see podcast_transcribe.py for the backend order.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.podcast-watch</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
+        <string>-u</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/podcast_watch.py</string>
+        <string>--once</string>
+    </array>
+
+    <!--
+      LaunchAgents do not inherit a login shell's PATH: launchd hands them
+      /usr/bin:/bin:/usr/sbin:/sbin and nothing else. ffmpeg is a Homebrew
+      binary (/opt/homebrew/bin on Apple Silicon, /usr/local/bin on Intel),
+      so without this the agent fails every drop with
+      "[Errno 2] No such file or directory: 'ffmpeg'" — after downloading the
+      episode and the 1.5GB model, since ffmpeg is not reached until decode.
+      Running podcast_transcribe.py by hand works throughout, because an
+      interactive shell does have Homebrew on PATH, which makes this look like
+      a transcription bug rather than an environment one.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StartInterval</key>
+    <integer>900</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/podcast-watch.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/podcast-watch.err</string>
+
+</dict>
+</plist>

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Vault Lint LaunchAgent
+
+  Weekly content-hygiene sweep over the vault: duplicate and malformed tags,
+  taxonomy drift against Knowledge/Tag Taxonomy.md, near-duplicate notes,
+  frontmatter schema gaps, broken wikilinks, and divergence between the
+  vault's Templates/Scripts and the public template repo.
+
+  Read-only by design. The scheduled run passes no fixing flags at all: it
+  reports, and you decide what to act on. Run the fixers by hand after reading
+  the report.
+
+  Mondays at 07:00, after the weekday 05:00 meeting pull and the 06:00 morning
+  dashboard, so the week's first dashboard isn't competing with it and the
+  report is waiting when the week starts.
+
+  On the exit-zero flag: without it the lint exits 1 whenever it finds
+  anything, and morning_dashboard.py reads launchd's LastExitStatus, so a vault
+  with two stray tags would render as a failed pipeline. Exit status here means
+  "the lint ran"; the findings live in the log.
+
+  No verbose flag on purpose: the full listing runs to hundreds of lines of
+  unreferenced People notes and buries the findings that need action. The log
+  keeps counts and samples; run it by hand with verbose to see everything.
+
+  NOTE for editors: XML comments cannot contain a double hyphen, so flag names
+  are written here without their leading dashes. Adding them makes this file
+  unparseable by plistlib even though plutil and launchd still accept it, and
+  the dashboard would quietly drop this job from pipeline health.
+
+  Stdlib-only, using /usr/bin/python3 so the sweep runs even if the per-vault
+  venv is broken (the same reason the security jobs do).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.vault-lint</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/vault_lint.py</string>
+        <string>--exit-zero</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key><integer>1</integer>
+        <key>Hour</key><integer>7</integer>
+        <key>Minute</key><integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/vault-lint.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/vault-lint.log</string>
+</dict>
+</plist>

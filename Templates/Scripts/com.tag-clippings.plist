@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Semantic Auto-Tagger LaunchAgent
+
+  Runs the tag_clippings.py script every 30 minutes (at :00 and :30) to tag
+  in the Clippings, Creations, and Meetings folders.
+
+  To install:
+    1. Edit ProgramArguments below: replace YOUR_USERNAME with your macOS
+       short username (and adjust the vault path if you didn't put the
+       vault at ~/Obsidian/).
+    2. cp Templates/Scripts/com.tag-clippings.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.tag-clippings.plist
+
+  To reload after changes:
+    launchctl unload ~/Library/LaunchAgents/com.tag-clippings.plist
+    launchctl load ~/Library/LaunchAgents/com.tag-clippings.plist
+
+  Uses the per-project venv at Templates/Scripts/.venv/ (shared with
+  voice_cleanup.py) so PEP 668 doesn't block pip installs on
+  Homebrew Python.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.tag-clippings</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
+        <string>-u</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/tag_clippings.py</string>
+    </array>
+
+    <!-- Every 30 minutes, on the hour and half-hour (:00 and :30). Clock-aligned
+         so the tagger runs at predictable times instead of interrupting editing
+         at random 5-minute marks. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Minute</key><integer>30</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/tag-clippings.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/tag-clippings.err</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

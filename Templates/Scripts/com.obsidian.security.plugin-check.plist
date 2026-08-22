@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Plugin Integrity Check LaunchAgent
+
+  Runs the plugin integrity check daily at 06:30 local time and whenever
+  the Obsidian plugins directory changes (so a plugin update or a manual
+  file drop into ~/Obsidian/.obsidian/plugins/ is detected within seconds
+  rather than waiting for the next scheduled sweep).
+
+  The script's first run with no baseline is a non-zero exit; the user
+  runs the script with ‑‑update once after vetting the current plugins
+  to establish the baseline. The top-level install.sh prompts to do this
+  at the end of installation.
+
+  Stdlib-only - uses /usr/bin/python3 deliberately so the watcher runs
+  even if the per-vault venv is broken. Keychain access goes through
+  /usr/bin/security via subprocess.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.security.plugin-check</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/plugin_integrity_check.py</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>6</integer>
+        <key>Minute</key><integer>30</integer>
+    </dict>
+
+    <!-- Throttle bursts: a plugin update ships several files at once. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/obsidian-security.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/obsidian-security.log</string>
+</dict>
+</plist>

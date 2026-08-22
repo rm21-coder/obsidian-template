@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Voice Cleanup LaunchAgent
+
+  To install:
+    1. Edit ProgramArguments below: replace YOUR_USERNAME with your macOS
+       short username (and adjust the vault path if you didn't put the
+       vault at ~/Obsidian/).
+    2. cp Templates/Scripts/com.voice-cleanup.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.voice-cleanup.plist
+
+  To reload after changes:
+    launchctl unload ~/Library/LaunchAgents/com.voice-cleanup.plist
+    launchctl load ~/Library/LaunchAgents/com.voice-cleanup.plist
+
+  Requires Full Disk Access for the venv python (see below)
+  (System Settings > Privacy & Security > Full Disk Access)
+
+  Uses a per-project venv at Templates/Scripts/.venv/ (created with
+  `/opt/homebrew/bin/python3 -m venv .venv`) so PEP 668 doesn't block
+  pip installs of anthropic / pyyaml / python-dotenv.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voice-cleanup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
+        <string>-u</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/voice_cleanup.py</string>
+    </array>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/voice-cleanup.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/voice-cleanup.err</string>
+
+</dict>
+</plist>

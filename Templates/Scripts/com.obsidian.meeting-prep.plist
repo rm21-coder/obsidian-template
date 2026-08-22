@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Meeting Prep LaunchAgent
+
+  Polls every 5 minutes and grafts open tasks for each attendee into
+  today's Meetings/<date>*.md note. The script self-gates to weekdays
+  05:30-19:00 local time and exits silently outside that window.
+  First poll inside the window inserts the morning block on each
+  Individual meeting; later polls refresh once 20-30 minutes before
+  each meeting starts.
+
+  Idempotent: the script writes inside an HTML-comment fence that it
+  uses as its own marker, so repeated runs do not duplicate content.
+
+  Python interpreter is TBD pending audit. If meeting_prep.py is
+  stdlib-only, /usr/bin/python3 is correct. If it imports yaml or
+  anything third-party, switch to the per-vault venv at
+  Templates/Scripts/.venv/bin/python3.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.meeting-prep</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/meeting_prep.py</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/meeting-prep.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/meeting-prep.log</string>
+</dict>
+</plist>

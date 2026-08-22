@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# pre-commit — classification audit gate for the obsidian-template repo.
+#
+# Refuses any commit that introduces or modifies a .md file in a user-
+# content folder (Knowledge/, Meetings/, People/, etc.) without
+# `classification: public` in its YAML frontmatter.
+#
+# To bypass for a single commit (audit override):
+#     git commit --no-verify
+#
+# This hook is installed by:
+#     ./installers/install-git-hooks.sh
+#
+# See installers/lib/check_classification.py for the audit logic and
+# remediation guidance.
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "pre-commit: not a git repository, skipping classification audit." >&2
+    exit 0
+}
+
+AUDIT="$REPO_ROOT/installers/lib/check_classification.py"
+if [[ ! -x "$AUDIT" ]]; then
+    echo "pre-commit: $AUDIT not found or not executable, skipping." >&2
+    exit 0
+fi
+
+if ! python3 "$AUDIT" --staged --quiet; then
+    echo "" >&2
+    echo "pre-commit: classification audit FAILED. Commit refused." >&2
+    echo "Fix the violations above, or commit with --no-verify to override." >&2
+    exit 1
+fi
+
+exit 0

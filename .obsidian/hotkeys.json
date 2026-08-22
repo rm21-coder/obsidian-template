@@ -1,0 +1,55 @@
+{
+  "quickadd:choice:865f5ed1-38ae-42d0-9ed1-d4a5ce39e610": [
+    {
+      "modifiers": [
+        "Mod",
+        "Shift"
+      ],
+      "key": "M"
+    }
+  ],
+  "workspace:goto-tab-1": [],
+  "workspace:goto-tab-2": [],
+  "workspace:goto-tab-3": [],
+  "workspace:goto-tab-4": [],
+  "workspace:goto-tab-5": [],
+  "workspace:goto-tab-6": [],
+  "workspace:goto-tab-7": [],
+  "workspace:goto-tab-8": [],
+  "workspace:undo-close-pane": [],
+  "templater-obsidian:Templates/People Template.md": [
+    {
+      "modifiers": [
+        "Alt",
+        "Ctrl",
+        "Mod"
+      ],
+      "key": "P"
+    }
+  ],
+  "workspace:close-window": [],
+  "file-explorer:new-file-in-new-pane": [],
+  "editor:delete-paragraph": [],
+  "obsidian-excalidraw-plugin:insert-link": [],
+  "obsidian-excalidraw-plugin:save": [],
+  "obsidian-tasks-plugin:edit-task": [
+    {
+      "modifiers": [
+        "Alt",
+        "Ctrl",
+        "Mod"
+      ],
+      "key": "T"
+    }
+  ],
+  "templater-obsidian:Templates/Move to Knowledge.md": [
+    {
+      "modifiers": [
+        "Alt",
+        "Ctrl",
+        "Mod"
+      ],
+      "key": "K"
+    }
+  ]
+}

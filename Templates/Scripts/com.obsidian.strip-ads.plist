@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Strip Ads LaunchAgent
+
+  Watches the Obsidian Clippings folder. When a file is added, renamed,
+  or removed, runs strip_ads.py over the whole folder. The script is
+  idempotent so sweeping over already-clean files is free.
+
+  Uses /usr/bin/python3 deliberately - strip_ads.py is stdlib-only and
+  the watcher should run even if the per-vault venv at
+  Templates/Scripts/.venv is broken or missing.
+
+  To install (manual, not recommended):
+    1. Edit ProgramArguments below: replace YOUR_USERNAME with your
+       macOS short username (and adjust the vault path if you didn't
+       put the vault at ~/Obsidian/).
+    2. cp Templates/Scripts/com.obsidian.strip-ads.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.obsidian.strip-ads.plist
+
+  Easier path: the top-level install.sh runs the sed substitution and
+  the launchctl load for you. See README "Quick start".
+
+  To reload after changes:
+    launchctl unload ~/Library/LaunchAgents/com.obsidian.strip-ads.plist
+    launchctl load ~/Library/LaunchAgents/com.obsidian.strip-ads.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.strip-ads</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/strip_ads.py</string>
+        <string>--quiet</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Clippings</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Clippings</string>
+    </array>
+
+    <!-- Throttle: do not fire more than once every 5 seconds. -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/strip-ads.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/strip-ads.log</string>
+</dict>
+</plist>

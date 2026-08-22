@@ -1,0 +1,25 @@
+.two-column-grid .markdown-preview-sizer {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px 10px;
+  text-align: center;
+  align-items: start;
+}
+
+/* Frontmatter and metadata: remove from grid flow entirely */
+.two-column-grid .markdown-preview-sizer > .mod-header,
+.two-column-grid .markdown-preview-sizer > .mod-footer,
+.two-column-grid .markdown-preview-sizer > .metadata-container {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.two-column-grid .markdown-preview-sizer > div {
+  padding: 8px 0;
+  margin: 0;
+}
+
+.two-column-grid .markdown-preview-sizer > div p {
+  margin: 0;
+}

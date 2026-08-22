@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Integrity Monitor LaunchAgent
+
+  Daily integrity sweep over the per-vault Scripts folder, the user's
+  LaunchAgents directory, and the vault-wide markdown count. Runs at
+  06:35 (just after the plugin check) so the alerts.log entries cluster
+  together.
+
+  Also fires within ~30s of any write into:
+    - ~/Library/LaunchAgents (the classic persistence vector)
+    - ~/Obsidian/Templates/Scripts (the integrity baseline target)
+    - ~/.local/share/obsidian-security (the controls' own state dir;
+      tampering with plugin_allowlist.json would otherwise be invisible
+      for up to 24 hours)
+
+  Stdlib-only - uses /usr/bin/python3 so the watcher runs even if the
+  per-vault venv is broken.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.security.integrity</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/integrity_monitor.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key><integer>6</integer>
+        <key>Minute</key><integer>35</integer>
+    </dict>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Library/LaunchAgents</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts</string>
+        <string>/Users/YOUR_USERNAME/.local/share/obsidian-security</string>
+    </array>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/obsidian-security.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/obsidian-security.log</string>
+</dict>
+</plist>

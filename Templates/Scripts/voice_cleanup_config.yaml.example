@@ -1,0 +1,19 @@
+# Voice Cleanup Configuration
+#
+# Copy this file to voice_cleanup_config.yaml and edit to match your setup.
+# API key is loaded from ~/dev/secrets/.env (ANTHROPIC_API_KEY) — edit the
+# load_dotenv() path in voice_cleanup.py if your secrets live elsewhere.
+
+# Claude model to use for cleanup
+claude_model: "claude-sonnet-4-6"
+
+# Path to your Obsidian vault (only needed if the script can't auto-detect)
+# vault_path: "/Users/yourname/your-vault"
+
+# Watch folder — where dictation drops land. Leave this commented out unless
+# you really need a different folder: unset, it is resolved by
+# source_media.drop_dir ("~/SourceMedia/VoiceInput"), which is the same
+# function source_mail_pull.py writes through. Setting it here is how the
+# watcher and the mail transport end up on different folders, and the failure
+# is silent — drops are delivered into a folder nothing drains.
+# watch_folder: "~/SourceMedia/VoiceInput"

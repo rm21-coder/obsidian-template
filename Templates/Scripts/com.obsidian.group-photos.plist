@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Group Photos LaunchAgent
+
+  Keeps Groups/*.md member rows showing real headshots. Runs two stdlib-only
+  scripts in order, once nightly:
+
+    1. Z_attachments/insert_group_placeholders.py
+         Prepends "![[placeholder-person.png|40]] " to any line that is a
+         bare person wikilink (e.g. "[[Doe, Jane]]") with no image at all.
+         It never touches a line that already has an "![[...]]" reference.
+
+    2. Z_attachments/refresh_groups.py
+         Swaps "placeholder-person.png" for the real photo when a matching
+         file (LastName-FirstName.{png,jpg,jpeg,webp}) now exists in
+         Z_attachments/. Never modifies a non-placeholder reference.
+
+  Running insert before refresh means a newly-added member who already has a
+  headshot gets upgraded to the real photo in the same nightly pass. A member
+  with no headshot yet just gets the placeholder, which is upgraded on a later
+  night once the photo is added.
+
+  Both scripts derive the vault root from their own location (parent of
+  Z_attachments/), so no vault path needs to be configured. Override with the
+  OBSIDIAN_VAULT env var only for testing.
+
+  To install:
+    1. Replace YOUR_USERNAME below with your macOS short username (and adjust
+       the vault path if you did not put the vault at ~/Obsidian/).
+    2. cp Templates/Scripts/com.obsidian.group-photos.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.obsidian.group-photos.plist
+
+  To reload after changes:
+    launchctl unload ~/Library/LaunchAgents/com.obsidian.group-photos.plist
+    launchctl load ~/Library/LaunchAgents/com.obsidian.group-photos.plist
+
+  Schedule: daily at 02:00 local time.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.group-photos</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>/usr/bin/python3 /Users/YOUR_USERNAME/Obsidian/Z_attachments/insert_group_placeholders.py &amp;&amp; /usr/bin/python3 /Users/YOUR_USERNAME/Obsidian/Z_attachments/refresh_groups.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>2</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/group-photos.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/group-photos.log</string>
+</dict>
+</plist>

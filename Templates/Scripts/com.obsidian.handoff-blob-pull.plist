@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Handoff Blob-Relay Puller LaunchAgent (Tier B)
+
+  Mirrors complete handoff sets from an Azure Blob Storage container into a
+  plain local folder, using a read/list/delete-scoped SAS token — see
+  docs/Azure-Blob-Handoff-Relay.md. meeting_prepopulate.py then reads that
+  same local folder via MEETING_PREPOP_SOURCE=drop.
+
+  The target here is a plain folder under the vault, not a cloud-sync mount
+  — so this job needs no Full Disk Access grant and no wrapper app.
+
+  To install:
+    1. Edit ProgramArguments below: replace YOUR_USERNAME (and the vault
+       path, if not at ~/Obsidian/).
+    2. Set HANDOFF_BLOB_ACCOUNT_URL / HANDOFF_BLOB_CONTAINER / HANDOFF_BLOB_SAS
+       below, or in ~/dev/secrets/.env (this script self-loads that file).
+    3. cp Templates/Scripts/com.obsidian.handoff-blob-pull.plist ~/Library/LaunchAgents/
+    4. launchctl load -w ~/Library/LaunchAgents/com.obsidian.handoff-blob-pull.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.handoff-blob-pull</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
+        <string>-u</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/handoff_blob_pull.py</string>
+    </array>
+
+    <!-- Poll every 5 minutes so a fresh set is usually already local by the
+         time meeting_prepopulate.py's own 30-minute poll runs. Cheap no-op
+         exit when the container is empty, so frequent polling is safe. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/handoff-blob-pull.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/handoff-blob-pull.log</string>
+</dict>
+</plist>

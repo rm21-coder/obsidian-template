@@ -1,0 +1,553 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1992" font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#fafafb"/>
+      <stop offset="100%" stop-color="#f1f0f5"/>
+    </linearGradient>
+    <linearGradient id="inputGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="autoGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="vaultGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7c3aed"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </linearGradient>
+    <linearGradient id="orgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect width="1400" height="2084" fill="url(#bg)"/>
+
+  <!-- Title bar -->
+  <rect x="0" y="0" width="1400" height="80" fill="#1f2937"/>
+  <text x="40" y="52" font-size="28" font-weight="700" fill="#ffffff">Obsidian Second Brain</text>
+  <text x="1360" y="50" font-size="12" fill="#9ca3af" text-anchor="end">v26 · 2026-08-20</text>
+
+  <!-- Column headers -->
+  <g font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">
+    <rect x="40"   y="100" width="280" height="36" rx="6" fill="url(#inputGrad)"/>
+    <text x="180" y="124">1 · INPUTS</text>
+    <rect x="360"  y="100" width="260" height="36" rx="6" fill="url(#autoGrad)"/>
+    <text x="490" y="124">2 · AUTOMATION</text>
+    <rect x="660"  y="100" width="380" height="36" rx="6" fill="url(#vaultGrad)"/>
+    <text x="850" y="124">3 · VAULT STORAGE  (~/Obsidian)</text>
+    <rect x="1080" y="100" width="280" height="36" rx="6" fill="url(#orgGrad)"/>
+    <text x="1220" y="124">4 · ORGANIZATION LAYER</text>
+  </g>
+
+  <!-- ============ INPUTS column ============ -->
+  <g filter="url(#shadow)">
+    <!-- Web Clipper -->
+    <rect x="40" y="156" width="280" height="84" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
+    <circle cx="68" cy="184" r="14" fill="#3b82f6"/>
+    <text x="68" y="189" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">W</text>
+    <text x="92" y="180" font-size="14" font-weight="700" fill="#111827">Obsidian Web Clipper</text>
+    <text x="92" y="198" font-size="11" fill="#6b7280">Browser + iOS/iPadOS share sheet</text>
+    <text x="56" y="220" font-size="11" fill="#374151">Any website articles including paywalled sources.</text>
+    <text x="56" y="234" font-size="10" fill="#6b7280">→ Clippings/  (Clipping Template)</text>
+
+    <!-- Voice Note -->
+    <rect x="40" y="252" width="280" height="120" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
+    <circle cx="68" cy="280" r="14" fill="#3b82f6"/>
+    <text x="68" y="285" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">V</text>
+    <text x="92" y="276" font-size="14" font-weight="700" fill="#111827">Voice Note (iPhone)</text>
+    <text x="92" y="294" font-size="11" fill="#6b7280">iOS Shortcut "Obsidian Note"</text>
+    <text x="56" y="316" font-size="11" fill="#374151">Dictate → signed email → intake mailbox</text>
+    <text x="56" y="334" font-size="10" fill="#6b7280">→ Creations/  (via Python voice-cleanup)</text>
+    <text x="56" y="354" font-size="10" fill="#9ca3af" font-style="italic">mail pulled ≤5 min, then 10-second watcher</text>
+
+    <!-- Markitdown Dropper -->
+    <rect x="40" y="384" width="280" height="120" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
+    <circle cx="68" cy="412" r="14" fill="#3b82f6"/>
+    <text x="68" y="417" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">M</text>
+    <text x="92" y="408" font-size="14" font-weight="700" fill="#111827">Markitdown Dropper</text>
+    <text x="92" y="426" font-size="11" fill="#6b7280">PySide6 drop-zone app + cleanup pass</text>
+    <text x="56" y="448" font-size="11" fill="#374151">.docx · .pptx · .xlsx · .pdf · audio · image</text>
+    <text x="56" y="466" font-size="10" fill="#6b7280">→ Creations/  ·  images → Z_attachments/</text>
+    <text x="56" y="486" font-size="10" fill="#9ca3af" font-style="italic">extracts images · normalizes bullets · adds YAML</text>
+
+    <!-- People Create -->
+    <rect x="40" y="516" width="280" height="84" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
+    <circle cx="68" cy="544" r="14" fill="#3b82f6"/>
+    <text x="68" y="549" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">P</text>
+    <text x="92" y="540" font-size="14" font-weight="700" fill="#111827">People Create</text>
+    <text x="92" y="558" font-size="11" fill="#6b7280">QuickAdd / Templater</text>
+    <text x="56" y="580" font-size="11" fill="#374151">Title · Org · Email · Mobile · Photo</text>
+    <text x="56" y="594" font-size="10" fill="#6b7280">→ People/  (links Categories/People)</text>
+
+    <!-- Meeting Notes -->
+    <rect x="40" y="612" width="280" height="84" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
+    <circle cx="68" cy="640" r="14" fill="#3b82f6"/>
+    <text x="68" y="645" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">N</text>
+    <text x="92" y="636" font-size="14" font-weight="700" fill="#111827">Meeting Notes</text>
+    <text x="92" y="654" font-size="11" fill="#6b7280">Meeting / Meeting Type templates</text>
+    <text x="56" y="676" font-size="11" fill="#374151">Live note-taking during meetings</text>
+    <text x="56" y="690" font-size="10" fill="#6b7280">→ Meetings/  (then → Meetings/History/)</text>
+
+    <!-- Hand-written -->
+    <rect x="40" y="708" width="280" height="80" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
+    <circle cx="68" cy="736" r="14" fill="#3b82f6"/>
+    <text x="68" y="741" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">H</text>
+    <text x="92" y="732" font-size="14" font-weight="700" fill="#111827">Hand-written / Creations</text>
+    <text x="92" y="750" font-size="11" fill="#6b7280">Note Template · Excalidraw · Journal</text>
+    <text x="56" y="772" font-size="10" fill="#6b7280">→ Creations/ · Excalidraw/ · topical folders</text>
+
+    <!-- YouTube Summarizer -->
+    <rect x="40" y="800" width="280" height="80" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
+    <circle cx="68" cy="828" r="14" fill="#3b82f6"/>
+    <text x="68" y="833" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">Y</text>
+    <text x="92" y="824" font-size="14" font-weight="700" fill="#111827">YouTube Summarizer</text>
+    <text x="92" y="842" font-size="11" fill="#6b7280">Share Sheet → Claude (Sonnet 5)</text>
+    <text x="56" y="864" font-size="10" fill="#6b7280">→ Clippings/YouTube/  (yt-dlp transcript → markdown)</text>
+
+    <!-- Podcast Transcribe -->
+    <rect x="40" y="892" width="280" height="120" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
+    <circle cx="68" cy="920" r="14" fill="#3b82f6"/>
+    <text x="68" y="925" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">T</text>
+    <text x="92" y="916" font-size="14" font-weight="700" fill="#111827">Podcast Transcribe</text>
+    <text x="92" y="934" font-size="11" fill="#6b7280">Episode · RSS feed · Apple Podcasts URL</text>
+    <text x="56" y="956" font-size="11" fill="#374151">Share → signed email, or drop an audio file</text>
+    <text x="56" y="974" font-size="10" fill="#6b7280">→ Clippings/  (verbatim transcript, then tagged)</text>
+    <text x="56" y="994" font-size="10" fill="#9ca3af" font-style="italic">local Whisper · 900-sec tick · 1 episode per run</text>
+  </g>
+
+  <!-- ============ AUTOMATION column ============ -->
+  <g filter="url(#shadow)">
+    <!-- Templates -->
+    <rect x="360" y="156" width="260" height="100" rx="8" fill="#fffbeb" stroke="#fde68a" stroke-width="1.5"/>
+    <rect x="360" y="156" width="260" height="32" rx="8" fill="#f59e0b"/>
+    <rect x="360" y="174" width="260" height="14" fill="#f59e0b"/>
+    <text x="490" y="177" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">Templates · Templater · QuickAdd</text>
+    <text x="376" y="210" font-size="11" fill="#374151">Clipping · Voice · People · Meeting</text>
+    <text x="376" y="226" font-size="11" fill="#374151">Note · Journal · Move-to-Knowledge</text>
+    <text x="376" y="244" font-size="10" fill="#9ca3af" font-style="italic">applied at create time, in-app</text>
+
+    <!-- Python LaunchAgent: voice cleanup -->
+    <rect x="360" y="276" width="260" height="140" rx="8" fill="#fffbeb" stroke="#fde68a" stroke-width="1.5"/>
+    <rect x="360" y="276" width="260" height="32" rx="8" fill="#f59e0b"/>
+    <rect x="360" y="294" width="260" height="14" fill="#f59e0b"/>
+    <text x="490" y="297" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">LaunchAgent · Voice Cleanup</text>
+    <text x="376" y="330" font-size="11" font-weight="700" fill="#111827">com.voice-cleanup.plist</text>
+    <text x="376" y="348" font-size="11" fill="#374151">voice_cleanup.py · 10-sec poll</text>
+    <text x="376" y="364" font-size="11" fill="#374151">Watches ~/SourceMedia/VoiceInput/</text>
+    <text x="376" y="380" font-size="11" fill="#374151">Calls Claude API → polish + YAML</text>
+    <text x="376" y="396" font-size="11" fill="#374151">Writes to Creations/, deletes raw</text>
+    <text x="376" y="411" font-size="10" fill="#9ca3af" font-style="italic">~1 API call per voice note</text>
+
+    <!-- Python LaunchAgent: strip ads (NEW) -->
+    <rect x="360" y="436" width="260" height="120" rx="8" fill="#fffbeb" stroke="#fde68a" stroke-width="1.5"/>
+    <rect x="360" y="436" width="260" height="32" rx="8" fill="#f59e0b"/>
+    <rect x="360" y="454" width="260" height="14" fill="#f59e0b"/>
+    <text x="490" y="457" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">LaunchAgent · Strip Ads</text>
+    <text x="376" y="490" font-size="11" font-weight="700" fill="#111827">com.obsidian.strip-ads</text>
+    <text x="376" y="508" font-size="11" fill="#374151">strip_ads.py · WatchPaths trigger</text>
+    <text x="376" y="524" font-size="11" fill="#374151">Watches Clippings/  (~5-sec throttle)</text>
+    <text x="376" y="540" font-size="11" fill="#374151">Strips NYT/WSJ ad blocks &amp; iframes</text>
+    <text x="376" y="552" font-size="10" fill="#9ca3af" font-style="italic">no API call · purely local regex</text>
+
+    <!-- Semantic Auto-Tagger LaunchAgent -->
+    <rect x="360" y="576" width="260" height="140" rx="8" fill="#fffbeb" stroke="#fde68a" stroke-width="1.5"/>
+    <rect x="360" y="576" width="260" height="32" rx="8" fill="#f59e0b"/>
+    <rect x="360" y="594" width="260" height="14" fill="#f59e0b"/>
+    <text x="490" y="597" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">Python LaunchAgent</text>
+    <text x="376" y="630" font-size="11" font-weight="700" fill="#111827">com.tag-clippings</text>
+    <text x="376" y="648" font-size="11" fill="#374151">Runs at :00 and :30  (every 30 min)</text>
+    <text x="376" y="664" font-size="11" fill="#374151">Scans Clippings, Creations, Meetings</text>
+    <text x="376" y="680" font-size="11" fill="#374151">Allowlist tags · .tag_tracking.json</text>
+    <text x="376" y="696" font-size="11" fill="#374151">(body-only · Tag Taxonomy.md)</text>
+    <text x="376" y="711" font-size="10" fill="#9ca3af" font-style="italic">claude-haiku-4.5 · 1 API call/note</text>
+
+    <!-- Manual curation -->
+    <rect x="360" y="736" width="260" height="72" rx="8" fill="#fffbeb" stroke="#fde68a" stroke-width="1.5"/>
+    <rect x="360" y="736" width="260" height="32" rx="8" fill="#f59e0b"/>
+    <rect x="360" y="754" width="260" height="14" fill="#f59e0b"/>
+    <text x="490" y="757" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">Manual curation</text>
+    <text x="376" y="790" font-size="11" fill="#374151">After tag review · Move to Knowledge</text>
+    <text x="376" y="804" font-size="11" fill="#374151">Meetings/ → Meetings/History/</text>
+
+  </g>
+
+  <!-- ============ VAULT STORAGE column ============ -->
+  <g filter="url(#shadow)">
+    <rect x="660" y="156" width="380" height="816" rx="10" fill="#ffffff" stroke="#ddd6fe" stroke-width="1.5"/>
+    <rect x="660" y="156" width="380" height="34" rx="10" fill="#7c3aed"/>
+    <rect x="660" y="174" width="380" height="16" fill="#7c3aed"/>
+    <text x="850" y="178" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">~/Obsidian  (single consolidated vault)</text>
+
+    <!-- Capture folders -->
+    <text x="676" y="214" font-size="11" font-weight="700" fill="#6b7280">CAPTURE  (scanned by tagger)</text>
+    <g font-size="12" fill="#111827">
+      <rect x="676" y="222" width="348" height="22" rx="4" fill="#ede9fe"/>
+      <text x="686" y="237">Clippings/</text>
+      <text x="1014" y="237" text-anchor="end" font-size="10" fill="#7c3aed">web articles</text>
+
+      <rect x="676" y="248" width="348" height="22" rx="4" fill="#ede9fe"/>
+      <text x="686" y="263">Creations/</text>
+      <text x="1014" y="263" text-anchor="end" font-size="10" fill="#7c3aed">voice + writing + markitdown</text>
+
+      <rect x="676" y="274" width="348" height="22" rx="4" fill="#ede9fe"/>
+      <text x="686" y="289">Meetings/</text>
+      <text x="1014" y="289" text-anchor="end" font-size="10" fill="#7c3aed">active meeting notes</text>
+
+      <rect x="690" y="300" width="334" height="22" rx="4" fill="#ddd6fe"/>
+      <text x="700" y="315">↳ Meetings/History/</text>
+      <text x="1014" y="315" text-anchor="end" font-size="10" fill="#6d28d9">archived (still tagged)</text>
+
+      <rect x="676" y="326" width="348" height="22" rx="4" fill="#ede9fe"/>
+      <text x="686" y="341">People/</text>
+      <text x="1014" y="341" text-anchor="end" font-size="10" fill="#7c3aed">person notes</text>
+    </g>
+
+    <!-- Reference folders -->
+    <text x="676" y="396" font-size="11" font-weight="700" fill="#6b7280">REFERENCE &amp; STRUCTURE</text>
+    <g font-size="12" fill="#111827">
+      <rect x="676" y="404" width="348" height="22" rx="4" fill="#f5f3ff"/>
+      <text x="686" y="419">Knowledge/</text>
+      <text x="1014" y="419" text-anchor="end" font-size="10" fill="#7c3aed">curated notes</text>
+
+      <rect x="676" y="430" width="348" height="22" rx="4" fill="#f5f3ff"/>
+      <text x="686" y="445">Categories/</text>
+      <text x="1014" y="445" text-anchor="end" font-size="10" fill="#7c3aed">maps of content</text>
+
+      <rect x="676" y="456" width="348" height="22" rx="4" fill="#f5f3ff"/>
+      <text x="686" y="471">Topics/</text>
+      <text x="1014" y="471" text-anchor="end" font-size="10" fill="#7c3aed">subject hubs</text>
+
+      <rect x="676" y="482" width="348" height="22" rx="4" fill="#f5f3ff"/>
+      <text x="686" y="497">Groups/</text>
+      <text x="1014" y="497" text-anchor="end" font-size="10" fill="#7c3aed">people groupings</text>
+
+      <rect x="676" y="508" width="348" height="22" rx="4" fill="#f5f3ff"/>
+      <text x="686" y="523">Actions/</text>
+      <text x="1014" y="523" text-anchor="end" font-size="10" fill="#7c3aed">to-dos &amp; lists</text>
+
+      <rect x="676" y="534" width="348" height="22" rx="4" fill="#f5f3ff"/>
+      <text x="686" y="549">Excalidraw/</text>
+      <text x="1014" y="549" text-anchor="end" font-size="10" fill="#7c3aed">diagrams</text>
+
+      <rect x="676" y="560" width="348" height="22" rx="4" fill="#f5f3ff"/>
+      <text x="686" y="575">Syntheses/</text>
+      <text x="1014" y="575" text-anchor="end" font-size="10" fill="#7c3aed">position notes (third tier)</text>
+    </g>
+
+    <!-- System folders -->
+    <text x="676" y="608" font-size="11" font-weight="700" fill="#6b7280">SYSTEM</text>
+    <g font-size="12" fill="#111827">
+      <rect x="676" y="616" width="348" height="22" rx="4" fill="#f9fafb"/>
+      <text x="686" y="631">Templates/</text>
+      <text x="1014" y="631" text-anchor="end" font-size="10" fill="#9ca3af">+ Templates/Scripts/ (Python)</text>
+
+      <rect x="676" y="642" width="348" height="22" rx="4" fill="#f9fafb"/>
+      <text x="686" y="657">Z_attachments/</text>
+      <text x="1014" y="657" text-anchor="end" font-size="10" fill="#9ca3af">binary attachments</text>
+
+      <rect x="676" y="668" width="348" height="22" rx="4" fill="#f9fafb"/>
+      <text x="686" y="683">Z_archive/</text>
+      <text x="1014" y="683" text-anchor="end" font-size="10" fill="#9ca3af">completed to-dos &amp; deprecated materials</text>
+
+      <rect x="676" y="694" width="348" height="22" rx="4" fill="#f9fafb"/>
+      <text x="686" y="709">.tag_tracking.json</text>
+      <text x="1014" y="709" text-anchor="end" font-size="10" fill="#9ca3af">processed-file ledger</text>
+    </g>
+
+    <!-- Sync & replication -->
+    <text x="676" y="748" font-size="11" font-weight="700" fill="#059669">SYNC &amp; REPLICATION  ·  end-to-end encrypted</text>
+    <g font-size="11" fill="#111827">
+      <rect x="676" y="756" width="348" height="22" rx="4" fill="#ecfdf5"/>
+      <text x="686" y="771">Obsidian Sync</text>
+      <text x="1014" y="771" text-anchor="end" font-size="10" fill="#059669">E2E encrypted in transit &amp; at rest</text>
+
+      <rect x="676" y="782" width="348" height="22" rx="4" fill="#ecfdf5"/>
+      <text x="686" y="797">Devices: Mac · Windows · iPhone · iPad</text>
+      <text x="1014" y="797" text-anchor="end" font-size="10" fill="#059669">read/write everywhere</text>
+
+      <rect x="676" y="808" width="348" height="22" rx="4" fill="#ecfdf5"/>
+      <text x="686" y="823">Vault encryption key in OS keychain only</text>
+      <text x="1014" y="823" text-anchor="end" font-size="10" fill="#059669">never leaves device</text>
+
+      <rect x="676" y="834" width="348" height="16" rx="4" fill="#fff7ed"/>
+      <text x="686" y="846" font-size="10" font-style="italic" fill="#9a3412">Secrets at ~/dev/secrets/.env are OUTSIDE the vault — not synced</text>
+    </g>
+
+    <!-- Data classification (cross-cutting frontmatter property) -->
+    <text x="676" y="876" font-size="11" font-weight="700" fill="#b45309">DATA CLASSIFICATION  ·  policy-aligned</text>
+    <rect x="676" y="884" width="348" height="22" rx="4" fill="#fef3c7"/>
+    <text x="686" y="899" font-size="11" fill="#92400e">public · internal-use-only · confidential · restricted</text>
+    <text x="676" y="926" font-size="10" fill="#374151">Required `classification` frontmatter on every note · set at create-</text>
+    <text x="676" y="940" font-size="10" fill="#374151">time by Templates &amp; ingest pipelines (add_classification.py backfill)</text>
+    <text x="676" y="958" font-size="10" font-style="italic" fill="#9ca3af">restricted tier is excluded from the local RAG sync</text>
+  </g>
+
+  <!-- ============ ORGANIZATION column ============ -->
+  <g filter="url(#shadow)">
+    <rect x="1080" y="156" width="280" height="120" rx="8" fill="#ffffff" stroke="#a7f3d0" stroke-width="1.5"/>
+    <circle cx="1108" cy="186" r="14" fill="#10b981"/>
+    <text x="1108" y="191" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">C</text>
+    <text x="1132" y="182" font-size="14" font-weight="700" fill="#111827">Categories (MOCs)</text>
+    <text x="1132" y="200" font-size="11" fill="#6b7280">Maps of content (MOCs)</text>
+    <text x="1096" y="230" font-size="10" fill="#374151">e.g., People · Projects · Companies · Places ·</text>
+    <text x="1096" y="246" font-size="10" fill="#374151">Meetings · Clippings · Journal · …</text>
+    <text x="1096" y="266" font-size="10" font-style="italic" fill="#9ca3af">One page per content type, with dataview index</text>
+
+    <rect x="1080" y="292" width="280" height="92" rx="8" fill="#ffffff" stroke="#a7f3d0" stroke-width="1.5"/>
+    <circle cx="1108" cy="322" r="14" fill="#10b981"/>
+    <text x="1108" y="327" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">T</text>
+    <text x="1132" y="318" font-size="14" font-weight="700" fill="#111827">Topics</text>
+    <text x="1132" y="336" font-size="11" fill="#6b7280">Subject hubs that aggregate notes</text>
+    <text x="1096" y="362" font-size="10" fill="#374151">One page per subject area, dataview-driven</text>
+
+    <rect x="1080" y="400" width="280" height="92" rx="8" fill="#ffffff" stroke="#a7f3d0" stroke-width="1.5"/>
+    <circle cx="1108" cy="430" r="14" fill="#10b981"/>
+    <text x="1108" y="435" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">G</text>
+    <text x="1132" y="426" font-size="14" font-weight="700" fill="#111827">Groups</text>
+    <text x="1132" y="444" font-size="11" fill="#6b7280">People groupings &amp; rosters</text>
+    <text x="1096" y="470" font-size="10" fill="#374151">One page per recurring group, with member links</text>
+
+    <rect x="1080" y="508" width="280" height="92" rx="8" fill="#ffffff" stroke="#a7f3d0" stroke-width="1.5"/>
+    <circle cx="1108" cy="538" r="14" fill="#10b981"/>
+    <text x="1108" y="543" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">#</text>
+    <text x="1132" y="534" font-size="14" font-weight="700" fill="#111827">Tags (hierarchical)</text>
+    <text x="1132" y="552" font-size="11" fill="#6b7280">Semantic tag taxonomy</text>
+    <text x="1096" y="576" font-size="10" fill="#374151">Applied every 30 min by the</text>
+    <text x="1096" y="590" font-size="10" fill="#374151">com.tag-clippings LaunchAgent</text>
+
+    <rect x="1080" y="616" width="280" height="92" rx="8" fill="#ffffff" stroke="#a7f3d0" stroke-width="1.5"/>
+    <circle cx="1108" cy="646" r="14" fill="#10b981"/>
+    <text x="1108" y="651" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">K</text>
+    <text x="1132" y="642" font-size="14" font-weight="700" fill="#111827">Knowledge graph</text>
+    <text x="1132" y="660" font-size="11" fill="#6b7280">Backlinks + Dataview queries</text>
+    <text x="1096" y="684" font-size="10" fill="#374151">Person ↔ Meetings ↔ Topics ↔ Groups</text>
+    <text x="1096" y="698" font-size="10" fill="#374151">Dashboards surface live views</text>
+
+    <rect x="1080" y="724" width="280" height="96" rx="8" fill="#ecfdf5" stroke="#a7f3d0" stroke-width="1.5"/>
+    <text x="1096" y="746" font-size="11" font-weight="700" fill="#059669">Retrieval</text>
+    <text x="1096" y="766" font-size="11" fill="#374151">Omnisearch · Tag Wrangler · Bases</text>
+    <text x="1096" y="782" font-size="11" fill="#374151">Manual review &amp; "Move to Knowledge"</text>
+    <text x="1096" y="800" font-size="10" font-style="italic" fill="#6b7280">Curated promotion → Knowledge/</text>
+    <text x="1096" y="814" font-size="10" font-style="italic" fill="#6b7280">Manual archive → Meetings/History/</text>
+
+    <!-- Syntheses (third tier) -->
+    <rect x="1080" y="828" width="280" height="140" rx="8" fill="#ffffff" stroke="#a7f3d0" stroke-width="1.5"/>
+    <circle cx="1108" cy="858" r="14" fill="#10b981"/>
+    <text x="1108" y="863" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">S</text>
+    <text x="1132" y="854" font-size="14" font-weight="700" fill="#111827">Syntheses (third tier)</text>
+    <text x="1132" y="872" font-size="11" fill="#6b7280">Position notes anchored to Knowledge</text>
+    <text x="1096" y="896" font-size="10" fill="#374151">Hand-authored or LLM-assisted; one note per</text>
+    <text x="1096" y="910" font-size="10" fill="#374151">defensible position with backlinks to sources</text>
+    <text x="1096" y="930" font-size="10" fill="#374151">Prompts: Convergence · Divergence · Gap · Brief</text>
+    <text x="1096" y="950" font-size="10" font-style="italic" fill="#9ca3af">→ Syntheses/  ·  surfaced via Topics/Syntheses</text>
+  </g>
+
+  <!-- ============ BAND 5: SOURCE MAIL TRANSPORT (replaces iCloud Drive) ============ -->
+  <g transform="translate(0,40)">
+    <rect x="40" y="992" width="1320" height="236" rx="10" fill="#ffffff" stroke="#bfdbfe" stroke-width="1.4"/>
+    <rect x="40" y="992" width="1320" height="40" rx="10" fill="#1d4ed8"/>
+    <rect x="40" y="1010" width="1320" height="22" fill="#1d4ed8"/>
+    <text x="60" y="1019" font-size="13" font-weight="700" fill="#ffffff">5 · SOURCE MAIL TRANSPORT  ·  phone → Mac</text>
+    <text x="420" y="1019" font-size="11" font-style="italic" fill="#bfdbfe">replaces iCloud Drive — no cloud-drive client on any machine, Mac or Windows</text>
+    <text x="1340" y="1019" font-size="11" fill="#bfdbfe" text-anchor="end">authenticated payloads · HMAC-SHA256</text>
+
+    <g filter="url(#shadow)">
+      <!-- Card 1: Producer (device) -->
+      <rect x="56" y="1048" width="316" height="164" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="56" y="1048" width="316" height="26" rx="8" fill="#3b82f6"/>
+      <rect x="56" y="1062" width="316" height="12" fill="#3b82f6"/>
+      <text x="214" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Producer · iPhone / iPad / Mac</text>
+      <text x="68" y="1092" font-size="11" font-weight="700" fill="#111827">Shortcut → Scriptable signs (Web Crypto)</text>
+      <text x="68" y="1110" font-size="10" fill="#374151">One plain-text email per capture</text>
+      <text x="68" y="1126" font-size="10" fill="#374151">Types: voice · podcast</text>
+      <text x="68" y="1142" font-size="10" fill="#6b7280">Token in Scriptable Keychain — per device,</text>
+      <text x="68" y="1156" font-size="10" fill="#6b7280">never syncs; run the signer standalone once</text>
+      <text x="68" y="1174" font-size="10" fill="#374151">macOS: Run Shell Script → --emit (no helper)</text>
+      <text x="68" y="1198" font-size="10" font-style="italic" fill="#9ca3af">one From address across devices (allowlist)</text>
+
+      <!-- Card 2: Relay (mailbox) -->
+      <rect x="380" y="1048" width="316" height="164" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="380" y="1048" width="316" height="26" rx="8" fill="#3b82f6"/>
+      <rect x="380" y="1062" width="316" height="12" fill="#3b82f6"/>
+      <text x="538" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Relay · dedicated intake mailbox</text>
+      <text x="392" y="1092" font-size="11" font-weight="700" fill="#111827">Unguessable address, not a +alias</text>
+      <text x="392" y="1110" font-size="10" fill="#374151">2-Step Verification + App Password</text>
+      <text x="392" y="1126" font-size="10" fill="#6b7280">One App Password per machine (revocable)</text>
+      <text x="392" y="1148" font-size="10" fill="#111827">Body: v · type · ts · payload · hmac</text>
+      <text x="392" y="1164" font-size="10" fill="#6b7280">MAC covers a length-prefixed canonical string</text>
+      <text x="392" y="1180" font-size="10" fill="#6b7280">First occurrence of a key wins</text>
+      <text x="392" y="1200" font-size="10" font-style="italic" fill="#9ca3af">Subject is cosmetic — never used for routing</text>
+
+      <!-- Card 3: Puller (LaunchAgent) -->
+      <rect x="704" y="1048" width="316" height="164" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="704" y="1048" width="316" height="26" rx="8" fill="#3b82f6"/>
+      <rect x="704" y="1062" width="316" height="12" fill="#3b82f6"/>
+      <text x="862" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">LaunchAgent · Source Mail Pull</text>
+      <text x="716" y="1092" font-size="11" font-weight="700" fill="#111827">com.obsidian.source-mail-pull</text>
+      <text x="716" y="1110" font-size="10" fill="#374151">source_mail_pull.py · IMAP · every 300 s</text>
+      <text x="716" y="1126" font-size="10" fill="#374151">HMAC-SHA256 — the token is never transmitted</text>
+      <text x="716" y="1142" font-size="10" fill="#374151">Sender allowlist, fails closed · 7-day replay bound</text>
+      <text x="716" y="1158" font-size="10" fill="#374151">Route type read from inside the MAC</text>
+      <text x="716" y="1174" font-size="10" fill="#374151">Filenames generated locally · text/plain, size-capped</text>
+      <text x="716" y="1198" font-size="10" font-style="italic" fill="#9ca3af">rejected drops are marked Seen — just re-share</text>
+
+      <!-- Card 4: Drop root -->
+      <rect x="1028" y="1048" width="316" height="164" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="1028" y="1048" width="316" height="26" rx="8" fill="#3b82f6"/>
+      <rect x="1028" y="1062" width="316" height="12" fill="#3b82f6"/>
+      <text x="1186" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">~/SourceMedia · local drop root</text>
+      <text x="1040" y="1092" font-size="10" fill="#111827">VoiceInput/<tspan fill="#6b7280">  →  voice_cleanup.py</tspan></text>
+      <text x="1040" y="1110" font-size="10" fill="#111827">PodcastInput/<tspan fill="#6b7280">  →  podcast_watch.py</tspan></text>
+      <text x="1040" y="1146" font-size="10" fill="#6b7280">Subfolders, not one flat queue — all drops are</text>
+      <text x="1040" y="1160" font-size="10" fill="#6b7280">.txt, so the watchers would otherwise race</text>
+      <text x="1040" y="1180" font-size="10" fill="#374151">Outside the vault · not in Obsidian Sync scope</text>
+      <text x="1040" y="1200" font-size="10" font-style="italic" fill="#9ca3af">drop-folder contract unchanged — watchers untouched</text>
+    </g>
+  </g>
+
+  <!-- ============ BAND 6: SCHEDULED JOBS & DERIVED SURFACES ============ -->
+  <g transform="translate(0,296)">
+    <rect x="40" y="992" width="1320" height="220" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+    <rect x="40" y="992" width="1320" height="40" rx="10" fill="#0e7490"/>
+    <rect x="40" y="1010" width="1320" height="22" fill="#0e7490"/>
+    <text x="60" y="1019" font-size="13" font-weight="700" fill="#ffffff">6 · SCHEDULED JOBS &amp; DERIVED SURFACES</text>
+    <text x="470" y="1019" font-size="11" font-style="italic" fill="#cbd5e1">launchd timers that operate on the vault — none ingest new content</text>
+    <text x="1340" y="1019" font-size="11" fill="#cbd5e1" text-anchor="end">canonical: ~/Obsidian/Templates/Scripts</text>
+
+    <g filter="url(#shadow)">
+      <!-- Card 1: Morning Dashboard -->
+      <rect x="56" y="1048" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="56" y="1048" width="316" height="26" rx="8" fill="#0891b2"/>
+      <rect x="56" y="1062" width="316" height="12" fill="#0891b2"/>
+      <text x="214" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Morning Dashboard</text>
+      <text x="68" y="1092" font-size="11" font-weight="700" fill="#111827">com.morning-dashboard</text>
+      <text x="68" y="1108" font-size="10" fill="#6b7280">7:00 AM · Mon–Fri · launchd</text>
+      <text x="68" y="1128" font-size="10" fill="#374151">Open to-dos · today's meetings ·</text>
+      <text x="68" y="1142" font-size="10" fill="#374151">new clippings + creations since midnight</text>
+      <text x="68" y="1162" font-size="10" fill="#374151">→ ~/Obsidian/Z_dashboards/  (HTML, opens in Chrome)</text>
+      <text x="68" y="1186" font-size="10" font-style="italic" fill="#9ca3af">local-only · no API call</text>
+
+      <!-- Card 2: Meeting Prep (attendee follow-ups) -->
+      <rect x="380" y="1048" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="380" y="1048" width="316" height="26" rx="8" fill="#0891b2"/>
+      <rect x="380" y="1062" width="316" height="12" fill="#0891b2"/>
+      <text x="538" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Meeting Prep · follow-ups</text>
+      <text x="392" y="1092" font-size="11" font-weight="700" fill="#111827">com.obsidian.meeting-prep</text>
+      <text x="392" y="1108" font-size="10" fill="#6b7280">every 5 min, weekday business hours</text>
+      <text x="392" y="1128" font-size="10" fill="#374151">Grafts open [ ] tasks per attendee into</text>
+      <text x="392" y="1142" font-size="10" fill="#374151">today's Individual meeting notes</text>
+      <text x="392" y="1162" font-size="10" fill="#374151">Idempotent HTML-comment fence</text>
+      <text x="392" y="1186" font-size="10" font-style="italic" fill="#9ca3af">vault-scope · no network</text>
+
+      <!-- Card 3: Meeting Pre-Population -->
+      <rect x="704" y="1048" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="704" y="1048" width="316" height="26" rx="8" fill="#0891b2"/>
+      <rect x="704" y="1062" width="316" height="12" fill="#0891b2"/>
+      <text x="862" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Meeting Pre-Population</text>
+      <text x="716" y="1092" font-size="10" fill="#111827"><tspan font-weight="700">Producer:</tspan> Claude Code + MCP connector</text>
+      <text x="716" y="1108" font-size="10" fill="#374151">mcp_meeting_transform.py → HandoffDrop/</text>
+      <text x="716" y="1128" font-size="10" fill="#111827"><tspan font-weight="700">Consumer:</tspan> meeting_prepopulate.py</text>
+      <text x="716" y="1142" font-size="10" fill="#6b7280">com.meeting-prepopulate · Sun 21:00 + WatchPaths + poll</text>
+      <text x="716" y="1162" font-size="10" fill="#374151">Builds upcoming meeting notes</text>
+      <text x="716" y="1186" font-size="10" font-style="italic" fill="#9ca3af">idempotent via source_uid frontmatter</text>
+
+      <!-- Card 4: Group Photo Refresh -->
+      <rect x="1028" y="1048" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="1028" y="1048" width="316" height="26" rx="8" fill="#0891b2"/>
+      <rect x="1028" y="1062" width="316" height="12" fill="#0891b2"/>
+      <text x="1186" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Group Photo Refresh</text>
+      <text x="1040" y="1092" font-size="11" font-weight="700" fill="#111827">nightly · 02:00  (two-script pass)</text>
+      <text x="1040" y="1110" font-size="10" fill="#374151">1 · insert_group_placeholders.py</text>
+      <text x="1040" y="1124" font-size="10" fill="#6b7280">prefixes bare member links with a placeholder</text>
+      <text x="1040" y="1142" font-size="10" fill="#374151">2 · refresh_groups.py</text>
+      <text x="1040" y="1156" font-size="10" fill="#6b7280">swaps placeholder → real headshot when it exists</text>
+      <text x="1040" y="1186" font-size="10" font-style="italic" fill="#9ca3af">stdlib-only · no API call</text>
+    </g>
+  </g>
+
+  <!-- ============ OPTIONAL LAYER: Local LLM with Vault as RAG ============ -->
+  <g transform="translate(0,528)">
+    <!-- Outer container with dashed border to convey "optional" -->
+    <rect x="40" y="1000" width="1320" height="220" rx="10" fill="#fdfcfb" stroke="#9ca3af" stroke-width="1.4" stroke-dasharray="6 4"/>
+
+    <!-- Header strip -->
+    <rect x="40" y="1000" width="1320" height="40" rx="10" fill="#475569"/>
+    <rect x="40" y="1018" width="1320" height="22" fill="#475569"/>
+    <text x="60" y="1027" font-size="13" font-weight="700" fill="#ffffff">7 · OPTIONAL — Local LLM with Vault as RAG</text>
+    <text x="420" y="1027" font-size="11" font-style="italic" fill="#cbd5e1">Requires capable hardware (Apple Silicon Mac or equivalent). Not part of core workflow.</text>
+    <text x="1340" y="1027" font-size="11" fill="#cbd5e1" text-anchor="end">on-device · no cloud calls</text>
+
+    <!-- Sub-cards (4 cards, ~310 wide, 8px gutters) -->
+    <g filter="url(#shadow)">
+      <!-- Card 1: Inference & UI -->
+      <rect x="56" y="1056" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="56" y="1056" width="316" height="26" rx="8" fill="#64748b"/>
+      <rect x="56" y="1070" width="316" height="12" fill="#64748b"/>
+      <text x="214" y="1074" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Inference &amp; UI</text>
+      <text x="68" y="1100" font-size="11" font-weight="700" fill="#111827">Ollama 0.23.0  (MLX runtime)</text>
+      <text x="68" y="1116" font-size="10" fill="#6b7280">MLX auto-selected on Apple Silicon; runs existing GGUFs.</text>
+      <text x="68" y="1140" font-size="11" font-weight="700" fill="#111827">Open WebUI  (Docker)</text>
+      <text x="68" y="1156" font-size="10" fill="#6b7280">Bound to 127.0.0.1:3000  ·  signups locked</text>
+      <text x="68" y="1172" font-size="10" fill="#6b7280">Admin Panel · Knowledge · Custom Models</text>
+      <text x="68" y="1192" font-size="10" font-style="italic" fill="#9ca3af">RAG node: primary Apple Silicon Mac only</text>
+
+      <!-- Card 2: Custom Models -->
+      <rect x="380" y="1056" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="380" y="1056" width="316" height="26" rx="8" fill="#64748b"/>
+      <rect x="380" y="1070" width="316" height="12" fill="#64748b"/>
+      <text x="538" y="1074" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Custom Models  (each + Vault)</text>
+      <text x="392" y="1100" font-size="11" fill="#111827"><tspan font-weight="700">Llama 8B</tspan>  +  Vault    <tspan fill="#6b7280">— quick lookups (~8 GB)</tspan></text>
+      <text x="392" y="1120" font-size="11" fill="#111827"><tspan font-weight="700">Gemma 4 26B</tspan>  +  Vault  <tspan fill="#6b7280">— daily default · MoE (~16 GB)</tspan></text>
+      <text x="392" y="1140" font-size="11" fill="#111827"><tspan font-weight="700">Llama 70B</tspan>  +  Vault  <tspan fill="#6b7280">— synthesis (~50 GB)</tspan></text>
+      <text x="392" y="1160" font-size="11" fill="#111827"><tspan font-weight="700">Nemotron</tspan>  +  Vault   <tspan fill="#6b7280">— grounding-tuned (~86 GB)</tspan></text>
+      <text x="392" y="1192" font-size="10" font-style="italic" fill="#9ca3af">Each "+ Vault" pre-attaches the Knowledge collection</text>
+
+      <!-- Card 3: RAG over vault -->
+      <rect x="704" y="1056" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="704" y="1056" width="316" height="26" rx="8" fill="#64748b"/>
+      <rect x="704" y="1070" width="316" height="12" fill="#64748b"/>
+      <text x="862" y="1074" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">RAG over the vault</text>
+      <text x="716" y="1100" font-size="10" fill="#111827"><tspan font-weight="700">Embedder:</tspan> nomic-embed-text  (Ollama-pulled)</text>
+      <text x="716" y="1116" font-size="10" fill="#111827"><tspan font-weight="700">Retrieval:</tspan> hybrid search  ·  Top K = 6</text>
+      <text x="716" y="1132" font-size="10" fill="#111827"><tspan font-weight="700">Chunking:</tspan> Markdown header splitter</text>
+      <text x="716" y="1148" font-size="10" fill="#111827"><tspan font-weight="700">Reranker:</tspan> bge-reranker-v2-m3  <tspan fill="#9ca3af">(optional)</tspan></text>
+      <text x="716" y="1168" font-size="10" font-weight="700" fill="#111827">Sync: ~/Obsidian/Templates/Scripts/sync-vault.sh</text>
+      <text x="716" y="1182" font-size="10" fill="#6b7280">Nightly LaunchAgent  ·  pushes to Open WebUI Knowledge</text>
+      <text x="716" y="1198" font-size="10" font-style="italic" fill="#9ca3af">Indexes ~/Obsidian; profile note anchors role context</text>
+
+      <!-- Card 4: Access & security -->
+      <rect x="1028" y="1056" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="1028" y="1056" width="316" height="26" rx="8" fill="#64748b"/>
+      <rect x="1028" y="1070" width="316" height="12" fill="#64748b"/>
+      <text x="1186" y="1074" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Access &amp; security</text>
+      <text x="1040" y="1100" font-size="11" font-weight="700" fill="#111827">Localhost only  (127.0.0.1:3000)</text>
+      <text x="1040" y="1116" font-size="10" fill="#6b7280">No supported remote-access path</text>
+      <text x="1040" y="1140" font-size="11" font-weight="700" fill="#111827">Hardened posture</text>
+      <text x="1040" y="1156" font-size="10" fill="#6b7280">Ollama firewall-blocked (no LAN exposure)</text>
+      <text x="1040" y="1170" font-size="10" fill="#6b7280">Open WebUI bound to localhost only</text>
+      <text x="1040" y="1192" font-size="10" font-style="italic" fill="#9ca3af">Secondary node: personal models via LM Studio + LM Link (no vault)</text>
+    </g>
+  </g>
+
+  <!-- Footer: architecture rationale -->
+  <g font-size="11" fill="#374151" transform="translate(0,528)">
+    <rect x="40" y="1240" width="1320" height="212" rx="8" fill="#ffffff" stroke="#e5e7eb"/>
+    <text x="56" y="1264" font-weight="700" fill="#111827">Architecture rationale</text>
+    <text x="56" y="1281" font-size="11" fill="#6b7280">Each input lands in its target capture folder under ~/Obsidian (destinations noted inside each input box). Ingest LaunchAgents do mechanical, deterministic cleanup at the edge: voice_cleanup polishes dictations (~1 Claude API call</text>
+    <text x="56" y="1296" font-size="11" fill="#6b7280">each); strip_ads removes NYT/WSJ ad blocks (no API); YouTube share-sheet captures route through the Claude summarizer; podcast_watch transcribes drops locally (MLX Whisper → faster-whisper → ONNX, one episode</text>
+    <text x="56" y="1312" font-size="11" fill="#6b7280">per 900-sec tick) into Clippings/; com.tag-clippings auto-tags every 30 min. Articles are clipped by hand with the Obsidian Web Clipper in a signed-in browser — no automation, no stored credentials.</text>
+    <text x="56" y="1330" font-size="11" fill="#111827">iCloud Drive is no longer a dependency anywhere in the workflow. Phone-originated captures (band 5) now reach the Mac by mail: the device signs a plain-text payload with HMAC-SHA256 and emails it to a dedicated intake</text>
+    <text x="56" y="1345" font-size="11" fill="#111827">mailbox; com.obsidian.source-mail-pull fetches it over IMAP every 300 s and writes it into ~/SourceMedia/{VoiceInput,PodcastInput}/. This separates the drop-folder contract from the transport, so the watchers</text>
+    <text x="56" y="1360" font-size="11" fill="#111827">were unchanged — and it removes Apple iCloud for Windows from machines that otherwise need nothing from Apple. A mailbox is world-writable, which is why the payload carries its own proof: unguessable address, sender</text>
+    <text x="56" y="1375" font-size="11" fill="#111827">allowlist, MAC over a length-prefixed canonical string, routing type taken from inside the MAC, a 7-day replay bound, and locally generated filenames. The token itself is never transmitted.</text>
+    <text x="56" y="1393" font-size="11" fill="#6b7280">A second class of jobs (band 6) operates ON the vault rather than ingesting: com.morning-dashboard builds a 7 AM weekday HTML surface; meeting-prep grafts attendee follow-ups into today's notes; meeting-prepopulate consumes</text>
+    <text x="56" y="1408" font-size="11" fill="#6b7280">an MCP-connector-fed schedule handoff (mcp_meeting_transform.py, no OneDrive/Cowork); group-photo refresh runs nightly.</text>
+    <text x="56" y="1423" font-size="11" fill="#6b7280">Every note now carries a policy-aligned `classification` property (public / internal-use-only / confidential / restricted), set at create-time; restricted is excluded from the local RAG sync. All automation scripts are canonically</text>
+    <text x="56" y="1438" font-size="11" fill="#6b7280">located at ~/Obsidian/Templates/Scripts. Vault content is replicated cross-device via Obsidian Sync with E2E encryption (key in the local OS keychain only); secrets, code repos and ~/SourceMedia sit outside the sync scope.</text>
+  </g>
+</svg>

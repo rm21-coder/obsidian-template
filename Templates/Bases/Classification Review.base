@@ -1,0 +1,79 @@
+filters:
+  and:
+    - '!file.name.contains("Template")'
+    - '!file.path.startsWith("Templates/")'
+    - '!file.path.startsWith("Z_archive/")'
+properties:
+  file.name:
+    displayName: Note
+  note.classification:
+    displayName: Tier now
+  note.classification_suggested:
+    displayName: Suggested
+  note.classification_rationale:
+    displayName: Why
+  note.classification_prior:
+    displayName: Was
+  note.classification_reviewed:
+    displayName: Ruled on
+views:
+  - type: table
+    name: Pending review
+    filters:
+      and:
+        - classification_suggested != null
+        - classification_reviewed != true
+    order:
+      - file.name
+      - classification
+      - classification_suggested
+      - classification_rationale
+    sort:
+      - property: classification_suggested
+        direction: DESC
+    columnSize:
+      note.classification: 150
+      note.classification_suggested: 150
+      note.classification_rationale: 620
+  - type: table
+    name: Auto-applied by detector
+    filters:
+      and:
+        - classification_prior != null
+        - classification_reviewed != true
+    order:
+      - file.name
+      - classification_prior
+      - classification
+      - classification_rationale
+    sort:
+      - property: file.mtime
+        direction: DESC
+    columnSize:
+      note.classification_rationale: 620
+  - type: table
+    name: Sensitive inventory
+    filters:
+      or:
+        - classification == "confidential"
+        - classification == "restricted"
+    order:
+      - file.name
+      - classification
+      - classification_reviewed
+    sort:
+      - property: classification
+        direction: DESC
+  - type: table
+    name: Ruled on
+    filters:
+      and:
+        - classification_reviewed == true
+    order:
+      - file.name
+      - classification
+      - classification_suggested
+      - classification_rationale
+    sort:
+      - property: file.mtime
+        direction: DESC
