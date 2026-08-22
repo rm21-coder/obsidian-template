@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Meeting Pre-Population LaunchAgent
+
+  Watches a local drop folder (Templates/Scripts/HandoffDrop by default) for
+  schedule handoff payloads (JSON + .ready sentinel), delivered there directly
+  by your producer or via a relay (e.g. the Azure Blob Tier B relay - see
+  docs/Azure-Blob-Handoff-Relay.md). Fires on WatchPaths events, a
+  Sunday-21:00 belt-and-suspenders timer, and a 30-minute StartInterval poll.
+
+  Because this is a plain local folder (not a cloud-sync mount), no Full Disk
+  Access grant is needed and the consumer runs directly - no wrapper app.
+  WatchPaths is reliable here; the poll is just a belt-and-suspenders net for
+  events that fire while the machine is asleep.
+
+  The installer (component 52-meeting-prepopulate) substitutes YOUR_USERNAME
+  for you. See docs/Meeting-Pre-Population.md.
+
+  Installation:
+    cp Templates/Scripts/com.meeting-prepopulate.plist ~/Library/LaunchAgents/
+    # then edit to replace YOUR_USERNAME
+    launchctl load -w ~/Library/LaunchAgents/com.meeting-prepopulate.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.meeting-prepopulate</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/meeting_prepopulate.py</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/HandoffDrop</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>0</integer>
+        <key>Hour</key>
+        <integer>21</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <!-- Reliability net: poll every 30 minutes in case a WatchPaths event
+         fires while the machine is asleep. The consumer self-locks and exits
+         cheaply when there is nothing to process, so frequent polling is
+         safe. -->
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/meeting-prepopulate.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/meeting-prepopulate.log</string>
+</dict>
+</plist>

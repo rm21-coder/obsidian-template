@@ -1,0 +1,77 @@
+{
+  "confirmDeletion": false,
+  "showAddCommand": true,
+  "debug": false,
+  "editorMenu": [],
+  "fileMenu": [],
+  "leftRibbon": [
+    {
+      "id": "quickadd:choice:865f5ed1-38ae-42d0-9ed1-d4a5ce39e610",
+      "icon": "lucide-handshake",
+      "name": "New Meeting",
+      "mode": "any"
+    },
+    {
+      "id": "quickadd:choice:a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      "icon": "lucide-notebook-pen",
+      "name": "New Note",
+      "mode": "any"
+    },
+    {
+      "id": "quickadd:choice:b2c3d4e5-6789-01bc-def0-2345678901bc",
+      "icon": "lucide-person-standing",
+      "name": "New Person",
+      "mode": "any"
+    },
+    {
+      "id": "obsidian-excalidraw-plugin:excalidraw-autocreate-popout",
+      "icon": "lucide-brush",
+      "name": "Excalidraw: Create new drawing - IN A POPOUT WINDOW",
+      "mode": "any"
+    },
+    {
+      "id": "templater-obsidian:Templates/Move to Knowledge.md",
+      "icon": "lucide-move-right",
+      "name": "Move note to Knowledge",
+      "mode": "any"
+    },
+    {
+      "id": "templater-obsidian:create-Templates/Clean Filenames.md",
+      "icon": "lucide-brush-cleaning",
+      "name": "Clean Filenames",
+      "mode": "any"
+    }
+  ],
+  "rightRibbon": [],
+  "titleBar": [],
+  "statusBar": [],
+  "pageHeader": [],
+  "macros": [],
+  "explorer": [],
+  "hide": {
+    "statusbar": [],
+    "leftRibbon": [
+      "Open today's daily note",
+      "Open format converter",
+      "Create new unique note",
+      "Create new base",
+      "QuickAdd",
+      "New drawing",
+      "Templater",
+      "Insert template",
+      "Open quick switcher",
+      "Create new canvas"
+    ]
+  },
+  "spacing": 8,
+  "advancedToolbar": {
+    "rowHeight": 48,
+    "rowCount": 1,
+    "spacing": 0,
+    "buttonWidth": 48,
+    "columnLayout": false,
+    "mappedIcons": [],
+    "tooltips": false,
+    "heightOffset": 0
+  }
+}

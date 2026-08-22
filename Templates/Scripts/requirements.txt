@@ -1,0 +1,33 @@
+anthropic
+pyyaml
+python-dotenv
+requests
+
+# Optional feature scripts (bundled in core per the Windows "deploy completely"
+# goal). yt-dlp: youtube_summarize.py. markitdown: markitdown_cleanup/_dropper
+# (base handlers; `markitdown[all]` adds more formats + OCR at a large size).
+# faster-whisper: podcast_transcribe.py off Apple Silicon (CPU transcription).
+yt-dlp
+markitdown
+# ctranslate2 (faster-whisper's compiled backend) publishes no win_arm64 wheel
+# and no sdist, so this is unsatisfiable on native ARM64 Python for Windows.
+# Left unguarded it doesn't just fail — pip backtracks through every older
+# faster-whisper, hits pins on `av==10.*`/`11.*`, and dies mid source build.
+# Windows ARM64 reports platform_machine == "ARM64" (uppercase); macOS arm64,
+# Windows AMD64 and Linux aarch64 all still get it.
+faster-whisper; platform_machine != "ARM64"
+
+# mlx-whisper is Apple-Silicon-only (podcast_transcribe.py uses it there);
+# faster-whisper covers every other platform. Guarded so non-arm64 skips it.
+mlx-whisper; platform_machine == "arm64"
+
+# ONNX Runtime backend for podcast_transcribe.py (whisper_onnx.py) — the third
+# and last-resort transcription backend, and the only local one available on
+# Windows ARM64, where neither ctranslate2 nor torch publishes a win_arm64
+# wheel. onnxruntime does, so Whisper is driven directly: numpy features,
+# `tokenizers` for the vocab, huggingface-hub to fetch the ONNX export.
+# Scoped to the platform that needs it — everywhere else faster-whisper or MLX
+# wins and these would be dead weight (onnxruntime alone is ~13 MB).
+onnxruntime; platform_machine == "ARM64" and sys_platform == "win32"
+tokenizers; platform_machine == "ARM64" and sys_platform == "win32"
+huggingface-hub; platform_machine == "ARM64" and sys_platform == "win32"

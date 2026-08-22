@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Morning Dashboard LaunchAgent
+
+  Runs morning_dashboard.py on weekday mornings (Mon-Fri 07:00 local) to build a
+  single self-contained HTML page for the day: open to-dos across the vault,
+  today's meetings, new clippings/creations since midnight, and RAG-sync +
+  pipeline health. Written to ~/Obsidian/Z_dashboards/ and opened in Google Chrome.
+
+  The installer (component 53-morning-dashboard) substitutes YOUR_USERNAME with
+  your macOS short name. To install manually:
+    cp Templates/Scripts/com.morning-dashboard.plist ~/Library/LaunchAgents/
+    # then edit to replace YOUR_USERNAME
+    launchctl load -w ~/Library/LaunchAgents/com.morning-dashboard.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.morning-dashboard</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/morning_dashboard.py</string>
+    </array>
+
+    <!-- Weekday mornings only (launchd Weekday: Mon=1 .. Fri=5). The dashboard's
+         own staleness check is weekend-aware, so skipping Sat/Sun is expected. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>7</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/morning-dashboard.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/morning-dashboard.log</string>
+</dict>
+</plist>

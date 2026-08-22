@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Source Mail Pull LaunchAgent — the mail-drop transport.
+
+  Pulls authenticated drops from the dedicated intake mailbox into
+  ~/SourceMedia/<Type>/, where the existing watchers (voice-cleanup,
+  podcast-watch) consume them. Replaces iCloud Drive as the
+  phone-to-vault transport; see docs/HANDOFF-ARCHITECTURE.md for why a
+  cloud-drive sync client is a poor transport in the first place.
+
+  To install:
+    1. Edit ProgramArguments below: replace YOUR_USERNAME with your macOS
+       short username (and adjust the vault path if you didn't put the
+       vault at ~/Obsidian/).
+    2. cp Templates/Scripts/com.obsidian.source-mail-pull.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.obsidian.source-mail-pull.plist
+
+  To reload after changes:
+    launchctl unload ~/Library/LaunchAgents/com.obsidian.source-mail-pull.plist
+    launchctl load ~/Library/LaunchAgents/com.obsidian.source-mail-pull.plist
+
+  Requires in ~/dev/secrets/.env:
+    SOURCE_MAIL_USER, SOURCE_MAIL_APP_PASSWORD, SOURCE_MAIL_TOKEN,
+    SOURCE_MAIL_ALLOWED_SENDERS
+
+  StartInterval is 300 like the other cheap watchers — this job is an IMAP
+  fetch of a few small text messages, not the expensive podcast transcription
+  job, which ticks at 900.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.source-mail-pull</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
+        <string>-u</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/source_mail_pull.py</string>
+        <string>--once</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/source-mail-pull.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/source-mail-pull.err</string>
+
+</dict>
+</plist>

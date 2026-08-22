@@ -1,0 +1,28 @@
+Fetch today's calendar events using the MCP calendar connector: call
+{{SEARCH_TOOL}} with query="*", afterDateTime="today", beforeDateTime="tomorrow",
+order="oldest", limit=25, offset=0 (page through with nextOffset if present, though a
+single day should rarely need it). For each event returned, call {{READ_TOOL}} on its
+URI to get full detail — the list call alone omits attendees, sensitivity, and body.
+
+Assemble a JSON object with this exact shape:
+{
+  "user": {"display_name": "{{DISPLAY_NAME}}", "email": "{{EMAIL}}", "tenant": "{{TENANT}}", "timezone": "{{TIMEZONE}}"},
+  "week": {"start": "<today's date, YYYY-MM-DD, {{TIMEZONE}}>", "end": "<same date>"},
+  "events": [ <one {{READ_TOOL}}-shaped object per event: id, subject, bodyPreview,
+    organizer{name,address}, attendees[{name,address,type,responseStatus}],
+    start/end{dateTime,timeZone}, location{displayName}, isAllDay, isCancelled,
+    sensitivity, categories, createdDateTime, lastModifiedDateTime, recurrence> ]
+}
+
+Write that JSON to a temp file, then run:
+python3 {{TRANSFORM_SCRIPT}} \
+  --input <temp_file> --out-dir {{OUT_DIR}} \
+  --tenant-domains {{TENANT_DOMAINS}}
+
+Do NOT run meeting_prepopulate.py yourself — the consumer is scheduled
+separately and picks up the dropped handoff trio from {{OUT_DIR}} on its own.
+If the calendar search returns zero events for today, still run the transform
+with an empty events array (harmless) rather than skipping.
+
+Report the transform script's JSON output (meetingCount, contactCount, etc.)
+as your final message, nothing else.

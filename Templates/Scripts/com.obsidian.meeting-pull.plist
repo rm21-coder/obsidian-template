@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Meeting Pull (producer) LaunchAgent — OPT-IN
+
+  Runs Templates/Scripts/meeting_pull.py on weekdays at 05:00: a headless
+  `claude -p` session reads the day's calendar through an MCP connector, the
+  deterministic transform writes the schema-v1 handoff trio into the drop
+  folder, and the separately-scheduled consumer (com.meeting-prepopulate)
+  turns it into meeting notes.
+
+  Producer and consumer are deliberately decoupled through the drop folder —
+  do NOT call meeting_prepopulate.py from here. Either half can be replaced,
+  rescheduled, or run by hand without touching the other.
+
+  Timing: 05:00 is an hour ahead of com.morning-dashboard's 07:00 weekday run,
+  so today's notes exist before the dashboard renders. If the machine is
+  asleep or offline at 05:00, launchd fires the job once on wake; a failed run
+  logs and exits, leaving the drop folder untouched.
+
+  Requires (see docs/Meeting-Handoff-MCP-Producer.md):
+    - the Claude Code CLI installed, authenticated, and with an MCP calendar
+      connector registered (`claude mcp list` shows it connected)
+    - Templates/Scripts/.config/meeting_pull.json — written by installer
+      component 54-meeting-pull
+
+  Replace YOUR_USERNAME before installing (the installer does this for you).
+
+  Manual installation:
+    cp Templates/Scripts/com.obsidian.meeting-pull.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.obsidian.meeting-pull.plist
+
+  To unload (e.g., before edits):
+    launchctl unload ~/Library/LaunchAgents/com.obsidian.meeting-pull.plist
+
+  Logs:
+    launchd stdout/stderr: ~/Library/Logs/meeting-pull.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.meeting-pull</string>
+
+    <!-- Stdlib-only and free of 3.10+ syntax, so the system interpreter is
+         enough here - no dependency on the shared Templates/Scripts/.venv. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/meeting_pull.py</string>
+        <string>--skip-if-fresh</string>
+    </array>
+
+    <!-- Weekdays at 05:00, then 06:30 and 08:00 as catch-up firings.
+         One firing is not enough on a laptop: launchd does run a missed
+         calendar job on wake, but a machine that goes BACK to sleep
+         mid-session kills the CLI with the pull half-finished and no
+         handoff written (observed 2026-08-17: fired 05:08 on wake, slept,
+         died at 06:17). The skip-if-fresh flag makes later firings no-ops on
+         any morning the first one succeeded, so the cost of the retries is
+         a directory glob. For the machine to be awake at 05:00 in the first
+         place, schedule a wake:
+           sudo pmset repeat wakeorpoweron MTWRF 04:55:00
+    -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>30</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+    </array>
+
+    <!-- Don't fire on load; wait for 05:00 or a deliberate kickstart. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- A wedged CLI session (network hang, expired auth) must not sit around
+         holding a slot; well beyond the ~1 minute a real run takes. -->
+    <key>ExitTimeOut</key>
+    <integer>900</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/meeting-pull.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/meeting-pull.log</string>
+</dict>
+</plist>

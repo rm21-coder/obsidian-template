@@ -1,0 +1,24 @@
+{
+  "hiddenItems": {
+    "omnisearch:Omnisearch": false,
+    "command-palette:Open command palette": false,
+    "graph:Open graph view": false,
+    "workspaces:Manage workspace layouts": false,
+    "cmdr:Excalidraw: Create new drawing - IN A POPOUT WINDOW": false,
+    "cmdr:Clean Filenames": false,
+    "cmdr:Move note to Knowledge": false,
+    "cmdr:New Person": false,
+    "cmdr:New Note": false,
+    "cmdr:New Meeting": false,
+    "switcher:Open quick switcher": false,
+    "canvas:Create new canvas": false,
+    "daily-notes:Open today's daily note": false,
+    "templates:Insert template": false,
+    "markdown-importer:Open format converter": false,
+    "zk-prefixer:Create new unique note": false,
+    "bases:Create new base": false,
+    "obsidian-excalidraw-plugin:New drawing": false,
+    "quickadd:QuickAdd": false,
+    "templater-obsidian:Templater": false
+  }
+}

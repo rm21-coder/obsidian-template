@@ -1,0 +1,43 @@
+filters:
+  and:
+    - file.hasLink(this)
+    - '!categories.contains(link("Meetings"))'
+    - '!categories.contains(link("Categories/People"))'
+    - '!file.name.contains("Template")'
+    - '!file.name.contains(".base")'
+properties:
+  note.created:
+    displayName: Date
+  file.name:
+    displayName: Title
+  note.categories:
+    displayName: Category
+  note.tags:
+    displayName: Tags
+  note.type:
+    displayName: Type
+  note.status:
+    displayName: Status
+views:
+  - type: table
+    name: Notes
+    order:
+      - file.name
+      - categories
+      - tags
+      - created
+    sort:
+      - property: created
+        direction: DESC
+  - type: table
+    name: Person
+    order:
+      - file.name
+      - categories
+      - type
+      - tags
+      - created
+    sort:
+      - property: created
+        direction: DESC
+    limit: 50

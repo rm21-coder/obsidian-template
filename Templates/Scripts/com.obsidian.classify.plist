@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Data Classification Assistant LaunchAgent
+
+  Runs classify_notes.py nightly at 02:15. Steady state is only the notes whose
+  BODY changed since the last run, so a normal night is a handful of notes and a
+  few cents; the first pass over an existing vault is the expensive one.
+
+  Run that first pass by hand, and run it with Obsidian QUIT. Obsidian rewrites
+  the frontmatter of any note an external process touches — the update-time
+  plugin bumps every note's modified stamp, and the serialiser reformats what
+  the script wrote. With the app closed neither happens. See
+  docs/Data-Classification.md.
+
+  To install:
+    1. Edit ProgramArguments and the log paths below: replace YOUR_USERNAME
+       with your macOS short username (and adjust the vault path if your
+       vault is not at ~/Obsidian/).
+    2. cp Templates/Scripts/com.obsidian.classify.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.obsidian.classify.plist
+
+  To reload after changes:
+    launchctl unload ~/Library/LaunchAgents/com.obsidian.classify.plist
+    launchctl load ~/Library/LaunchAgents/com.obsidian.classify.plist
+
+  Model, endpoint and prompt-cache settings are deliberately NOT set here.
+  They belong in ~/dev/secrets/.env (CLASSIFIER_MODEL, LLM_BASE_URL,
+  LLM_API_KEY_NAME, CLASSIFIER_PROMPT_CACHE, CLASSIFIER_ORG_CONTEXT) so that
+  a manual CLI run and this scheduled run resolve identically. Setting them in
+  both places gives you two sources of truth and one of them will go stale.
+
+  RunAtLoad is false on purpose: loading the agent should never kick off a
+  full-vault pass as a side effect.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.classify</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
+        <string>-u</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/classify_notes.py</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CLASSIFY_WORKERS</key>
+        <string>4</string>
+    </dict>
+
+    <!-- 02:15, after the nightly RAG sync and well clear of working hours. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Hour</key><integer>2</integer>
+            <key>Minute</key><integer>15</integer>
+        </dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/obsidian-classify.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/obsidian-classify.err</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

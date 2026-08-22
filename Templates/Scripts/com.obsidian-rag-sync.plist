@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Obsidian RAG Sync LaunchAgent
+
+  Pushes the vault into an Open WebUI Knowledge collection nightly so the
+  vault can serve as a retrieval-augmented context source for a local
+  Ollama-backed model. See docs/Local LLM with Obsidian Vault RAG.md
+  for the full pipeline.
+
+  To install:
+    1. Edit ProgramArguments below: replace YOUR_USERNAME with your macOS
+       short username (and adjust the vault path if you didn't put the
+       vault at ~/Obsidian/).
+    2. cp Templates/Scripts/com.obsidian-rag-sync.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.obsidian-rag-sync.plist
+
+  To reload after changes:
+    launchctl unload ~/Library/LaunchAgents/com.obsidian-rag-sync.plist
+    launchctl load ~/Library/LaunchAgents/com.obsidian-rag-sync.plist
+
+  Prerequisites — all documented in
+  docs/LaunchAgents — Setup & Migration.md:
+    - Open WebUI running at http://localhost:3000 (Docker container)
+    - Ollama running and serving models locally
+    - Per-vault venv at Templates/Scripts/.venv/ with `requests` and
+      `python-dotenv` installed (`pip install -r requirements.txt`)
+    - ~/dev/secrets/.env populated with:
+        ANTHROPIC_API_KEY=...                   (used by sibling scripts)
+        OPEN_WEBUI_API_KEY=sk-...               (required)
+        OBSIDIAN_COLLECTION_ID=<uuid>           (required)
+        OPEN_WEBUI_URL=http://localhost:3000    (optional; defaults to localhost:3000)
+        OBSIDIAN_VAULT=~/Obsidian               (optional; defaults to ~/Obsidian)
+    - State directory at ~/.local/share/obsidian-rag-sync/ (auto-created)
+
+  Schedule: daily at 03:15 local time. State backups (state.bak.*.json)
+  accumulate in the state dir; the script prunes them.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian-rag-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
+        <string>-u</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/obsidian-rag-sync.py</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>15</integer>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/obsidian-rag-sync.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/obsidian-rag-sync.err</string>
+</dict>
+</plist>
