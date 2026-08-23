@@ -29,6 +29,10 @@ installers/lib/__pycache__/
 Templates/Scripts/tests/__pycache__/
 Templates/Scripts/tests/coverage_html/
 Templates/Scripts/tests/.coverage
+# pytest run from any other cwd drops a coverage DB there too; it embeds
+# absolute local paths, which must not reach a public repo.
+**/.coverage
+.coverage
 .pytest_cache/
 
 # Per-user Obsidian state — the workspace layout is unique to each machine
