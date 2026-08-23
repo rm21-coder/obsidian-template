@@ -406,6 +406,24 @@ def delete_file(file_id: str) -> None:
     r.raise_for_status()
 
 
+def quarantine_blocks(entry: dict | None, current_hash: str) -> bool:
+    """Whether a quarantine entry should keep a file out of this run.
+
+    Both conditions matter, and the failure count is the one that was
+    missing: record_failure() writes an entry from the very FIRST failure,
+    so testing only for the entry's presence exiled a note after a single
+    transient error and kept it out until its content happened to change.
+    One bad run dropped ~40% of a vault out of the index that way.
+
+    A stale entry (recorded against different content) never blocks — the
+    file has changed since it failed and deserves a fresh attempt.
+    """
+    if not entry:
+        return False
+    return (entry.get("hash") == current_hash
+            and entry.get("failures", 0) >= MAX_FAILURES)
+
+
 def wait_for_processing(file_id: str) -> str:
     """Block until Open WebUI has extracted the uploaded file's text.
 
@@ -735,17 +753,9 @@ def main() -> int:
     deindexed_by_class = sorted(set(previous) & set(excluded_by_class))
     deleted = deleted_fs + deindexed_by_class  # combined for API + safeguard accounting
 
-    # Quarantine filter. Skip only once a file has actually reached
-    # MAX_FAILURES on this exact content. record_failure() writes an entry
-    # from the very first failure, so testing for the entry alone exiles a
-    # file after one transient error and keeps it out until its content
-    # happens to change — which is how a single bad sync run silently
-    # dropped ~40% of the vault out of the index.
+    # Quarantine filter — see quarantine_blocks() for the rule.
     def is_quarantined(p: str) -> bool:
-        q = quarantine.get(p)
-        return bool(q
-                    and q["hash"] == indexable[p]["hash"]
-                    and q.get("failures", 0) >= MAX_FAILURES)
+        return quarantine_blocks(quarantine.get(p), indexable[p]["hash"])
 
     quarantined_skip = []
     for p in list(new):
