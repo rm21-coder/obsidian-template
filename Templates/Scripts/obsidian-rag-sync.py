@@ -109,6 +109,7 @@ import os
 import re
 import shutil
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -164,6 +165,13 @@ EXCLUDE_FILENAME_PREFIXES = ("RAG-Sync-",)
 
 MIN_BODY_CHARS = 100
 MAX_FAILURES = 3
+
+# Open WebUI 0.11.0 made upload processing asynchronous: POST /api/v1/files/
+# returns as soon as the bytes land, with data.status == "pending", and text
+# extraction happens on a background queue. How long to wait for that queue
+# before giving up on a single file.
+PROCESSING_TIMEOUT_SECONDS = 120
+PROCESSING_POLL_SECONDS = 1.0
 
 # Classification values that are SAFE to send to the local Open WebUI
 # index. Anything outside this set (including unknown / typo'd values)
@@ -359,10 +367,25 @@ def upload_file(local_path: Path, rel_path: str) -> str:
     return r.json()["id"]
 
 
+class DuplicateContent(Exception):
+    """The collection already holds a file with exactly this content.
+
+    0.11.0 rejects such an add with a 400. It means the index is already
+    correct for this note, so it is a no-op, not a failure.
+    """
+
+
 def add_to_collection(file_id: str) -> None:
     url = f"{WEBUI_URL}/api/v1/knowledge/{COLLECTION_ID}/file/add"
     r = session.post(url, json={"file_id": file_id}, timeout=60)
-    r.raise_for_status()
+    if r.status_code == 400 and "Duplicate content" in r.text:
+        raise DuplicateContent(r.text[:200])
+    if not r.ok:
+        # requests' HTTPError carries only the status line and the URL. Both
+        # 400s this endpoint returns look identical there, which is exactly
+        # what made a wave of them impossible to tell apart in the log.
+        raise requests.HTTPError(
+            f"{r.status_code} from /file/add: {r.text[:200]}", response=r)
 
 
 def remove_from_collection(file_id: str) -> None:
@@ -383,9 +406,33 @@ def delete_file(file_id: str) -> None:
     r.raise_for_status()
 
 
+def wait_for_processing(file_id: str) -> str:
+    """Block until Open WebUI has extracted the uploaded file's text.
+
+    Since 0.11.0 the upload returns immediately with data.status "pending"
+    and extraction runs on a background queue. Calling /file/add before that
+    finishes fails with 400 "The content provided is empty", and in a bulk
+    run — where the queue falls far behind the uploads — that is the common
+    case rather than the rare one. Poll until the status leaves "pending".
+    """
+    url = f"{WEBUI_URL}/api/v1/files/{file_id}"
+    deadline = time.monotonic() + PROCESSING_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        r = session.get(url, timeout=60)
+        r.raise_for_status()
+        status = ((r.json().get("data") or {}).get("status")) or "unknown"
+        if status != "pending":
+            return status
+        time.sleep(PROCESSING_POLL_SECONDS)
+    raise TimeoutError(
+        f"upload {file_id} still 'pending' after {PROCESSING_TIMEOUT_SECONDS}s"
+    )
+
+
 def push_file(local_path: Path, rel_path: str) -> str:
     file_id = upload_file(local_path, rel_path)
     try:
+        wait_for_processing(file_id)
         add_to_collection(file_id)
     except Exception:
         try:
@@ -688,16 +735,25 @@ def main() -> int:
     deindexed_by_class = sorted(set(previous) & set(excluded_by_class))
     deleted = deleted_fs + deindexed_by_class  # combined for API + safeguard accounting
 
-    # Quarantine filter
+    # Quarantine filter. Skip only once a file has actually reached
+    # MAX_FAILURES on this exact content. record_failure() writes an entry
+    # from the very first failure, so testing for the entry alone exiles a
+    # file after one transient error and keeps it out until its content
+    # happens to change — which is how a single bad sync run silently
+    # dropped ~40% of the vault out of the index.
+    def is_quarantined(p: str) -> bool:
+        q = quarantine.get(p)
+        return bool(q
+                    and q["hash"] == indexable[p]["hash"]
+                    and q.get("failures", 0) >= MAX_FAILURES)
+
     quarantined_skip = []
     for p in list(new):
-        q = quarantine.get(p)
-        if q and q["hash"] == indexable[p]["hash"]:
+        if is_quarantined(p):
             quarantined_skip.append(p)
             new.remove(p)
     for p in list(modified):
-        q = quarantine.get(p)
-        if q and q["hash"] == indexable[p]["hash"]:
+        if is_quarantined(p):
             quarantined_skip.append(p)
             modified.remove(p)
 
@@ -817,26 +873,45 @@ def main() -> int:
         else:
             log.info(f"{kind}: {path}")
 
-    # Modifications
+    # Modifications. Push the new copy FIRST, and purge the old one only
+    # once the new one is actually in the collection. The previous ordering
+    # removed the old file up front, so any failure on the way back in — a
+    # 400 from an upload the server had not finished processing, a dropped
+    # connection — left the note with no copy in the index at all, and the
+    # loss was silent because the file still existed in the vault.
     for path in modified:
         old_id = previous[path].get("file_id")
+        try:
+            new_id = push_file(VAULT_PATH / path, path)
+        except DuplicateContent:
+            # The collection already holds this exact content, so the local
+            # state was stale rather than the index. Keep the association we
+            # have and leave the collection untouched — re-pushing would
+            # only trade a good entry for a rejected one.
+            if not old_id:
+                log.warning(f"duplicate content, no known file id: {path}")
+                continue
+            previous[path] = {**indexable[path], "file_id": old_id}
+            quarantine.pop(path, None)
+            log.info(f"already current: {path}")
+            summary["updated_paths"].append(path)
+            continue
+        except Exception as exc:
+            log.error(f"update failed {path}: {exc}")
+            record_failure(path, exc)
+            errors += 1
+            summary["update_failures"].append((path, str(exc)[:200]))
+            continue
         if old_id:
             try:
                 remove_from_collection(old_id)
                 delete_file(old_id)
             except Exception as exc:
                 log.warning(f"could not purge old {path}: {exc}")
-        try:
-            new_id = push_file(VAULT_PATH / path, path)
-            previous[path] = {**indexable[path], "file_id": new_id}
-            quarantine.pop(path, None)
-            log.info(f"updated: {path}")
-            summary["updated_paths"].append(path)
-        except Exception as exc:
-            log.error(f"update failed {path}: {exc}")
-            record_failure(path, exc)
-            errors += 1
-            summary["update_failures"].append((path, str(exc)[:200]))
+        previous[path] = {**indexable[path], "file_id": new_id}
+        quarantine.pop(path, None)
+        log.info(f"updated: {path}")
+        summary["updated_paths"].append(path)
 
     # New files
     for path in new:
@@ -846,6 +921,11 @@ def main() -> int:
             quarantine.pop(path, None)
             log.info(f"added: {path}")
             summary["added_paths"].append(path)
+        except DuplicateContent:
+            # Byte-identical to a note already in the collection. Not an
+            # error worth quarantining over, but worth seeing in the log.
+            log.warning(f"duplicate of an already-indexed note, skipped: {path}")
+            continue
         except Exception as exc:
             log.error(f"add failed {path}: {exc}")
             record_failure(path, exc)
