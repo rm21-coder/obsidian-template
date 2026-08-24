@@ -587,6 +587,12 @@ def main():
     import llm_endpoint
     try:
         client = llm_endpoint.client()
+    except llm_endpoint.GatewayUnreachable as exc:
+        # Skipped, not failed — see the note in classify_notes.py. The tagger
+        # runs every 30 minutes, so off-VPN stretches would otherwise fill the
+        # log with failures for a job that had nothing wrong with it.
+        print(f"Skipped: {exc}")
+        sys.exit(0)
     except llm_endpoint.EndpointError as exc:
         print(f"Error: {exc}")
         sys.exit(1)

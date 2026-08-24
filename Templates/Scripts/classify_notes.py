@@ -1005,6 +1005,21 @@ def main() -> int:
         import llm_endpoint
         try:
             client = llm_endpoint.client()
+        except llm_endpoint.GatewayUnreachable as exc:
+            # Off-VPN is not a broken pipeline. A gateway that does not resolve is a
+    # precondition that was not met: nothing is misconfigured, nothing is lost,
+    # and the next run picks up whatever this one skipped. Exiting non-zero
+    # would have launchd record a failure and the dashboard show red every
+    # night the laptop is not on the VPN at 02:15 — which trains the operator
+    # to ignore the dashboard, the one cost that actually matters. Same
+    # reasoning as script_lock.acquire_or_exit returning 0 on contention.
+    #
+    # A missing credential is the opposite: real misconfiguration, needs a
+    # human, stays non-zero. EndpointError is still caught as the fallback so a
+    # newly-added failure mode cannot escape as a traceback.
+            print(f"Skipped: {exc}")
+            del lock
+            return 0
         except llm_endpoint.EndpointError as exc:
             print(f"Error: {exc}")
             return 1
