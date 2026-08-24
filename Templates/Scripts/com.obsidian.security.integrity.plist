@@ -35,11 +35,21 @@
         <key>Minute</key><integer>35</integer>
     </dict>
 
+    <!-- The state dir (.local/share/obsidian-security) is deliberately NOT
+         watched, and must not be re-added. integrity_monitor appends to
+         alerts.log in that directory on every run that finds drift, so
+         watching it made the job re-trigger itself: a single unadopted change
+         produced one run per ThrottleInterval (30s) until someone rebaselined
+         or the log rotated. One stale hash generated 36,160 alerts that way,
+         and the alert COUNT then measures how long a finding sat unadopted
+         rather than how serious it was. Tamper detection on the
+         plugin_allowlist.json trust anchor consequently rests on the daily
+         StartCalendarInterval run plus the HMAC envelope inside
+         plugin_integrity_check.py. -->
     <key>WatchPaths</key>
     <array>
         <string>/Users/YOUR_USERNAME/Library/LaunchAgents</string>
         <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts</string>
-        <string>/Users/YOUR_USERNAME/.local/share/obsidian-security</string>
     </array>
     <key>ThrottleInterval</key>
     <integer>30</integer>
