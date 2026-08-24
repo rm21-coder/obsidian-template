@@ -121,6 +121,23 @@ Run any control by hand. Useful flags:
   control failing for as long as nothing else happens to trigger it — while
   the state on disk has in fact been clean since the moment you adopted.
 - `--json` — machine-readable report, suppresses notifications and alert-log writes.
+- `OBSIDIAN_SECURITY_STATE_DIR=/tmp/sandbox` — redirect the state directory
+  for one invocation, so a manual run writes its baselines somewhere
+  disposable instead of over the real ones. Use it whenever you are testing a
+  change to a control: `--update` rewrites `plugin_allowlist.json`, including
+  the `vetted_at` field that records when a **human** last reviewed each
+  plugin bundle — that value is in no backup and no git history, so a test run
+  against live state destroys it permanently.
+
+  ```bash
+  OBSIDIAN_SECURITY_STATE_DIR=/tmp/sandbox python3 integrity_monitor.py --update
+  ```
+
+  The scheduled jobs never see this: neither plist declares
+  `EnvironmentVariables`, and launchd does not pass a job your shell
+  environment. Do **not** add it to the plists — that would let anything able
+  to set a job's environment aim a security control at a baseline of its own
+  choosing.
 - `--vault PATH` (plugin + integrity), `--scripts-dir` / `--launchagents-dir`
   (integrity) — point at a non-default vault or layout.
 - `--since 24h` and `--stream` (process audit) — set the retro window, or live-tail.

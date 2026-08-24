@@ -103,8 +103,34 @@ def kickstart_agent(label: str, *, windows_task: str | None = None) -> bool:
 
 # ---------- state dir --------------------------------------------------------
 
+STATE_DIR_ENV = "OBSIDIAN_SECURITY_STATE_DIR"
+
+
 def state_dir() -> Path:
-    """Runtime state dir for the security controls."""
+    """Runtime state dir for the security controls.
+
+    OBSIDIAN_SECURITY_STATE_DIR redirects it. That knob exists so a manual run
+    can be pointed at a throwaway directory instead of writing the real
+    baselines: without it there is no CLI-level way to sandbox these controls
+    (isolation lives only in the pytest fixtures), and verifying a change
+    against live state has already cost an unrecoverable field -- the
+    allowlist's `vetted_at`, a record of when a human reviewed each plugin
+    bundle, overwritten by test runs and present in no backup.
+
+    Safe because the SCHEDULED jobs cannot see it: neither security plist
+    declares EnvironmentVariables, and launchd does not hand a job the
+    invoking user's shell environment, so a variable exported in a terminal
+    reaches manual invocations only. Do NOT add it to the plists. Doing so
+    would let anything able to set the job's environment aim a security
+    control at a baseline of its own choosing, which converts a debugging
+    convenience into a way to silence the control.
+
+    Resolved to an absolute path so a relative value cannot leave state
+    scattered wherever the caller happened to be standing.
+    """
+    override = (os.environ.get(STATE_DIR_ENV) or "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(base) / "obsidian-security"
