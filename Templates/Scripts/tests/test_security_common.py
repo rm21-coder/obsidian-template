@@ -39,6 +39,40 @@ import security_common as sc
 
 class TestStateDir:
 
+    @pytest.fixture(autouse=True)
+    def _no_inherited_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A developer shell that exports the override must not decide what
+        these tests observe -- the platform-default assertions below would
+        fail, or worse, pass against the wrong directory."""
+        monkeypatch.delenv(sc.STATE_DIR_ENV, raising=False)
+
+    def test_override_redirects_the_state_dir(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        # The whole point: a manual run can be aimed at a throwaway directory
+        # rather than overwriting the real baselines.
+        monkeypatch.setenv(sc.STATE_DIR_ENV, str(tmp_path / "sandbox"))
+        assert sc.state_dir() == (tmp_path / "sandbox").resolve()
+
+    def test_override_expands_user(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv(sc.STATE_DIR_ENV, "~/sandbox-state")
+        assert sc.state_dir() == (Path.home() / "sandbox-state").resolve()
+
+    def test_relative_override_becomes_absolute(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A relative value would otherwise scatter state wherever the caller
+        # happened to be standing, and the Windows branch already promises an
+        # absolute path.
+        monkeypatch.setenv(sc.STATE_DIR_ENV, "sandbox-rel")
+        assert sc.state_dir().is_absolute()
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_blank_override_means_unset(
+            self, monkeypatch: pytest.MonkeyPatch, blank: str) -> None:
+        # An installer writing the variable empty must not redirect state to
+        # the filesystem root or the cwd.
+        monkeypatch.setenv(sc.STATE_DIR_ENV, blank)
+        assert sc.state_dir().name == "obsidian-security"
+
     def test_is_platform_appropriate(self) -> None:
         d = sc.state_dir()
         assert d.name == "obsidian-security"
