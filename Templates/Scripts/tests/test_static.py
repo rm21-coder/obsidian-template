@@ -244,7 +244,6 @@ assert PLISTS, "no plists found next to tests/ — layout changed?"
 INTEGRITY_WATCHPATH_SUFFIXES = (
     "Library/LaunchAgents",
     "Obsidian/Templates/Scripts",
-    ".local/share/obsidian-security",
 )
 
 
@@ -267,6 +266,27 @@ class TestPlists:
         for suffix in INTEGRITY_WATCHPATH_SUFFIXES:
             assert any(w.endswith(suffix) for w in watch), (
                 f"WatchPaths missing an entry ending in {suffix!r} — got {watch}")
+
+    def test_integrity_does_not_watch_its_own_state_dir(
+            self, scripts_dir: Path) -> None:
+        """The state dir must never be a WatchPath, and this is the guard.
+
+        integrity_monitor appends to alerts.log inside that directory whenever
+        it finds drift. Watching it made the job re-trigger itself: one
+        unadopted change produced a run every ThrottleInterval until someone
+        rebaselined or the log rotated, and a single stale hash was observed
+        generating 36,160 alerts that way. The entry was there originally and
+        looks obviously correct, so removing it without a test just invites the
+        next person to put it back.
+        """
+        with (scripts_dir / "com.obsidian.security.integrity.plist"
+              ).open("rb") as f:
+            plist = plistlib.load(f)
+        watch = plist.get("WatchPaths", [])
+        offenders = [w for w in watch if "obsidian-security" in w]
+        assert not offenders, (
+            f"the control's own state dir is watched again: {offenders} — "
+            "this re-creates the self-triggering alert loop")
 
     def test_integrity_schedule(self, scripts_dir: Path) -> None:
         with (scripts_dir / "com.obsidian.security.integrity.plist"
