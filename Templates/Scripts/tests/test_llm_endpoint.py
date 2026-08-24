@@ -335,3 +335,54 @@ def test_base_url_without_a_parseable_host_is_left_to_the_sdk(
     llm_endpoint.client()
 
     assert fake_anthropic[0]["base_url"] == "api.ai.example.edu"
+
+
+# ---------------------------------------------------------------------------
+# Scheduled callers must treat an unreachable gateway as skipped, not failed.
+# ---------------------------------------------------------------------------
+
+GATEWAY_CALLERS = ("classify_notes.py", "tag_clippings.py", "voice_cleanup.py")
+
+
+@pytest.mark.parametrize("name", GATEWAY_CALLERS)
+def test_gateway_unreachable_is_handled_before_the_base_class(name, scripts_dir):
+    """Ordering is what makes the split work, and it breaks silently.
+
+    `GatewayUnreachable` subclasses `EndpointError`, so a handler for the base
+    class placed first swallows it and the caller exits non-zero again — which
+    is exactly the behaviour this ordering exists to prevent. Every scheduled
+    gateway caller must therefore catch the specific type first, and must still
+    keep the base-class handler as a fallback so a newly-added failure mode
+    cannot escape as a traceback.
+    """
+    src = (scripts_dir / name).read_text(encoding="utf-8")
+    specific = src.find("except llm_endpoint.GatewayUnreachable")
+    fallback = src.find("except llm_endpoint.EndpointError")
+    assert specific != -1, f"{name} does not distinguish GatewayUnreachable"
+    assert fallback != -1, f"{name} dropped the EndpointError fallback"
+    assert specific < fallback, (
+        f"{name} catches EndpointError before GatewayUnreachable, so an "
+        f"off-VPN run is reported as a failure again")
+
+
+@pytest.mark.parametrize("name", GATEWAY_CALLERS)
+def test_unreachable_gateway_exits_zero_and_missing_credential_does_not(name, scripts_dir):
+    """The two must not converge on one exit code: off-VPN is a precondition
+    that was not met, a missing key is misconfiguration that needs a human."""
+    src = (scripts_dir / name).read_text(encoding="utf-8")
+    block = src[src.find("except llm_endpoint.GatewayUnreachable"):
+                src.find("except llm_endpoint.EndpointError")]
+    assert ("sys.exit(0)" in block or "return 0" in block), (
+        f"{name} does not exit 0 on an unreachable gateway")
+    tail = src[src.find("except llm_endpoint.EndpointError"):]
+    tail = tail[:400]
+    assert ("sys.exit(1)" in tail or "return 1" in tail), (
+        f"{name} no longer exits non-zero on a missing credential")
+
+
+def test_the_two_failure_modes_stay_distinguishable():
+    import llm_endpoint
+    assert issubclass(llm_endpoint.GatewayUnreachable, llm_endpoint.EndpointError)
+    assert issubclass(llm_endpoint.MissingCredential, llm_endpoint.EndpointError)
+    assert not issubclass(llm_endpoint.GatewayUnreachable,
+                          llm_endpoint.MissingCredential)

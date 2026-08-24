@@ -226,6 +226,10 @@ def main():
     import llm_endpoint
     try:
         client = llm_endpoint.client()
+    except llm_endpoint.GatewayUnreachable as exc:
+        # Skipped, not failed — see the note in classify_notes.py.
+        log.warning("Skipped: %s", exc)
+        sys.exit(0)
     except llm_endpoint.EndpointError as exc:
         log.error("%s", exc)
         sys.exit(1)
