@@ -3,7 +3,8 @@
 <!--
   Data Classification Assistant LaunchAgent
 
-  Runs classify_notes.py nightly at 02:15. Steady state is only the notes whose
+  Runs classify_notes.py at 05:00, with catch-ups at 08:00 and 12:30 (see the
+  schedule note below). Steady state is only the notes whose
   BODY changed since the last run, so a normal night is a handful of notes and a
   few cents; the first pass over an existing vault is the expensive one.
 
@@ -51,12 +52,26 @@
         <string>4</string>
     </dict>
 
-    <!-- 02:15, after the nightly RAG sync and well clear of working hours. -->
+    <!-- 05:00 primary, then two catch-ups. A single overnight slot is wrong for
+         any job behind an institutional gateway: the gateway is typically
+         reachable only on the VPN, so the run skips and - since a skip is not a
+         failure - reports success while never doing the work. A run with nothing
+         to do is free (the content-hash cache short-circuits it), so the later
+         slots act only when the earlier ones were skipped. If your endpoint is
+         reachable without a VPN, one slot is enough. -->
     <key>StartCalendarInterval</key>
     <array>
         <dict>
-            <key>Hour</key><integer>2</integer>
-            <key>Minute</key><integer>15</integer>
+            <key>Hour</key><integer>5</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>8</integer>
+            <key>Minute</key><integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key><integer>12</integer>
+            <key>Minute</key><integer>30</integer>
         </dict>
     </array>
 

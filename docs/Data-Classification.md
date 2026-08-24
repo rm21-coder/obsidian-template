@@ -6,7 +6,7 @@ tier its audience is cleared for. Neither is useful without the other: a label
 nothing enforces is decoration, and a gate with nothing to read is a no-op.
 
 - Component: `58-classification`
-- Agent: `com.obsidian.classify`, nightly 02:15
+- Agent: `com.obsidian.classify` — 05:00, with catch-ups at 08:00 and 12:30
 - Log: `~/Library/Logs/obsidian-classify.log`
 - Review queue: `Topics/Classification`
 

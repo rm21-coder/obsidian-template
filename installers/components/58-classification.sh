@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 58-classification.sh - nightly data-classification assistant.
 #
-# Installs com.obsidian.classify, which runs classify_notes.py at 02:15 and
+# Installs com.obsidian.classify, which runs classify_notes.py at 05:00 (with
+# catch-ups at 08:00 and 12:30) and
 # proposes a data-classification tier for notes whose body has changed. Also
 # checks that disclosure_check.py - the export gate that consumes those tiers -
 # is present, because a classification scheme nothing enforces is decoration.
@@ -53,7 +54,7 @@ info "Installing LaunchAgent com.obsidian.classify..."
 install_plist_and_load Templates/Scripts/com.obsidian.classify.plist com.obsidian.classify
 
 ok "classification component complete"
-info "  Runs nightly 02:15; log: ~/Library/Logs/obsidian-classify.log"
+info "  Runs 05:00, 08:00, 12:30; log: ~/Library/Logs/obsidian-classify.log"
 info ""
 info "  NEXT: run the first full pass by hand, with Obsidian QUIT."
 info "    1. Quit Obsidian."
