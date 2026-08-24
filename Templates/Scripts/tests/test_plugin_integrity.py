@@ -338,6 +338,25 @@ class TestEndToEndMain:
         rc = pic.main(self._argv(sample_vault))
         assert rc == 0
 
+    def test_update_refreshes_the_jobs_recorded_status(
+            self, sample_vault: Path, fake_keychain, tmp_state_dir,
+            silent_notify, silent_kickstart: list) -> None:
+        # Adopting by hand leaves the scheduler reporting the drift run that
+        # prompted it, so the dashboard shows this control failing while the
+        # allowlist is in fact clean.
+        assert pic.main(self._argv(sample_vault, "--update")) == 0
+        assert [c[0] for c in silent_kickstart] == [pic.AGENT_LABEL]
+
+    def test_a_plain_check_never_kickstarts(
+            self, sample_vault: Path, fake_keychain, tmp_state_dir,
+            silent_notify, silent_kickstart: list) -> None:
+        # The triggered run carries no --update, so it must not trigger
+        # another. A check that kickstarted would spin the job forever.
+        assert pic.main(self._argv(sample_vault, "--update")) == 0
+        silent_kickstart.clear()
+        pic.main(self._argv(sample_vault))
+        assert silent_kickstart == []
+
     def test_bundle_change_after_update_fires(
             self, sample_vault: Path, fake_keychain, tmp_state_dir,
             silent_notify) -> None:

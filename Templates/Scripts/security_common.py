@@ -51,6 +51,56 @@ def log(tag: str, msg: str, *, stream=None) -> None:
         print(f"{ts} [{tag}] {line}", file=stream, flush=True)
 
 
+# ---------- scheduler ---------------------------------------------------------
+
+def kickstart_agent(label: str, *, windows_task: str | None = None) -> bool:
+    """Run a scheduled job NOW so its recorded exit status is current.
+
+    Adopting a baseline by hand fixes the state on disk, but leaves the
+    SCHEDULER's memory of the last run pinned to the drift run that prompted
+    the adopt. On macOS that is launchctl's LastExitStatus, which the morning
+    dashboard reads for its pipeline-health tile: exit 1 encodes as 256 and the
+    control reads as failing for as long as nothing happens to trigger it
+    again. The state was clean the whole time; only the record was stale.
+
+    Best-effort by construction. The baseline write has already succeeded by
+    the time this is called, so a scheduler that is missing, unloaded, or slow
+    must never turn a successful adopt into a failure -- every error path
+    returns False and the caller degrades to a note.
+
+    Deliberately NOT `launchctl kickstart -k`. The -k variant kills an
+    in-flight instance first, which sounds like determinism and is actively
+    wrong here: an adopt frequently coincides with a run the adopt itself
+    triggered, and killing it records SIGTERM as the job's exit status -- a
+    worse, more alarming failure than the stale drift status this exists to
+    clear. Observed in practice, not theorised.
+
+    A job that is already running therefore counts as success: that run is
+    about to record a fresh status, which is the entire objective. launchctl
+    reports it as an error, so the busy case is matched on stderr rather than
+    on the return code.
+    """
+    try:
+        if sys.platform == "darwin":
+            p = subprocess.run(
+                ["/bin/launchctl", "kickstart",
+                 f"gui/{os.getuid()}/{label}"],
+                check=False, capture_output=True, text=True, timeout=15)
+            if p.returncode == 0:
+                return True
+            blurb = f"{p.stdout} {p.stderr}".lower()
+            return ("already running" in blurb
+                    or "operation already in progress" in blurb)
+        if sys.platform == "win32" and windows_task:
+            p = subprocess.run(
+                ["schtasks", "/Run", "/TN", windows_task],
+                check=False, capture_output=True, text=True, timeout=15)
+            return p.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return False
+
+
 # ---------- state dir --------------------------------------------------------
 
 def state_dir() -> Path:

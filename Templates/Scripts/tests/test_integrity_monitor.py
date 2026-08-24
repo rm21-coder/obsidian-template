@@ -297,6 +297,27 @@ class TestEndToEnd:
         rc = im.main(self._argv(sandbox))
         assert rc == 0
 
+    def test_update_refreshes_the_jobs_recorded_status(
+            self, sandbox: dict, silent_notify: list,
+            silent_kickstart: list) -> None:
+        # Rebaselining by hand leaves launchd's LastExitStatus pinned to the
+        # drift run that prompted it, so the dashboard reports this control as
+        # failing while the state is clean. --update has to refresh it.
+        assert im.main(self._argv(sandbox, "--update")) == 0
+        assert [c[0] for c in silent_kickstart] == [im.AGENT_LABEL]
+
+    def test_a_plain_check_never_kickstarts(
+            self, sandbox: dict, silent_notify: list,
+            silent_kickstart: list) -> None:
+        # The kickstarted run executes this script WITHOUT --update. If a plain
+        # check also kickstarted, that run would trigger another, and the
+        # control would spin forever -- the exact class of self-triggering loop
+        # the WatchPaths fix removed.
+        assert im.main(self._argv(sandbox, "--update")) == 0
+        silent_kickstart.clear()
+        im.main(self._argv(sandbox))
+        assert silent_kickstart == []
+
     def test_mutated_script_surfaces_as_drift(
             self, sandbox: dict, silent_notify: list,
             capsys: pytest.CaptureFixture) -> None:

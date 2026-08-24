@@ -114,6 +114,12 @@ Finding kinds you'll see:
 Run any control by hand. Useful flags:
 
 - `--update` — adopt the current state as the new baseline (plugin + integrity).
+  Both controls also trigger a fresh scheduled run of their own launchd job
+  afterwards. Without that, the scheduler keeps reporting the
+  drift run that prompted the rebaseline (exit 1, recorded as
+  `LastExitStatus` 256), and the morning dashboard's pipeline tile shows the
+  control failing for as long as nothing else happens to trigger it — while
+  the state on disk has in fact been clean since the moment you adopted.
 - `--json` — machine-readable report, suppresses notifications and alert-log writes.
 - `--vault PATH` (plugin + integrity), `--scripts-dir` / `--launchagents-dir`
   (integrity) — point at a non-default vault or layout.

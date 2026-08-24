@@ -281,6 +281,98 @@ class TestLog:
         assert captured.err == ""
 
 
+class TestKickstartAgent:
+    """Refreshing the scheduler's record of the last run after a rebaseline.
+
+    Every test here requests `real_kickstart` so conftest's autouse stub stands
+    aside -- otherwise these would assert against the fake and pass vacuously.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _use_the_real_function(self, real_kickstart) -> None:
+        return None
+
+    def _capture(self, monkeypatch, rc=0, boom=None):
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append((argv, kw))
+            if boom is not None:
+                raise boom
+            return subprocess.CompletedProcess(argv, rc, "", "")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        return calls
+
+    def test_macos_kickstarts_the_gui_domain_label(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
+        calls = self._capture(monkeypatch)
+        assert sc.kickstart_agent("com.example.job") is True
+        argv = calls[0][0]
+        # The gui/<uid>/<label> form is the whole point: a bare label targets
+        # the wrong domain and silently does nothing for a user agent.
+        assert argv[:2] == ["/bin/launchctl", "kickstart"]
+        assert argv[2] == "gui/501/com.example.job"
+        # -k would kill an in-flight run and record SIGTERM as the job's exit
+        # status -- a worse failure than the stale one being cleared.
+        assert "-k" not in argv
+
+    def test_already_running_counts_as_success(self, monkeypatch) -> None:
+        # An adopt often coincides with a run it triggered itself. That run is
+        # about to record a fresh status, which is the whole objective, so the
+        # busy case must not be reported as a failure to the user.
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
+        calls = []
+
+        def fake_run(argv, **kw):
+            calls.append(argv)
+            return subprocess.CompletedProcess(
+                argv, 1, "", "Operation already in progress")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        assert sc.kickstart_agent("com.example.job") is True
+
+    def test_nonzero_exit_reports_failure(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
+        self._capture(monkeypatch, rc=3)
+        assert sc.kickstart_agent("com.example.job") is False
+
+    def test_windows_runs_the_named_task(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        calls = self._capture(monkeypatch)
+        assert sc.kickstart_agent("ignored",
+                                  windows_task=r"\Obsidian\security-integrity") is True
+        assert calls[0][0] == ["schtasks", "/Run", "/TN",
+                               r"\Obsidian\security-integrity"]
+
+    def test_windows_without_a_task_name_is_a_noop(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "win32")
+        calls = self._capture(monkeypatch)
+        assert sc.kickstart_agent("com.example.job") is False
+        assert calls == []
+
+    def test_unsupported_platform_shells_out_to_nothing(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "platform", "linux")
+        calls = self._capture(monkeypatch)
+        assert sc.kickstart_agent("com.example.job") is False
+        assert calls == [], "no scheduler call belongs on an unsupported platform"
+
+    @pytest.mark.parametrize("boom", [
+        FileNotFoundError("no launchctl"),
+        subprocess.TimeoutExpired("launchctl", 15),
+    ])
+    def test_scheduler_trouble_never_raises(self, monkeypatch, boom) -> None:
+        # The baseline is already written when this runs. Letting a missing or
+        # wedged scheduler raise would turn a successful adopt into a crash.
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
+        self._capture(monkeypatch, boom=boom)
+        assert sc.kickstart_agent("com.example.job") is False
+
+
 class TestNotify:
 
     def test_never_raises_when_the_backend_explodes(

@@ -77,6 +77,12 @@ DEFAULT_VAULT = Path.home() / "Obsidian"
 STATE_DIR = security_common.state_dir()
 STATE_PATH = STATE_DIR / "integrity_state.json"
 
+# The scheduled job that runs this script, per platform. Named here so an
+# interactive --update can refresh the job's recorded exit status; see the
+# kickstart call in main().
+AGENT_LABEL = "com.obsidian.security.integrity"
+AGENT_WINDOWS_TASK = r"\Obsidian\security-integrity"
+
 DELETION_FLOOR = 50          # absolute floor below which a drop is fine
 DELETION_RATIO = 0.05         # 5% relative
 # .ps1/.psd1 cover the Windows scheduler layer (Templates/Scripts/windows/).
@@ -352,6 +358,19 @@ def main(argv: list[str]) -> int:
             f"{n_agents} agent plists, {n_state} state-dir trust anchors, "
             f"{n_md} markdown files in vault.",
             stream=sys.stdout)
+        # The adopt is already complete; this only refreshes the scheduler's
+        # record of the last run. Skip it and launchd still reports the drift
+        # run that prompted the rebaseline, so the dashboard shows this control
+        # failing while the state is in fact clean -- the confusing case that
+        # motivated this call. The run it triggers executes this script WITHOUT
+        # --update, so it cannot kickstart again; there is no recursion here.
+        if not security_common.kickstart_agent(
+                AGENT_LABEL, windows_task=AGENT_WINDOWS_TASK):
+            security_common.log(
+                "integrity",
+                "note: could not trigger a fresh scheduled run — the job's "
+                "recorded status stays stale until it next runs on its own.",
+                stream=sys.stdout)
         return 0
 
     baseline = load_state()
