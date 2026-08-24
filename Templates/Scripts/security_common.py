@@ -17,11 +17,38 @@ Trust-anchor key store, by platform:
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+
+# ---------- console logging --------------------------------------------------
+
+LOG_TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
+
+
+def log(tag: str, msg: str, *, stream=None) -> None:
+    """Write a timestamped, tagged line to a control's launchd log.
+
+    Both controls have stdout AND stderr redirected into the same file
+    (~/Library/Logs/obsidian-security.log) and launchd contributes nothing of
+    its own, so an unstamped line in that file cannot be dated at all. The only
+    timestamps used to live in alerts.log, which meant reconstructing when a
+    drift started required a second file that a log-only view never showed.
+
+    Every emitted line is stamped, continuation lines included. A header-only
+    stamp reads fine until someone slices the file by date or greps for one
+    finding, at which point the detail lines have no time on them and land
+    outside the window. Keeping the `[tag] text` portion contiguous means the
+    existing greps for "[integrity] DRIFT" still match with the stamp in front.
+    """
+    stream = sys.stderr if stream is None else stream
+    ts = datetime.datetime.now().strftime(LOG_TS_FORMAT)
+    for line in (str(msg).splitlines() or [""]):
+        print(f"{ts} [{tag}] {line}", file=stream, flush=True)
 
 
 # ---------- state dir --------------------------------------------------------

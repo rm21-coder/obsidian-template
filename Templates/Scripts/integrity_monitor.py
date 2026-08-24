@@ -256,7 +256,7 @@ def load_state() -> dict:
     try:
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        print(f"[integrity] FATAL: state corrupt: {e}", file=sys.stderr)
+        security_common.log("integrity", f"FATAL: state corrupt: {e}")
         sys.exit(2)
 
 
@@ -346,17 +346,19 @@ def main(argv: list[str]) -> int:
         n_agents = len(current["launchagents"])
         n_state = len(current["state_dir"])
         n_md = current["vault_md_count"]
-        print(f"[integrity] baseline updated: "
-              f"{n_scripts} script files, {n_agents} agent plists, "
-              f"{n_state} state-dir trust anchors, "
-              f"{n_md} markdown files in vault.")
+        security_common.log(
+            "integrity",
+            f"baseline updated: {n_scripts} script files, "
+            f"{n_agents} agent plists, {n_state} state-dir trust anchors, "
+            f"{n_md} markdown files in vault.",
+            stream=sys.stdout)
         return 0
 
     baseline = load_state()
     if not baseline:
         msg = ("No baseline. Run with --update once you have verified the "
                "current state is clean.")
-        print(f"[integrity] {msg}", file=sys.stderr)
+        security_common.log("integrity", msg)
         if not args.json:
             security_common.notify("Workflow integrity monitor", msg)
         if args.json:
@@ -415,9 +417,9 @@ def main(argv: list[str]) -> int:
         "findings": findings,
     })
 
-    print(f"[integrity] DRIFT: {summary}", file=sys.stderr)
+    security_common.log("integrity", f"DRIFT: {summary}")
     for f in findings:
-        print(f"  - {json.dumps(f)}", file=sys.stderr)
+        security_common.log("integrity", f"  - {json.dumps(f)}")
     return 1
 
 

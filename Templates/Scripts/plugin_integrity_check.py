@@ -122,8 +122,8 @@ def _require_hmac_key() -> bytes:
     read nor created — without it we cannot honor the integrity contract."""
     key = security_common.get_or_create_hmac_key(HMAC_SERVICE, HMAC_ACCOUNT)
     if key is None or len(key) < 16:
-        print("[plugin-check] FATAL: could not obtain the HMAC key.",
-              file=sys.stderr)
+        security_common.log("plugin-check",
+                            "FATAL: could not obtain the HMAC key.")
         sys.exit(2)
     return key
 
@@ -197,15 +197,17 @@ def load_allowlist() -> dict[str, dict]:
     try:
         raw = json.loads(ALLOWLIST_PATH.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        print(f"[plugin-check] FATAL: allowlist corrupt: {e}",
-              file=sys.stderr)
+        security_common.log("plugin-check",
+                            f"FATAL: allowlist corrupt: {e}")
         sys.exit(2)
 
     # Legacy flat format — pre-envelope. Accept once; the next --update
     # will rewrap. We log this so the user can see migration happening.
     if not (isinstance(raw, dict) and "state" in raw and "hmac" in raw):
-        print("[plugin-check] migrating allowlist to HMAC envelope on next "
-              "--update (loading as legacy flat format).", file=sys.stderr)
+        security_common.log(
+            "plugin-check",
+            "migrating allowlist to HMAC envelope on next --update "
+            "(loading as legacy flat format).")
         return raw if isinstance(raw, dict) else {}
 
     state = raw.get("state")
@@ -229,7 +231,7 @@ def _fire_tamper(reason: str) -> None:
         "summary": msg,
         "reason": reason,
     })
-    print(f"[plugin-check] FATAL: {msg}", file=sys.stderr)
+    security_common.log("plugin-check", f"FATAL: {msg}")
     sys.exit(1)
 
 
@@ -315,8 +317,8 @@ def main(argv: list[str]) -> int:
     vault = Path(os.path.expanduser(args.vault)).resolve()
     plugins_dir = vault / ".obsidian" / "plugins"
     if not plugins_dir.is_dir():
-        print(f"[plugin-check] no plugins directory at {plugins_dir}",
-              file=sys.stderr)
+        security_common.log("plugin-check",
+                            f"no plugins directory at {plugins_dir}")
         # Empty plugin set is a valid baseline (Restricted Mode), not an error.
         if args.update:
             save_allowlist({})
@@ -332,8 +334,10 @@ def main(argv: list[str]) -> int:
         for pid in current:
             current[pid]["vetted_at"] = ts
         save_allowlist(current)
-        print(f"[plugin-check] allowlist updated: "
-              f"{len(current)} plugins recorded.")
+        security_common.log(
+            "plugin-check",
+            f"allowlist updated: {len(current)} plugins recorded.",
+            stream=sys.stdout)
         return 0
 
     allowlist = load_allowlist()
@@ -343,7 +347,7 @@ def main(argv: list[str]) -> int:
         # Tell the user to vet manually then run with --update.
         msg = (f"No baseline yet. Vet the {len(current)} installed "
                f"plugin(s), then run: plugin_integrity_check.py --update")
-        print(f"[plugin-check] {msg}", file=sys.stderr)
+        security_common.log("plugin-check", msg)
         if not args.json:
             security_common.notify("Obsidian plugin integrity",
                    "No baseline. Run with --update after vetting.")
@@ -391,9 +395,9 @@ def main(argv: list[str]) -> int:
         "findings": findings,
     })
 
-    print(f"[plugin-check] DRIFT: {summary}", file=sys.stderr)
+    security_common.log("plugin-check", f"DRIFT: {summary}")
     for f in findings:
-        print(f"  - {json.dumps(f)}", file=sys.stderr)
+        security_common.log("plugin-check", f"  - {json.dumps(f)}")
     return 1
 
 
