@@ -30,7 +30,7 @@ if [[ -n "${LLM_BASE_URL:-}" ]]; then
     # Only if the profile set them; otherwise the scripts' own defaults win.
     # Both LLM-calling agents are listed: a gateway that exposes model aliases
     # rather than dated Anthropic ids needs the alias to reach the SCHEDULED
-    # runs, and com.obsidian.classify at 02:15 gets the same bare launchd
+    # runs, and com.obsidian.classify at 05:00 gets the same bare launchd
     # environment the tagger does.
     for opt in TAGGER_MODEL TAGGER_PROMPT_CACHE \
                CLASSIFIER_MODEL CLASSIFIER_PROMPT_CACHE; do
