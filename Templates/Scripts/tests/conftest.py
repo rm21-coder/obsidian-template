@@ -340,6 +340,41 @@ def block_unmocked_subprocess(request: pytest.FixtureRequest,
 
 
 @pytest.fixture
+def real_kickstart() -> None:
+    """Marker: this test exercises kickstart_agent itself, so the autouse
+    stub below must stand aside. Mirrors allow_external_dns."""
+    return None
+
+
+@pytest.fixture(autouse=True)
+def silent_kickstart(request: pytest.FixtureRequest,
+                     monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    """Capture kickstart_agent() instead of poking the real scheduler.
+
+    integrity_monitor calls it after a successful --update so the job's
+    recorded exit status stops reflecting the drift run that prompted the
+    rebaseline. Every test that exercises --update would otherwise reach the
+    real launchctl and restart the developer's own security agent. The
+    subprocess gate below would catch it, but as a confusing AssertionError
+    inside an unrelated test rather than as "we did not mean to do that";
+    autouse keeps the intent explicit and the failure impossible.
+
+    Returns a list of (label, windows_task) so tests can assert it fired.
+    """
+    captured: list[tuple] = []
+    if "real_kickstart" in request.fixturenames:
+        return captured
+
+    def fake_kickstart(label: str, *, windows_task=None) -> bool:
+        captured.append((label, windows_task))
+        return True
+
+    import security_common
+    monkeypatch.setattr(security_common, "kickstart_agent", fake_kickstart)
+    return captured
+
+
+@pytest.fixture
 def allow_subprocess() -> None:
     """Marker fixture: tests that include this in their args opt out
     of the subprocess block."""

@@ -94,6 +94,12 @@ ALLOWLIST_PATH = STATE_DIR / "plugin_allowlist.json"
 
 # The trust-anchor key is created/stored by security_common: Keychain on macOS,
 # a DPAPI-encrypted file on Windows, a 0600 file elsewhere.
+# The scheduled job that runs this script, per platform. Named here so an
+# interactive --update can refresh the job's recorded exit status; see the
+# kickstart call in main().
+AGENT_LABEL = "com.obsidian.security.plugin-check"
+AGENT_WINDOWS_TASK = r"\Obsidian\security-plugin-check"
+
 HMAC_SERVICE = "obsidian-allowlist-hmac"
 HMAC_ACCOUNT = os.environ.get("USER") or os.environ.get("USERNAME") or "obsidian"
 
@@ -338,6 +344,18 @@ def main(argv: list[str]) -> int:
             "plugin-check",
             f"allowlist updated: {len(current)} plugins recorded.",
             stream=sys.stdout)
+        # Same reasoning as integrity_monitor: the allowlist is already
+        # written, and without this the scheduler keeps reporting the drift run
+        # that prompted the adopt, so the dashboard shows this control failing
+        # while the state is clean. The triggered run has no --update and so
+        # cannot trigger another.
+        if not security_common.kickstart_agent(
+                AGENT_LABEL, windows_task=AGENT_WINDOWS_TASK):
+            security_common.log(
+                "plugin-check",
+                "note: could not trigger a fresh scheduled run — the job's "
+                "recorded status stays stale until it next runs on its own.",
+                stream=sys.stdout)
         return 0
 
     allowlist = load_allowlist()
