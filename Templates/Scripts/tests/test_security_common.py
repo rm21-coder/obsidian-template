@@ -21,6 +21,7 @@ notification.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
@@ -236,6 +237,49 @@ class TestKeychainKeyStore:
 # ---------------------------------------------------------------------------
 # notify
 # ---------------------------------------------------------------------------
+
+class TestLog:
+    """The timestamped console line both controls write to their launchd log."""
+
+    def test_line_is_stamped_and_tagged(self, capsys) -> None:
+        sc.log("integrity", "DRIFT: alpha.py changed")
+        err = capsys.readouterr().err.rstrip("\n")
+        stamp, _, rest = err.partition(" ")
+        # The stamp must actually parse as the declared format -- asserting
+        # only "starts with 20" would pass for any garbage beginning in 20.
+        datetime.datetime.strptime(stamp, sc.LOG_TS_FORMAT)
+        assert rest == "[integrity] DRIFT: alpha.py changed"
+
+    def test_tag_and_text_stay_contiguous(self, capsys) -> None:
+        # Existing habits (and docs) grep for "[integrity] DRIFT". Putting the
+        # stamp in front keeps those working; interleaving it would not.
+        sc.log("integrity", "DRIFT: x")
+        assert "[integrity] DRIFT: x" in capsys.readouterr().err
+
+    def test_every_line_of_a_multiline_message_is_stamped(self, capsys) -> None:
+        # A header-only stamp loses the detail lines the moment the file is
+        # sliced by date, which is the whole failure this helper fixes.
+        sc.log("plugin-check", "DRIFT: two things\n  - {\"a\": 1}\n  - {\"b\": 2}")
+        lines = [l for l in capsys.readouterr().err.splitlines() if l]
+        assert len(lines) == 3
+        for line in lines:
+            datetime.datetime.strptime(line.split(" ")[0], sc.LOG_TS_FORMAT)
+            assert "[plugin-check] " in line
+
+    def test_defaults_to_stderr(self, capsys) -> None:
+        sc.log("integrity", "hello")
+        captured = capsys.readouterr()
+        assert "hello" in captured.err
+        assert captured.out == ""
+
+    def test_stream_override_reaches_stdout(self, capsys) -> None:
+        # The --update confirmations are stdout; both descriptors land in the
+        # same log file, but an interactive run should still see them on out.
+        sc.log("integrity", "baseline updated: 1 file", stream=sys.stdout)
+        captured = capsys.readouterr()
+        assert "baseline updated: 1 file" in captured.out
+        assert captured.err == ""
+
 
 class TestNotify:
 

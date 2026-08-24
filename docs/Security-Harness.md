@@ -63,7 +63,14 @@ broken.
 - **Alert log (append-only):** `~/.local/share/obsidian-security/alerts.log` —
   one JSON record per finding (`control`, `summary`, `findings`, `ts`).
 - **macOS notification** (with sound) on each finding.
-- **launchd output:** `~/Library/Logs/obsidian-security.log`.
+- **launchd output:** `~/Library/Logs/obsidian-security.log` — both
+  controls redirect stdout and stderr here. Every line is stamped
+  `YYYY-MM-DDTHH:MM:SS [tag] text`, so any line can be dated on its own;
+  launchd adds no timestamps of its own, and before this the file could
+  only be dated by cross-referencing `alerts.log`. Continuation lines
+  (the `  - {...}` finding details) are stamped too, so slicing the file
+  by date keeps a finding together with its header. `--json` output is
+  deliberately left unstamped so it stays machine-parseable.
 - **Exit codes:** `0` clean · `1` drift / suspicious activity · `2` hard error
   **or no baseline yet** (see below).
 
