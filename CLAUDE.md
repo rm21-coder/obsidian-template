@@ -67,7 +67,7 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
 - `Templates/Scripts/*.py` — the automation logic (mostly cross-platform).
 - `Templates/Scripts/*.plist` — macOS `launchd` LaunchAgents (the schedulers).
 - `Templates/Scripts/*.sh` — macOS shell wrappers (`sync-vault.sh`, etc.).
-- `Templates/Scripts/windows/` — the **Windows port** (this branch). PowerShell
+- `Templates/Scripts/windows/` — the **Windows port**. PowerShell
   equivalents of the schedulers/wrappers/installer. See its `README.md`.
 - `docs/` — setup + architecture docs (LaunchAgents, RAG, security harness,
   the workflow diagram, etc.).
@@ -100,7 +100,12 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
 ## When working on the Windows layer
 
 Start from [`docs/Windows Setup.md`](docs/Windows%20Setup.md) and
-`Templates/Scripts/windows/README.md`. Test any change on a Windows machine,
-commit to the `windows-port` branch, push, and merge cross-platform
-improvements back to `main` when solid (most fixes belong in the shared `.py`
-files anyway — see "Cross-platform first" above).
+`Templates/Scripts/windows/README.md`. The Windows layer lives on `main`
+alongside everything else — there is no long-lived `windows-port` branch. It
+was removed on 2026-08-24: it had carried no unique commit since the repository
+was re-rooted, and a branch that only ever falls behind `main` ships a stale
+tree to anyone who clones it.
+
+Test any change on a Windows machine. If the work needs more than one commit,
+cut a short-lived branch from `main` and merge it back when solid — most fixes
+belong in the shared `.py` files anyway (see "Cross-platform first" above).
