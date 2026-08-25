@@ -56,9 +56,22 @@ $repo       = Get-RepoRoot
 $scriptsDir = Join-Path $repo 'Templates\Scripts'
 $vault      = Get-VaultRoot     # ~\Obsidian (the junction), independent of $repo
 
-function Confirm-Step([string]$Question, [string]$Default = 'Y') {
+function Confirm-Step([string]$Question, [string]$Default = 'Y', [switch]$Critical) {
     if ($Yes) { return $true }                          # -Yes: yes to all prompts
-    if ([Console]::IsInputRedirected) { return ($Default -eq 'Y') }
+    if ([Console]::IsInputRedirected) {
+        # A redirected stdin means nobody is at the keyboard to answer. Taking
+        # the default is fine for the granular steps, but the top-level gate
+        # gates a teardown -- assuming yes there means a harness, a piped
+        # invocation or a logging wrapper can start deleting with no human
+        # having agreed to it. Unattended teardown must be asked for by name.
+        if ($Critical) {
+            Write-Warning '  stdin is redirected, so this prompt cannot be answered.'
+            Write-Warning '  Refusing to assume yes for a destructive step. Re-run'
+            Write-Warning '  interactively, or pass -Yes to confirm unattended.'
+            return $false
+        }
+        return ($Default -eq 'Y')
+    }
     $hint = if ($Default -eq 'Y') { '[Y/n]' } else { '[y/N]' }
     $ans = (Read-Host "$Question $hint").Trim()
     if (-not $ans) { return ($Default -eq 'Y') }
@@ -96,7 +109,7 @@ Write-Host ("  extras: RAG={0} Plugins={1} Apps={2} PurgeModels={3}" -f `
     $RemoveRAG, $RemovePlugins, $RemoveApps, $PurgeModels)
 Write-Host '  NEVER removed: the repo/vault content, your .env secrets, WSL, MSVC runtime.'
 Write-Host ''
-if (-not (Confirm-Step 'Proceed with uninstall?' 'Y')) { Write-Host 'aborted; nothing changed.'; return }
+if (-not (Confirm-Step 'Proceed with uninstall?' 'Y' -Critical)) { Write-Host 'aborted; nothing changed.'; return }
 
 # ---- 1. scheduled tasks ----------------------------------------------------
 Write-Host '== scheduled tasks =='
@@ -106,11 +119,16 @@ if ($DryRun) {
 } else {
     & (Join-Path $PSScriptRoot 'Unregister-Tasks.ps1')
     # Remove the now-empty \Obsidian task folder.
+    # Warn rather than swallow: this is the persistence surface, and a folder
+    # that would not delete is worth one line in the teardown log. Not fatal --
+    # Unregister-Tasks.ps1 has already removed the tasks themselves, so what
+    # survives here is an empty folder, not a live scheduled job.
     try {
         $svc = New-Object -ComObject 'Schedule.Service'; $svc.Connect()
         $root = $svc.GetFolder('\')
-        try { $root.DeleteFolder('Obsidian', 0); Write-Host '  removed task folder \Obsidian' } catch {}
-    } catch {}
+        try { $root.DeleteFolder('Obsidian', 0); Write-Host '  removed task folder \Obsidian' }
+        catch { Write-Warning "  task folder \Obsidian not removed (tasks themselves are gone): $_" }
+    } catch { Write-Warning "  could not reach Task Scheduler to tidy the \Obsidian folder: $_" }
 }
 
 # ---- 2. Send To shortcut ---------------------------------------------------
