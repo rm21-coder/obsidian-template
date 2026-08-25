@@ -101,6 +101,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import script_lock
+import security_common
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 LOCK_NAME = "source_mail_pull"
@@ -443,7 +444,11 @@ def save_seen(root: Path, seen: dict[str, float]) -> None:
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(pruned, indent=0, sort_keys=True) + "\n",
                        encoding="utf-8")
-        os.chmod(tmp, 0o600)
+        # restrict_file, not a bare chmod: on Windows os.chmod only toggles
+        # the read-only attribute, so a 0o600 call there leaves the replay
+        # seen-cache carrying whatever ACL it inherited. restrict_file drops
+        # inheritance via icacls and grants only the current user + SYSTEM.
+        security_common.restrict_file(tmp)
         tmp.replace(path)
     except OSError as exc:
         log.warning("could not persist seen-cache %s: %s", path, exc)
