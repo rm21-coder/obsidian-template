@@ -99,7 +99,13 @@ if [[ -f "$ENDPOINT_PY" && -n "$VENV_PY" ]]; then
     # Run with a clean LLM_* environment so we report what .env says.
     endpoint="$(env -u LLM_BASE_URL -u LLM_API_KEY_NAME "$VENV_PY" "$ENDPOINT_PY" 2>/dev/null || true)"
     if [[ -n "$endpoint" ]]; then
-        ok "  $endpoint"
+        # info, not ok: this line states WHICH endpoint the scheduled runs
+        # will use. It is configuration, not a success. Marking it with a
+        # tick produced a checkmark immediately contradicted by the warning
+        # below when the key does not resolve -- "ANTHROPIC_API_KEY via
+        # api.anthropic.com" ticked, then "ANTHROPIC_API_KEY not resolvable"
+        # on the next line. Observed on a Mac Studio verify run 2026-08-25.
+        info "  endpoint: $endpoint"
         endpoint_key="${endpoint%% *}"
         if keystore_has "$endpoint_key"; then
             ok "  $endpoint_key resolves (.env or Keychain)"
