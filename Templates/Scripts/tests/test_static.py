@@ -550,6 +550,51 @@ def _guarded_by_main(node: ast.stmt) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 4f. Committed modes must match what the installer will set.
+#
+# 56-script-permissions chmods every Templates/Scripts/*.py to 0700 if it
+# contains __main__ and 0600 otherwise. Git records only the executable bit,
+# so a file whose committed mode disagrees with that rule flips on every
+# install -- and because the repo IS the vault, a perfectly normal install
+# then leaves a permanently dirty tree that no teardown reverts. Six files
+# were in that state, found on a Mac Studio full-cycle run 2026-08-25.
+#
+# Keeping the committed bit in agreement makes a fresh install a no-op here.
+# ---------------------------------------------------------------------------
+
+class TestCommittedModesMatchInstaller:
+
+    def test_exec_bit_agrees_with_script_permissions(
+            self, scripts_dir: Path, allow_subprocess: None) -> None:
+        # allow_subprocess: this genuinely needs to shell out to git, and the
+        # autouse guard in conftest blocks unmocked subprocess.run otherwise.
+        repo_root = scripts_dir.parent.parent
+        out = subprocess.run(["git", "ls-files", "-s", "Templates/Scripts/"],
+                             cwd=repo_root, capture_output=True, text=True)
+        if out.returncode != 0:
+            pytest.skip("not a git checkout")
+
+        mismatched = []
+        for line in out.stdout.splitlines():
+            mode, _, rest = line.partition(" ")
+            rel = rest.split("\t", 1)[1]
+            path = repo_root / rel
+            # -maxdepth 1: the component never descends into tests/ or .venv/
+            if not rel.endswith(".py") or path.parent != scripts_dir:
+                continue
+            body = path.read_text(encoding="utf-8", errors="replace")
+            want = "100755" if "__main__" in body else "100644"
+            if mode != want:
+                mismatched.append(f"{path.name}: committed {mode}, "
+                                  f"installer sets {want}")
+
+        assert not mismatched, (
+            "committed modes disagree with 56-script-permissions, so a normal "
+            "install will flip them and leave the tree dirty:\n  "
+            + "\n  ".join(mismatched))
+
+
+# ---------------------------------------------------------------------------
 # 5. Installer Keychain invariants.
 #
 # These are source assertions rather than behavior tests because the behavior
