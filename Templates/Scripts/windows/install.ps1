@@ -7,7 +7,7 @@
   triggers as soon as this finishes; the other 3 are registered DISABLED
   because each needs a per-user resource this template can't assume exists
   (a dedicated mailbox, an Azure Blob relay, an MCP calendar connector).
-  Idempotent — safe to re-run.
+  Idempotent -- safe to re-run.
 
   Run it (one command, from the repo root):
       powershell -ExecutionPolicy Bypass -File .\Templates\Scripts\windows\install.ps1
@@ -15,26 +15,26 @@
       Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
       .\Templates\Scripts\windows\install.ps1
 
-  Steps:  00 preflight (python 3.10+) · 02 classification audit · 05 obsidian
-          app (winget) · 06 docker desktop (winget, early — see note below) ·
-          10 vault check · 20 secrets stub · 30 community
-          plugins · 31 quickadd patch · 35 ribbon order · 40 venv + deps ·
-          50 llm-rag (optional) · 80 register tasks (12 enabled, 3 disabled) ·
+  Steps:  00 preflight (python 3.10+) | 02 classification audit | 05 obsidian
+          app (winget) | 06 docker desktop (winget, early -- see note below) |
+          10 vault check | 20 secrets stub | 30 community
+          plugins | 31 quickadd patch | 35 ribbon order | 40 venv + deps |
+          50 llm-rag (optional) | 80 register tasks (12 enabled, 3 disabled) |
           90 status
 
-  Docker Desktop's installer requests admin elevation — a UAC prompt with its
+  Docker Desktop's installer requests admin elevation -- a UAC prompt with its
   own timeout, run on the secure desktop. If RAG is requested, step 06 installs
   it immediately after Obsidian, before the long unattended stretch (plugins,
   pip installs, the Ollama model pull) so that prompt lands while you're still
   at the keyboard from just having run this command, not minutes later after
   you've stepped away. Docker Desktop's first *launch* (accepting its license,
-  waiting for "Engine running") stays a separate manual step regardless — see
+  waiting for "Engine running") stays a separate manual step regardless -- see
   step 50's output.
 
   Not applicable on Windows (no counterpart needed): the markitdown .app
   dropper (a headless CLI equivalent + Send To shortcut cover this instead)
   and the macOS TCC scoped-access wrapper. Security controls, podcast
-  transcription, and the LLM/RAG stack are all ported and included — see
+  transcription, and the LLM/RAG stack are all ported and included -- see
   docs/Windows Setup.md.
 .PARAMETER SkipTasks   Do everything except registering scheduled tasks.
 .PARAMETER WithRAG     Also install the fully-local RAG stack (Ollama + a small
@@ -70,7 +70,7 @@ function Get-CandPrefix($cand) {
 }
 
 # Offer an optional add-on. Returns $false (no prompt) for unattended runs
-# (-NonInteractive, or stdin redirected — e.g. CI), so defaults stay off; a
+# (-NonInteractive, or stdin redirected -- e.g. CI), so defaults stay off; a
 # human at a console gets a y/N prompt defaulting to No.
 function Confirm-Optional([string]$Question) {
     if ($NonInteractive -or [Console]::IsInputRedirected) { return $false }
@@ -222,13 +222,17 @@ if (-not (Test-Path $secrets)) {
 } else { Write-Host "  secrets present: $secrets" }
 
 Write-Host '== 30 plugins =='
-# Fetch the community plugins listed in .obsidian\community-plugins.json.
-# Non-fatal: a plugin or two can fail without blocking the rest of the install.
-try {
-    & (Join-Path $PSScriptRoot 'Install-Plugins.ps1')
-} catch {
-    Write-Warning "  plugin install had errors: $_"
-}
+# Fetch the community plugins listed in .obsidian\community-plugins.json,
+# each verified against its pinned tag + SHA256 in installers\plugin-pins.json.
+#
+# FATAL on failure, mirroring installers/components/30-plugins.sh (set -e).
+# Install-Plugins.ps1 throws on any verification or fetch failure, and that
+# throw is the supply-chain control's only signal that it refused something.
+# This step used to catch it and downgrade it to a warning, which meant a hash
+# mismatch -- or the script failing to parse at all -- left the installer
+# printing this heading and then exiting 0 with the control never having run.
+# Observed in the field 2026-08-25: plugins silently stale, install "clean".
+& (Join-Path $PSScriptRoot 'Install-Plugins.ps1')
 
 Write-Host '== 31 quickadd patch =='
 # Drop the topItems suggestion from QuickAdd's deterministic getFolderPath
@@ -236,8 +240,8 @@ Write-Host '== 31 quickadd patch =='
 # folder picker. Idempotent, and a safe no-op on plugin versions that don't
 # match.
 #
-# Delegates to installers\lib\quickadd_patch.py — the same helper macOS's
-# 31-quickadd-patch.sh calls — rather than carrying a parallel PowerShell
+# Delegates to installers\lib\quickadd_patch.py -- the same helper macOS's
+# 31-quickadd-patch.sh calls -- rather than carrying a parallel PowerShell
 # regex. The matching rule is subtle enough (QuickAdd's minifier renames the
 # locals every release, so the fall-through has to be identified structurally,
 # as the one getOrCreateFolder call whose first argument IS its own
@@ -261,7 +265,7 @@ if (-not (Test-Path $qa)) {
 
 Write-Host '== 40 venv + deps =='
 # CTranslate2 (faster-whisper, for podcast transcription) links against the MSVC
-# runtime; without it the .dll fails to load. Ensure it's present. Idempotent —
+# runtime; without it the .dll fails to load. Ensure it's present. Idempotent --
 # winget detects an existing install.
 #
 # Skipped for a native ARM64 interpreter: ctranslate2 publishes no win_arm64

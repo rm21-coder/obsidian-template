@@ -10,7 +10,7 @@ param(
 $logDir = Join-Path $env:LOCALAPPDATA 'obsidian-automation\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
-Add-Content -Path (Join-Path $logDir 'notifications.log') -Value "[$stamp] $Title — $Message"
+Add-Content -Path (Join-Path $logDir 'notifications.log') -Value "[$stamp] $Title -- $Message"
 
 if (Get-Module -ListAvailable -Name BurntToast) {
     Import-Module BurntToast -ErrorAction SilentlyContinue

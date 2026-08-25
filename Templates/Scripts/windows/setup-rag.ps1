@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS  Install the fully-local RAG stack on Windows: Ollama + a small model
            + Open WebUI (Docker). Windows counterpart of the Mac's
-           installers/components/50-llm-rag.sh — same Docker container image, so
+           installers/components/50-llm-rag.sh -- same Docker container image, so
            Open WebUI stays self-contained and doesn't pollute the host with its
            own Python/runtime. Nothing here calls any other machine.
 .DESCRIPTION
@@ -18,12 +18,12 @@
     4. Run the official Open WebUI container on http://localhost:3000, pointed at
        the host's Ollama via host.docker.internal:11434.
 
-  One-time MANUAL setup in Open WebUI afterward (interactive admin signup — can't
+  One-time MANUAL setup in Open WebUI afterward (interactive admin signup -- can't
   be scripted):
     a. Open http://localhost:3000, create the local admin account.
     b. Create a Knowledge collection named "Obsidian".
     c. Enable API keys under Admin Panel -> Settings -> Authentication ("Enable
-       API Key", Open WebUI 0.11 — hidden until enabled), then
+       API Key", Open WebUI 0.11 -- hidden until enabled), then
        Settings -> Account -> API Keys: create one.
     d. Put OPEN_WEBUI_URL=http://localhost:3000, OPEN_WEBUI_API_KEY,
        OBSIDIAN_COLLECTION_ID in %USERPROFILE%\dev\secrets\.env

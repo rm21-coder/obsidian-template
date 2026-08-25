@@ -319,10 +319,62 @@ class TestShellScripts:
         if bash is None:
             pytest.skip("bash not on PATH; nothing to syntax-check "
                         "run_tests.sh with")
-        result = subprocess.run([bash, "-n", str(target)],
+        # Pass a bare filename and set cwd, rather than an absolute path.
+        # Git Bash on Windows does not translate a native path like
+        # C:\\Users\\...\\run_tests.sh -- it strips the separators and reports
+        # "C:Users...run_tests.sh: No such file or directory" with exit 127,
+        # which reads as a syntax failure when it is a path failure.
+        result = subprocess.run([bash, "-n", target.name],
+                                cwd=str(target.parent),
                                 capture_output=True, text=True)
         assert result.returncode == 0, (
             f"bash -n run_tests.sh failed:\n{result.stderr}")
+
+
+# ---------------------------------------------------------------------------
+# 4b. Windows PowerShell layer encoding.
+#
+# Windows PowerShell 5.1 -- still the only PowerShell on a stock Windows box --
+# decodes a BOM-less file as ANSI/CP1252, not UTF-8. An em-dash (U+2014, bytes
+# E2 80 94) then reads as "a-hat, euro, right-double-quote", and that last
+# character is U+201D, which 5.1 accepts as a string terminator. Inside a
+# double-quoted string that ends the string mid-line and desynchronizes the
+# parser; the file becomes unparseable and the script never runs.
+#
+# This is not hypothetical. It shipped: Install-Plugins.ps1 carried em-dashes
+# in two Write-Warning strings (one of them the HASH MISMATCH refusal itself),
+# so the plugin supply-chain pinning control silently did not execute on
+# Windows PowerShell 5.1 -- while install.ps1 caught the throw and exited 0.
+# Found 2026-08-25 on a Windows 11 ARM64 re-validation.
+#
+# A BOM would also fix it, but a BOM is invisible in review, editors strip it
+# on save, and nothing would notice. ASCII-only is visible in a diff and
+# enforceable here.
+# ---------------------------------------------------------------------------
+
+class TestPowerShellEncoding:
+
+    def test_shipped_powershell_is_ascii(self, scripts_dir: Path) -> None:
+        win = scripts_dir / "windows"
+        assert win.is_dir(), f"Windows layer not found at {win}"
+        files = sorted(win.glob("*.ps1")) + sorted(win.glob("*.psd1"))
+        assert files, f"no PowerShell files found under {win}"
+
+        offenders = []
+        for f in files:
+            for lineno, line in enumerate(
+                    f.read_text(encoding="utf-8").splitlines(), start=1):
+                for col, ch in enumerate(line, start=1):
+                    if ord(ch) > 0x7F:
+                        offenders.append(
+                            f"{f.name}:{lineno}:{col} U+{ord(ch):04X} {ch!r}")
+
+        assert not offenders, (
+            "shipped PowerShell must be ASCII-only -- Windows PowerShell 5.1 "
+            "decodes these files as CP1252 and a mangled character inside a "
+            "double-quoted string silently breaks parsing:\n  "
+            + "\n  ".join(offenders)
+            + "\nUse '--' for an em-dash and '|' for a middle dot.")
 
 
 # ---------------------------------------------------------------------------

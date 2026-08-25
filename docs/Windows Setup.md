@@ -16,7 +16,10 @@ same Python automation runs under a per-vault venv, and the local LLM RAG
 stack (Ollama + Open WebUI) is fully self-contained — no Mac required for any
 part of the workflow. Validated end-to-end on Windows 11 (x64), including a
 clean bare-metal rebuild, and on Windows 11 ARM64 with native ARM64 Python —
-see [Windows on ARM64](#windows-on-arm64) for the details.
+see [Windows on ARM64](#windows-on-arm64) for the details. A 2026-08-25
+re-validation on ARM64 found that plugin installation and toast notifications
+did not run at all under Windows PowerShell 5.1 (an encoding defect, fixed the
+same day); both are pending re-verification on real hardware.
 
 ## Quick Start
 
@@ -107,6 +110,14 @@ and the watchers read only the local `~/SourceMedia/` drop folders.
 **Required:**
 
 - **Windows 10/11**, x64 or ARM64 (see [Windows on ARM64](#windows-on-arm64))
+- **Windows PowerShell 5.1** — the edition that ships with Windows, and the
+  one this layer targets. PowerShell 7 (`pwsh`) also works but is *not*
+  required and is not assumed anywhere. The distinction matters: 5.1 decodes
+  a file without a byte-order mark as ANSI/CP1252 rather than UTF-8, so every
+  shipped `.ps1`/`.psd1` is held ASCII-only by
+  `Templates/Scripts/tests/test_static.py::TestPowerShellEncoding`. Keep it
+  that way — a stray em-dash inside a double-quoted string makes 5.1 stop
+  parsing mid-file, and the script simply never runs.
 - **Python 3.10+** — installed automatically by `install.ps1` if missing
   (`winget install Python.Python.3.12`); the scripts use PEP 604 `X | None`
   unions, so 3.10 is the floor
@@ -452,7 +463,17 @@ x64 box that can offload to a discrete GPU.
   you may just see an extra folder picker in one flow). Both platforms share
   one implementation, `installers/lib/quickadd_patch.py`.
 - **`Templates/Scripts/tests/`** — the security-controls pytest suite now
-  runs on Windows: **280 passed, 5 skipped** (validated on ARM64). `pytest`
+  runs on Windows. Last measured 2026-08-25 on Windows 11 ARM64 at commit
+  `2d97440`: **545 passed, 3 skipped, 4 failed, 33 errors** of 585 collected,
+  against a macOS reference of 576 passed / 9 skipped on the same suite.
+  Collection totals matched exactly, so the gap was entirely Windows-specific.
+  Every failure and error was a test-harness portability defect rather than a
+  product defect (POSIX file modes asserted on a Windows filesystem, a Git Bash
+  path handed to `bash -n` untranslated, backslashes compared against
+  forward-slash wikilinks, and a fixture that redirected only `HOME` when this
+  platform derives its state directory from `%LOCALAPPDATA%`). All four are
+  fixed as of 2026-08-25 and the figure above is **due a re-measurement** — it
+  is the last one actually observed, not a projection. `pytest`
   and `pytest-cov` are deliberately not in `requirements.txt`, so install
   them first, then run from the repo root:
 
