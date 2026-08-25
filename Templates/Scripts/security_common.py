@@ -30,6 +30,38 @@ from pathlib import Path
 LOG_TS_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 
+def _force_utf8_output() -> None:
+    """Make the controls' log streams UTF-8 on Windows.
+
+    Both controls redirect stdout and stderr into a single log file. On
+    Windows Python picks the locale encoding for those streams -- cp1252 --
+    and a character it cannot represent is written as a replacement byte. That
+    was observed 2026-08-25 in a drift summary, where the ellipsis in
+    "... +108 more" reached the log as an unreadable byte: the count of
+    suppressed findings became unparseable in the one artifact an incident
+    review would read.
+
+    This is the same failure family that made the PowerShell layer unparseable
+    under 5.1, and TestPowerShellEncoding has no equivalent for Python
+    strings. Rather than police every log string for ASCII, fix the encoder --
+    a log that cannot render its own summary is an evidence-quality problem,
+    not a cosmetic one.
+
+    Never raises: a stream that is not a TextIOWrapper (already wrapped, or
+    replaced by a test harness) is left exactly as it is.
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+_force_utf8_output()
+
+
 def log(tag: str, msg: str, *, stream=None) -> None:
     """Write a timestamped, tagged line to a control's launchd log.
 
