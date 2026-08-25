@@ -322,6 +322,7 @@ for comp in "${COMPONENTS[@]}"; do
 
     # Source the component. It defines and calls its own work; we wrap in a
     # subshell so set -e inside a component doesn't kill the orchestrator.
+    # shellcheck source=/dev/null  # component path is computed by design
     if ( source "$comp" ); then
         ok "$name complete"
     else

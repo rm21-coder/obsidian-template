@@ -11,7 +11,6 @@ set -euo pipefail
 
 VAULT="$HOME/Obsidian"
 LOG_DIR="$HOME/Library/Logs"
-LAUNCH_DIR="$HOME/Library/LaunchAgents"
 
 # row <name> <script-path-or-empty> <plist-label-or-empty> <log-name-or-empty>
 row() {

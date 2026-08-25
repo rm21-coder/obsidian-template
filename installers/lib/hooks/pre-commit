@@ -34,4 +34,32 @@ if ! python3 "$AUDIT" --staged --quiet; then
     exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# Standing security checks, fast subset.
+#
+# Only the two passes that stop an irreversible mistake on a PUBLIC repo: a
+# committed secret, and a shell script that will not parse. Both run in about a
+# second. semgrep and pip-audit are deliberately NOT here -- a hook that costs a
+# minute is a hook people learn to bypass, and a bypassed gate is worse than an
+# honest one. Those run before a release or a packet build; see CLAUDE.md.
+#
+# Artifacts go to a temp directory: a hook firing many times a day should not
+# accumulate dated evidence. The path is printed on failure so the detail is
+# still reachable.
+CHECKS="$REPO_ROOT/installers/lib/security-checks.sh"
+if [[ -x "$CHECKS" ]]; then
+    HOOK_ARTIFACTS="$(mktemp -d -t obsidian_precommit)"
+    if ! "$CHECKS" --fast --artifacts "$HOOK_ARTIFACTS" >/dev/null 2>&1; then
+        echo "" >&2
+        echo "pre-commit: security checks FAILED. Commit refused." >&2
+        echo "Details: $HOOK_ARTIFACTS" >&2
+        echo "Re-run yourself with: installers/lib/security-checks.sh --fast" >&2
+        echo "Override with --no-verify only if you know why." >&2
+        exit 1
+    fi
+    rm -rf "$HOOK_ARTIFACTS"
+else
+    echo "pre-commit: $CHECKS not found or not executable, skipping." >&2
+fi
+
 exit 0

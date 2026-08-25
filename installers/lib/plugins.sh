@@ -57,7 +57,7 @@ fetch_plugin() {
     local staging
     staging="$(mktemp -d -t obsidian_plugin)"
 
-    local line name url want got failed=0
+    local name url want got failed=0
     while IFS=$'\t' read -r name url want; do
         [[ -z "$name" ]] && continue
         if ! curl -fsSL "$url" -o "$staging/$name" 2>/dev/null; then

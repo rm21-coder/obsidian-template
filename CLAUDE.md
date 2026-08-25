@@ -97,6 +97,63 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
   [`docs/Windows Setup.md`](docs/Windows%20Setup.md); a quick file-by-file
   reference for the PowerShell layer is in `Templates/Scripts/windows/README.md`.
 
+## Standing security checks
+
+This repository runs five security passes. They are configuration, not a
+ritual: the point is that they run when the code changes rather than when
+someone remembers.
+
+    sca      pip-audit          triggered by requirements.txt / lockfile
+    sast     semgrep + bandit   triggered by any .py
+    shell    shellcheck         triggered by any .sh
+    secrets  gitleaks           triggered by any tracked file
+    dast     dynamic checks     triggered by network / path / transport changes
+
+One entry point, `installers/lib/security-checks.sh`:
+
+```bash
+installers/lib/security-checks.sh            # --full, every pass
+installers/lib/security-checks.sh --changed  # only what the diff implicates
+installers/lib/security-checks.sh --fast     # secrets + shell, ~1.5s
+installers/lib/security-checks.sh --dast     # the dynamic checks alone
+```
+
+**When it runs.**
+
+- **Every commit, automatically:** the `pre-commit` hook runs `--fast`. That is
+  secrets + shell only, the two passes that stop an *irreversible* mistake on a
+  public repo. Install it with `./installers/install-git-hooks.sh`.
+- **Before a release, a packet build, or copying scripts into a live vault:**
+  `--full`, no exceptions and no partial runs.
+- **Otherwise, when you change code:** name the passes the change implicates
+  and ask whether to run them. Do not run a long pass silently, and do not skip
+  the question.
+
+**Where artifacts go.** Outside the repo, to
+`~/Documents/Claude/Projects/Obsidian Workflow/verification-artifacts/`, or
+wherever `--artifacts` / `$SECURITY_ARTIFACTS_DIR` points. **Never into this
+repository:** it is public, and it IS an Obsidian vault, so scan output naming
+paths and plugin ids would both leak detail and appear as a folder in every
+downstream user's sidebar.
+
+**Every run writes an artifact, including a clean one.** A clean run is the
+record that the check happened. A missing scanner is a *named skip* in the
+artifact and in the summary, never a silent pass — and a pass that starts but
+records nothing fails the run. That guard is not theoretical: the first
+execution of this suite used `mapfile`, which does not exist on the bash 3.2
+that ships with macOS, so the shell pass died mid-way and the summary printed
+`RESULT: PASS` with no shell line at all.
+
+**How findings are handled.** Disclose, then fix. Record a finding with
+`file:line`, severity and failure scenario *before* any repair. Accepted
+findings live in `installers/lib/security-suppressions.txt`, one per line with
+a rationale and a re-check date — a file rather than an inline comment, so an
+accepted risk stays arguable in a diff. Anything past its re-check date should
+be re-argued, not renewed by habit.
+
+A run that reports nothing is not evidence of a secure system. It is evidence
+of a check that was not run, or not reported.
+
 ## When working on the Windows layer
 
 Start from [`docs/Windows Setup.md`](docs/Windows%20Setup.md) and
