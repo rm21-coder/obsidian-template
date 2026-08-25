@@ -189,6 +189,23 @@ brew_install_if_missing() {
 
     if [[ "$cask" == "cask" ]]; then
         if brew list --cask "$pkg" >/dev/null 2>&1; then
+            # brew's registration is not evidence the app is on disk. A
+            # Caskroom entry can outlive the application -- observed on a Mac
+            # Studio 2026-08-25, where the Caskroom held a dangling symlink to
+            # an /Applications bundle that no longer existed, and the installer
+            # still reported the cask installed and the component complete.
+            # Net effect: a green install and no Obsidian on the machine.
+            if [[ -n "$verify_target" ]] && ! _verify_target_exists "$verify_target"; then
+                warn "brew reports $pkg installed, but $verify_target is not on disk"
+                warn "  (stale Caskroom registration). Reinstalling."
+                if brew reinstall --cask "$pkg" && _verify_target_exists "$verify_target"; then
+                    ok "brew cask $pkg reinstalled; $verify_target present"
+                    return 0
+                fi
+                err "  $pkg is registered with brew but $verify_target is still missing."
+                err "  Fix by hand: brew uninstall --cask --force $pkg && brew install --cask $pkg"
+                return 1
+            fi
             ok "brew cask $pkg already installed"
             return 0
         fi

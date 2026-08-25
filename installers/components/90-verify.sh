@@ -65,9 +65,21 @@ echo
 info "  * opt-in component: 'agent ✗' on a starred row just means you declined it"
 echo
 info "Secrets status:"
-[[ -f "$HOME/dev/secrets/.env" ]] && \
-    grep -E '^(ANTHROPIC|OPEN_WEBUI|OBSIDIAN_COLLECTION|LLM_|TAGGER_)' "$HOME/dev/secrets/.env" | sed -E 's/=.*/=<redacted>/' | sed 's/^/  /' || \
+# Existence and content are separate questions. Chaining them with && ... ||
+# meant grep's exit status decided the message: a file that existed but held
+# none of the matched keys reported as "missing". That is worse than unhelpful
+# here -- this path is a machine-wide secrets file shared with other tools, so
+# telling the operator it is absent invites them to recreate or overwrite it.
+if [[ -f "$HOME/dev/secrets/.env" ]]; then
+    if grep -qE '^(ANTHROPIC|OPEN_WEBUI|OBSIDIAN_COLLECTION|LLM_|TAGGER_)' "$HOME/dev/secrets/.env"; then
+        grep -E '^(ANTHROPIC|OPEN_WEBUI|OBSIDIAN_COLLECTION|LLM_|TAGGER_)' "$HOME/dev/secrets/.env" \
+            | sed -E 's/=.*/=<redacted>/' | sed 's/^/  /'
+    else
+        info "  ~/dev/secrets/.env present, but holds none of this project's keys"
+    fi
+else
     warn "  ~/dev/secrets/.env missing"
+fi
 
 # No third-party key row: every model call in the vault, the YouTube
 # summarizer included, resolves through the endpoint reported below.

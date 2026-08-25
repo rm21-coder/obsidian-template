@@ -60,8 +60,21 @@ _HERE = Path(__file__).resolve()
 _VENV_PY = _HERE.parent / ".venv" / (
     "Scripts/python.exe" if os.name == "nt" else "bin/python3"
 )
+# __name__ guard first, and it is load-bearing. os.execv REPLACES the running
+# process, so at module scope this fires on `import` -- and under pytest the
+# process it replaces is pytest. Importing this module while collecting its
+# test file therefore killed the runner before it could report: the documented
+# entry point returned exit 2 with zero test output, on any machine where the
+# vault venv existed. All 599 tests were unreachable and the failure read like
+# a pytest config problem. Found on a Mac Studio full-cycle run 2026-08-25 and
+# reproduced on the primary machine by creating the venv.
+#
+# Re-execing is still right when this file is run as a command; it is never
+# right on import. Pinned by
+# test_static.py::TestNoModuleReExecsOnImport.
 if (
-    sys.prefix == sys.base_prefix
+    __name__ == "__main__"
+    and sys.prefix == sys.base_prefix
     and _VENV_PY.exists()
     and not os.environ.get("_VENV_BOOTSTRAPPED")
 ):

@@ -486,6 +486,70 @@ class TestMacUninstallerSafety:
 
 
 # ---------------------------------------------------------------------------
+# 4e. No module may replace the process on import.
+#
+# os.execv REPLACES the running process. At module scope that fires on
+# `import` -- and under pytest the process being replaced is pytest itself.
+#
+# This shipped in two modules. Importing youtube_summarize while collecting its
+# test file killed the runner: the documented entry point returned exit 2 with
+# zero test output on any machine where the vault venv existed, so all 599
+# tests were silently unreachable and the failure looked like a pytest config
+# problem. Found on a Mac Studio full-cycle run 2026-08-25.
+#
+# Re-execing into a venv is still correct when the file is run as a command.
+# The fix is the __name__ == "__main__" guard, and this pins it.
+# ---------------------------------------------------------------------------
+
+class TestNoModuleReExecsOnImport:
+
+    @pytest.mark.parametrize("name", ["youtube_summarize.py",
+                                      "tag_clippings_rag.py"])
+    def test_reexec_is_guarded_by_main(self, scripts_dir: Path,
+                                       name: str) -> None:
+        tree = ast.parse((scripts_dir / name).read_text(encoding="utf-8"))
+        for node in tree.body:                      # module scope only
+            for sub in ast.walk(node):
+                if (isinstance(sub, ast.Call)
+                        and isinstance(sub.func, ast.Attribute)
+                        and sub.func.attr == "execv"):
+                    assert _guarded_by_main(node), (
+                        f"{name}:{sub.lineno} calls os.execv at module scope "
+                        f"without a __name__ == '__main__' guard. That "
+                        f"replaces the process on import, which under pytest "
+                        f"means replacing pytest -- the suite reports exit 2 "
+                        f"with no output and every test becomes unreachable.")
+
+    def test_no_new_module_scope_reexec_appears(self, scripts_dir: Path) -> None:
+        """Catch the pattern anywhere, not just in the two known files."""
+        offenders = []
+        for py in sorted(scripts_dir.glob("*.py")):
+            try:
+                tree = ast.parse(py.read_text(encoding="utf-8"))
+            except SyntaxError:
+                continue
+            for node in tree.body:
+                for sub in ast.walk(node):
+                    if (isinstance(sub, ast.Call)
+                            and isinstance(sub.func, ast.Attribute)
+                            and sub.func.attr == "execv"
+                            and not _guarded_by_main(node)):
+                        offenders.append(f"{py.name}:{sub.lineno}")
+        assert not offenders, (
+            "unguarded module-scope os.execv (fires on import, replaces "
+            "pytest): " + ", ".join(offenders))
+
+
+def _guarded_by_main(node: ast.stmt) -> bool:
+    """True if this module-scope statement is an `if` whose test mentions
+    __name__ -- i.e. it cannot run on a plain import."""
+    if not isinstance(node, ast.If):
+        return False
+    return any(isinstance(n, ast.Name) and n.id == "__name__"
+               for n in ast.walk(node.test))
+
+
+# ---------------------------------------------------------------------------
 # 5. Installer Keychain invariants.
 #
 # These are source assertions rather than behavior tests because the behavior
