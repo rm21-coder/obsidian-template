@@ -18,7 +18,11 @@
 #   --llm         stop + remove the open-webui Docker container
 #   --secrets     delete ~/dev/secrets/.env and the Keychain entries
 #   --newsyslog   remove /etc/newsyslog.d/obsidian-security.conf (sudo)
-#   --plugins     remove the fetched community plugins (.obsidian/plugins)
+#   --plugins     remove the DOWNLOADED plugin files named in
+#                 installers/plugin-pins.json. Each plugin's data.json - your
+#                 ribbon, QuickAdd and Templater settings - is kept, and so is
+#                 its folder. A reinstall does not restore data.json, so it is
+#                 never removed here.
 #   --demo        remove the synthetic demo dataset (see below)
 #   --all         all of the above
 #
@@ -129,7 +133,17 @@ LOGS=(
 rm_path() {
     local p="$1"
     if [[ -e "$p" || -L "$p" ]]; then
-        run rm -rf "$p" && ok "  removed: $p"
+        run rm -rf "$p"
+        # Verify rather than trust the exit status. The Windows twin of this
+        # helper was observed reporting a successful delete for a state
+        # directory that was still on disk (2026-08-25); a teardown that says
+        # "removed" about something still present means the next install
+        # silently inherits state it was supposed to start without.
+        if [[ "$DRY_RUN" -eq 1 || ! -e "$p" && ! -L "$p" ]]; then
+            ok "  removed: $p"
+        else
+            warn "  reported removed but still present: $p"
+        fi
     fi
 }
 
@@ -263,15 +277,46 @@ if [[ "$DO_NEWSYSLOG" -eq 1 ]]; then
 fi
 
 # ---- 8. Community plugins (opt-in: --plugins) ------------------------------
+# Removes the DOWNLOADED artifacts named in installers/plugin-pins.json, never
+# the plugins tree. Each plugin folder also holds data.json - the settings that
+# drive ribbon icons, QuickAdd choices, Templater config - which is user
+# content and is NOT restored by a reinstall: 30-plugins.sh fetches only
+# manifest.json / main.js / styles.css. The Windows twin of this step deleted
+# the tree wholesale and destroyed 464 lines of tracked configuration in a
+# 2026-08-25 teardown. In a repo clone that is recoverable with git checkout;
+# in a DEPLOYED vault, which is the normal case here and is not under version
+# control, it is not recoverable at all. Removing only the pinned filenames
+# preserves data.json by construction, with no allow-list to keep in sync.
 if [[ "$DO_PLUGINS" -eq 1 ]]; then
     section "Community plugins"
     PLUGINS="$VAULT/.obsidian/plugins"
-    if [[ -d "$PLUGINS" ]]; then
-        if [[ "$INTERACTIVE" -eq 0 ]] || confirm "Remove fetched community plugins at $PLUGINS?" N; then
-            rm_path "$PLUGINS"
-        fi
-    else
+    PINS="$REPO_ROOT/installers/plugin-pins.json"
+    if [[ ! -d "$PLUGINS" ]]; then
         info "  no plugins directory at $PLUGINS"
+    elif [[ ! -f "$PINS" ]]; then
+        warn "  $PINS not found - cannot tell downloaded artifacts from your"
+        warn "  settings, so nothing was removed. Delete by hand if you are"
+        warn "  sure, keeping each plugin's data.json."
+    elif [[ "$INTERACTIVE" -eq 0 ]] || confirm "Remove fetched plugin files at $PLUGINS (settings kept)?" N; then
+        while IFS=$'\t' read -r pid fname; do
+            [[ -n "$pid" ]] || continue
+            rm_path "$PLUGINS/$pid/$fname"
+        done < <(python3 -c '
+import json, sys
+for pin in json.load(open(sys.argv[1])):
+    for fname in pin.get("files", {}):
+        print(pin["id"], fname, sep="\t")
+' "$PINS")
+        # Only if nothing survives. A folder still holding data.json - or
+        # anything else the pin manifest does not name - keeps its directory.
+        for d in "$PLUGINS"/*/; do
+            [[ -d "$d" ]] || continue
+            if [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then
+                rm_path "${d%/}"
+            else
+                info "  kept $(basename "${d%/}")/ ($(ls -A "$d" | wc -l | tr -d ' ') file(s) that are not downloaded artifacts, e.g. data.json)"
+            fi
+        done
     fi
 fi
 
