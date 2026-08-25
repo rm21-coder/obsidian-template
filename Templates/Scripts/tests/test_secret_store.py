@@ -6,6 +6,7 @@ tests can touch a real Keychain — every subprocess.run is monkeypatched.
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -225,6 +226,14 @@ def test_plainfile_roundtrip_and_mode(monkeypatch, linux_files):
     assert secret_store.get_secret("PF_KEY") == "file-value"
     path = linux_files / "secrets" / "pf_key.txt"
     assert path.exists()
+    # The fixture fakes sys.platform == "linux" so the POSIX branch of
+    # restrict_file runs, but the filesystem underneath is real. On Windows
+    # os.chmod only toggles the read-only attribute and stat() still reports
+    # 0o666, so the mode assertion tests the OS, not our code. Check it where
+    # it means something; the roundtrip above is the portable part.
+    if os.name == "nt":
+        pytest.skip("POSIX file modes are not represented on Windows; "
+                    "restrict_file's icacls path is covered separately")
     assert (path.stat().st_mode & 0o777) == 0o600
 
 
