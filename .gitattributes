@@ -10,8 +10,19 @@
 # WSL2. The blobs in the repo were correct LF throughout; only the checkout
 # was wrong, and nothing in the repo asserted otherwise.
 #
-# After this lands, existing clones need one renormalization:
-#     git add --renormalize . && git checkout -- .
+# After this lands, an existing clone with stale CRLF working files needs a
+# FORCED re-checkout. `git add --renormalize . && git checkout -- .` looks like
+# it should do it and does nothing at all: a CRLF working file cleans back to
+# LF, so git compares it as identical to the index and finds nothing to
+# rewrite. The stale tree is invisible to git, so the command reports success
+# while changing zero files -- measured on Windows 2026-08-25, still 40 of 40
+# .sh files CRLF afterwards. Delete the files and let git write them back:
+#
+#     for f in $(git ls-files '*.sh'); do rm -f "$f"; done
+#     git checkout -- .
+#
+# (`git rm --cached -r . && git reset --hard` also works, with a much larger
+# blast radius.) Verified after: 0 of 40 CRLF, .ps1 still correctly CRLF.
 
 * text=auto
 
