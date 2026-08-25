@@ -35,16 +35,40 @@ trusting a scraper that modern macOS has already blinded once.
 ## What it defends against
 
 - **Supply-chain drift** — a community plugin auto-updates and its code changes,
+  possibly maliciously, without your involvement.
   (Install-time complement: the installer only ever fetches plugin releases
   pinned by tag and SHA256 in `installers/plugin-pins.json` — upgrading a
   plugin is a deliberate re-pin + commit, never an ambient "latest".)
-  possibly maliciously, without your involvement.
 - **Tampering** — someone (or something) modifies your automation scripts, your
   LaunchAgents, or the security baseline itself.
 - **Bulk data loss** — a large, unexpected deletion of vault notes.
 
 (Unexpected process execution — Obsidian or an Electron helper spawning a
 shell, interpreter, or network tool — is the EDR layer's job; see above.)
+
+### One deployed file is expected to differ from its pin
+
+The pin guarantee is **at download time**: every plugin file is verified
+against `installers/plugin-pins.json` before it is moved into place, and a
+mismatch is a hard refusal with nothing written.
+
+Exactly one file is then modified on purpose. Installer component 31
+(`installers/lib/quickadd_patch.py`) rewrites a call inside QuickAdd's
+`main.js` after install, so the deployed bytes of `quickadd/main.js` no
+longer match the pinned hash. This is by design and is documented here
+because the natural audit — hash every deployed plugin file against the pin
+manifest — will report exactly one mismatch and it is not tampering. A
+2026-08-25 independent verification did precisely that: 36 matched, 1
+mismatched, and the one was this.
+
+So: "all deployed plugin files match their pinned hashes" is **not** a true
+statement about this workflow and should not be asserted as a control. The
+true statements are that every plugin was verified against its pin before
+installation, and that exactly one file is deliberately patched afterwards.
+
+The plugin integrity monitor is unaffected — it baselines post-install state,
+so the patched `main.js` is simply what it records as normal, and a later
+unexplained change to it still alerts.
 
 ## The two controls
 

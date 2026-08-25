@@ -464,16 +464,24 @@ x64 box that can offload to a discrete GPU.
   one implementation, `installers/lib/quickadd_patch.py`.
 - **`Templates/Scripts/tests/`** — the security-controls pytest suite now
   runs on Windows. Last measured 2026-08-25 on Windows 11 ARM64 at commit
-  `2d97440`: **545 passed, 3 skipped, 4 failed, 33 errors** of 585 collected,
-  against a macOS reference of 576 passed / 9 skipped on the same suite.
-  Collection totals matched exactly, so the gap was entirely Windows-specific.
-  Every failure and error was a test-harness portability defect rather than a
-  product defect (POSIX file modes asserted on a Windows filesystem, a Git Bash
-  path handed to `bash -n` untranslated, backslashes compared against
-  forward-slash wikilinks, and a fixture that redirected only `HOME` when this
-  platform derives its state directory from `%LOCALAPPDATA%`). All four are
-  fixed as of 2026-08-25 and the figure above is **due a re-measurement** — it
-  is the last one actually observed, not a projection. `pytest`
+  `75986f8`: **573 passed, 4 skipped, 9 failed, 0 errors** of 586 collected,
+  against a macOS reference of 577 passed / 9 skipped on the same suite.
+  Collection totals match exactly, so the whole gap is Windows-specific.
+
+  That run was itself a re-measurement. The previous one, at `2d97440`, was
+  545 passed / 3 skipped / 4 failed / **33 errors**. The 33 were a single
+  fixture redirecting only `HOME`, when this platform derives its state
+  directory from `%LOCALAPPDATA%` — so the fixture's own guard correctly
+  refused to run rather than write to real state. Clearing it let seven
+  previously-inert tests execute and expose a real product bug: RAG-sync
+  state keys were built with `str(Path)`, so they were backslash-separated
+  here and forward-slash on macOS, and the state file was not portable
+  between the two. Failures went 4 to 9 as a result, which was progress
+  rather than regression.
+
+  Fixes for every remaining failure landed 2026-08-25 after that measurement,
+  so the figure above is again **due a re-measurement**. It is the last result
+  actually observed, not a projection. `pytest`
   and `pytest-cov` are deliberately not in `requirements.txt`, so install
   them first, then run from the repo root:
 

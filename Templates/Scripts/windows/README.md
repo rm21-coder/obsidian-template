@@ -7,8 +7,9 @@ PowerShell 7 works too but is not required or assumed.
 Validated end-to-end on Windows 11 (x64), including a clean bare-metal
 rebuild. A 2026-08-25 ARM64 re-validation found `Install-Plugins.ps1` and
 `Send-Notification.ps1` unparseable under 5.1 — see the encoding note below —
-so plugin pinning and toast alerts did not run on that edition. Fixed the same
-day; both are pending re-verification on hardware. See [`../../../docs/Windows Setup.md`](../../../docs/Windows%20Setup.md)
+so plugin pinning and toast alerts did not run on that edition. Fixed and **re-verified the same day on the same
+hardware**: all 11 files parse under 5.1, and the plugin control
+installed and hash-verified 13/13 against a live vault. See [`../../../docs/Windows Setup.md`](../../../docs/Windows%20Setup.md)
 for the full setup guide.
 
 ## Conventions
