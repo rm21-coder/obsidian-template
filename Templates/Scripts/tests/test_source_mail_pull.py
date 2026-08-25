@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import email
+import os
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -445,5 +446,15 @@ class TestReplaySeenCache:
 
     def test_cache_file_is_owner_only(self, tmp_path: Path) -> None:
         smp.save_seen(tmp_path, {"deadbeef": 1.0})
+        # save_seen goes through security_common.restrict_file, which uses
+        # icacls on Windows -- inheritance dropped, current user + SYSTEM
+        # only. stat() still reports 0o666 there because Windows has no POSIX
+        # mode to report, so asserting one tests the OS rather than our code.
+        # Verified on Windows 11 ARM64 2026-08-25: the ACL is applied
+        # correctly while this assertion fails. Same treatment as
+        # test_secret_store.py::test_plainfile_roundtrip_and_mode.
+        if os.name == "nt":
+            pytest.skip("POSIX file modes are not represented on Windows; "
+                        "restrict_file's icacls path is covered separately")
         mode = (tmp_path / smp.SEEN_CACHE_NAME).stat().st_mode & 0o777
         assert mode == 0o600
