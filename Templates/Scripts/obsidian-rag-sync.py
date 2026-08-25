@@ -301,7 +301,7 @@ def scan_vault() -> tuple[dict[str, dict], dict[str, str]]:
         classification = parse_classification(text)
         if classification is not None:
             if classification in EXCLUDED_CLASSIFICATIONS:
-                excluded[str(rel)] = classification
+                excluded[rel.as_posix()] = classification
                 continue
             if classification not in KNOWN_CLASSIFICATIONS:
                 log.warning(
@@ -309,11 +309,11 @@ def scan_vault() -> tuple[dict[str, dict], dict[str, str]]:
                     f"excluding from index (fail-secure). Expected one of: "
                     f"{', '.join(sorted(KNOWN_CLASSIFICATIONS))}."
                 )
-                excluded[str(rel)] = classification
+                excluded[rel.as_posix()] = classification
                 continue
 
         body_chars = extractable_body_chars(text)
-        out[str(rel)] = {
+        out[rel.as_posix()] = {
             "hash": file_hash(md),
             "mtime": stat.st_mtime,
             "size": stat.st_size,
@@ -324,12 +324,33 @@ def scan_vault() -> tuple[dict[str, dict], dict[str, str]]:
     return out, excluded
 
 
+def _normalize_keys(mapping: dict) -> dict:
+    """Rewrite any backslash-separated key to forward slashes.
+
+    State keys are relative vault paths. They were written with str(Path),
+    which yields "Knowledge\\note.md" on Windows and "Knowledge/note.md"
+    everywhere else, so a state file was not portable and the two forms did
+    not compare equal. Keys are written with as_posix() now; this converts
+    what older Windows runs already persisted, so upgrading does not read as
+    "every note is new" and re-upload the whole vault.
+    """
+    if not isinstance(mapping, dict):
+        return mapping
+    return {(k.replace("\\", "/") if isinstance(k, str) else k): v
+            for k, v in mapping.items()}
+
+
 def load_state() -> dict:
     if STATE_FILE.exists():
         try:
-            return json.loads(STATE_FILE.read_text())
+            state = json.loads(STATE_FILE.read_text())
         except json.JSONDecodeError:
             log.warning("state file corrupt, starting fresh")
+        else:
+            for section in ("files", "quarantine"):
+                if section in state:
+                    state[section] = _normalize_keys(state[section])
+            return state
     return {"files": {}, "quarantine": {}}
 
 
