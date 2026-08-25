@@ -187,8 +187,14 @@ if want sast; then
     if ! have semgrep; then
         skip_missing sast semgrep "brew install semgrep"
     else
+        # The local rule directory is not optional garnish. Registry rules find
+        # secrets that are HARDCODED; nothing in them traces a secret VALUE
+        # flowing into a print or a logger, which is precisely the question a
+        # 2026-08 external review asked and this suite could not answer.
         semgrep --config p/security-audit --config p/secrets \
-                --config p/command-injection --json -o "$OUT/semgrep.json" \
+                --config p/command-injection \
+                --config installers/lib/semgrep-rules/ \
+                --json -o "$OUT/semgrep.json" \
                 --metrics=off --quiet . >"$OUT/semgrep.log" 2>&1
         n="$(python3 - "$OUT/semgrep.json" "$SUPPRESSIONS" <<'PY' || echo '?'
 import json, sys, pathlib
