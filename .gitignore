@@ -98,15 +98,8 @@ Meetings/*
 !Meetings/.gitkeep
 Clippings/*
 !Clippings/.gitkeep
-!Clippings/Building a Data Platform Your Analysts Will Actually Use.md
-!Clippings/Phishing-Resistant MFA - A Practical Rollout Guide.md
-!Clippings/The Real Cost of Cloud Migration Sprawl.md
-!Clippings/Why Agentic AI Needs a Governance Layer.md
 Creations/*
 !Creations/.gitkeep
-!Creations/2026-07-02 0815.md
-!Creations/2026-07-20 0900.md
-!Creations/Cumulus Cloud Platform.md
 
 # git filter-repo / filter-branch leftovers
 .git-rewrite/
