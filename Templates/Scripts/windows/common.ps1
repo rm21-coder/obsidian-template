@@ -1,9 +1,9 @@
-# common.ps1 — shared helpers for the Windows layer. Dot-source this.
+# common.ps1 -- shared helpers for the Windows layer. Dot-source this.
 # . "$PSScriptRoot\common.ps1"
 
 # The vault lives at %USERPROFILE%\Obsidian. When the repo is cloned elsewhere
 # (e.g. %USERPROFILE%\obsidian-template), install.ps1 links ~\Obsidian to it with
-# a directory junction — the Windows analog of the Mac's ~/Obsidian symlink (see
+# a directory junction -- the Windows analog of the Mac's ~/Obsidian symlink (see
 # installers/components/10-vault-bootstrap.sh). $env:OBSIDIAN_VAULT overrides,
 # but the junction is the canonical setup so ~\Obsidian\... paths just work.
 function Get-VaultRoot {

@@ -1,8 +1,14 @@
 # Windows layer
 
 PowerShell + Task Scheduler port of the macOS `launchd`/shell automation.
+Targets **Windows PowerShell 5.1** — the edition that ships with Windows.
+PowerShell 7 works too but is not required or assumed.
+
 Validated end-to-end on Windows 11 (x64), including a clean bare-metal
-rebuild. See [`../../../docs/Windows Setup.md`](../../../docs/Windows%20Setup.md)
+rebuild. A 2026-08-25 ARM64 re-validation found `Install-Plugins.ps1` and
+`Send-Notification.ps1` unparseable under 5.1 — see the encoding note below —
+so plugin pinning and toast alerts did not run on that edition. Fixed the same
+day; both are pending re-verification on hardware. See [`../../../docs/Windows Setup.md`](../../../docs/Windows%20Setup.md)
 for the full setup guide.
 
 ## Conventions
@@ -64,11 +70,21 @@ once, then `.\Templates\Scripts\windows\install.ps1` with no wrapper needed.
   treat the first Windows run as unvalidated: `python meeting_pull.py --dry-run`
   first, then a real run, and only then enable the task. See
   [`docs/Meeting-Handoff-MCP-Producer.md`](../../../docs/Meeting-Handoff-MCP-Producer.md).
-- The pinned-plugin rewrite of `Install-Plugins.ps1` (2026-08-18) has been
-  reviewed but not yet executed on a real Windows box (parser-checked only —
-  no pwsh on the maintainer's Mac). Same for `graph_calendar_fetch.py` as a
-  scheduled producer. Treat the first Windows run of either as unvalidated,
-  same drill as above.
+- **Shipped PowerShell must stay ASCII.** Windows PowerShell 5.1 decodes a
+  BOM-less file as CP1252, so an em-dash (`U+2014`) reads as three characters
+  ending in `U+201D` — which 5.1 accepts as a string terminator. Inside a
+  double-quoted string that ends the string mid-line and the parser
+  desynchronizes; the file becomes unparseable and the script never runs.
+  This shipped: the 2026-08-18 pinned-plugin rewrite of `Install-Plugins.ps1`
+  carried em-dashes in two `Write-Warning` strings (one of them the
+  `HASH MISMATCH` refusal itself), so the supply-chain pinning control did not
+  execute under 5.1 at all — while `install.ps1` caught the throw and exited 0.
+  It was parser-checked before shipping and that check passed, because the file
+  *is* valid UTF-8 PowerShell; only 5.1 executing it as ANSI breaks. Use `--`
+  and `|` instead. Enforced by
+  `Templates/Scripts/tests/test_static.py::TestPowerShellEncoding`.
+- `graph_calendar_fetch.py` as a scheduled producer is still unvalidated on
+  Windows. Treat the first run as such, same drill as above.
 - Every native-command call site in `install.ps1` / `setup-rag.ps1` goes
   through `Invoke-Native` (`common.ps1`), which judges success by exit code
   alone — the installer is safe to log with `*>&1 | Tee-Object` or any other

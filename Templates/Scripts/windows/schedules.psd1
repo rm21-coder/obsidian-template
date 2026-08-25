@@ -1,4 +1,4 @@
-# schedules.psd1 — Windows Task Scheduler manifest.
+# schedules.psd1 -- Windows Task Scheduler manifest.
 # One hashtable per job. Register-Tasks.ps1 consumes this.
 # Ported from the macOS launchd plists in Templates/Scripts/*.plist.
 #
@@ -11,7 +11,7 @@
 #
 # Enabled=$true/$false is each job's registered starting state. Jobs with no
 # unconfigured external dependency (mailbox, Azure Blob relay, MCP calendar
-# connector, ...) ship Enabled=$true — they were validated end-to-end on a
+# connector, ...) ship Enabled=$true -- they were validated end-to-end on a
 # clean Windows 11 install by running the script by hand
 # (.venv\Scripts\python.exe <script>) before flipping the flag. The three
 # still shipping Enabled=$false each fail cleanly with a clear config error

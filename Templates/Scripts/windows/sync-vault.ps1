@@ -1,5 +1,5 @@
 <#
-.SYNOPSIS  Port of sync-vault.sh — wrapper for obsidian-rag-sync.py.
+.SYNOPSIS  Port of sync-vault.sh -- wrapper for obsidian-rag-sync.py.
 Loads OPEN_WEBUI_API_KEY / OBSIDIAN_COLLECTION_ID from the .env, sets sensible
 defaults, then runs the indexer with the venv python.
 #>
