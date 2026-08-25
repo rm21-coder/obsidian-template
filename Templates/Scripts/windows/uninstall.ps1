@@ -16,7 +16,11 @@
 
   Removed ONLY when asked (they hold data or are heavy shared tools):
     -RemoveRAG       stop + remove the open-webui Docker container (+ prompt for its volume)
-    -RemovePlugins   delete the fetched community plugins (.obsidian\plugins)
+    -RemovePlugins   delete the DOWNLOADED plugin files named in
+                     installers\plugin-pins.json. Each plugin's data.json --
+                     your ribbon, QuickAdd and Templater settings -- is kept,
+                     and so is its folder. A reinstall does not restore
+                     data.json, so it is never removed here.
     -RemoveApps      winget-uninstall Obsidian, Ollama, Docker Desktop, iCloud
     -PurgeModels     ollama rm the pulled model(s)
     -All             = -RemoveRAG -RemovePlugins  (NOT apps/models)
@@ -83,8 +87,17 @@ function Remove-PathSafe([string]$Path) {
     if ($DryRun) { Write-Host "  [dry-run] would remove: $Path"; return }
     try {
         Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
-        Write-Host "  removed: $Path"
-        return
+        # Trust Test-Path, not the return. Remove-Item -Recurse can report
+        # success having left files behind when a handle is briefly held
+        # during the walk -- observed 2026-08-25, when a teardown logged
+        # "removed:" for a state directory that still held sync.log. A
+        # security-control state dir reported gone but still on disk means the
+        # next install silently inherits the old baseline, which is the exact
+        # condition a teardown exists to eliminate.
+        if (-not (Test-Path -LiteralPath $Path)) {
+            Write-Host "  removed: $Path"
+            return
+        }
     } catch {
         # Falls through for the security-harness state dirs: their files carry
         # an icacls ACL with inheritance dropped (see security_common.py's
@@ -94,6 +107,9 @@ function Remove-PathSafe([string]$Path) {
         try {
             & icacls $Path /reset /T /C /Q 2>&1 | Out-Null
             Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+            if (Test-Path -LiteralPath $Path) {
+                throw 'path still present after a reported-successful delete'
+            }
             Write-Host "  removed: $Path (after ACL reset)"
         } catch { Write-Warning "  could not remove $Path : $_" }
     }
@@ -188,9 +204,44 @@ if ($RemoveRAG) {
 }
 
 # ---- 5. community plugins (opt-in) -----------------------------------------
+# Removes the DOWNLOADED artifacts named in installers\plugin-pins.json, never
+# the plugins tree. Each plugin folder also holds data.json -- the settings that
+# drive ribbon icons, QuickAdd choices, Templater config -- which is user
+# content, is tracked in this repo for five plugins, and is NOT restored by a
+# reinstall: Install-Plugins.ps1 fetches only manifest.json / main.js /
+# styles.css. Deleting the tree wholesale destroyed 464 lines of tracked
+# configuration in a 2026-08-25 teardown, contradicting this script's own
+# "NEVER touched: the repo/vault content" banner. In a clone that is
+# recoverable with git checkout; in a deployed vault it is not recoverable at
+# all. Removing only the pinned filenames preserves data.json by construction,
+# with no allow-list to keep in sync.
 if ($RemovePlugins) {
     Write-Host '== community plugins =='
-    Remove-PathSafe (Join-Path $repo '.obsidian\plugins')
+    $pluginsDir = Join-Path $repo '.obsidian\plugins'
+    $pinsFile   = Join-Path $repo 'installers\plugin-pins.json'
+    if (-not (Test-Path -LiteralPath $pluginsDir)) {
+        Write-Host "  no plugins directory at $pluginsDir"
+    } elseif (-not (Test-Path -LiteralPath $pinsFile)) {
+        Write-Warning "  $pinsFile not found - cannot tell downloaded artifacts"
+        Write-Warning "  from your settings, so nothing was removed. Delete by hand"
+        Write-Warning "  if you are sure, keeping each plugin's data.json."
+    } else {
+        $pins = Get-Content $pinsFile -Raw | ConvertFrom-Json
+        foreach ($pin in $pins) {
+            $dir = Join-Path $pluginsDir $pin.id
+            if (-not (Test-Path -LiteralPath $dir)) { continue }
+            foreach ($prop in $pin.files.PSObject.Properties) {
+                Remove-PathSafe (Join-Path $dir $prop.Name)
+            }
+            if ($DryRun) { continue }
+            $left = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)
+            if ($left.Count -eq 0) {
+                Remove-PathSafe $dir
+            } else {
+                Write-Host ("  kept {0}\ ({1} file(s) that are not downloaded artifacts, e.g. data.json)" -f $pin.id, $left.Count)
+            }
+        }
+    }
 }
 
 # ---- 6. junction (default; only if it IS a junction) -----------------------

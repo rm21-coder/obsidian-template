@@ -378,6 +378,56 @@ class TestPowerShellEncoding:
 
 
 # ---------------------------------------------------------------------------
+# 4c. Uninstaller must not delete user settings.
+#
+# Each plugin folder holds a data.json -- ribbon layout, QuickAdd choices,
+# Templater config. It is user content, five of them are tracked in this repo
+# on purpose (see .gitignore's per-file negations), and NO reinstall restores
+# it: the installers fetch only the filenames named in plugin-pins.json.
+#
+# Both uninstallers used to remove the whole plugins tree for --plugins/-All.
+# A 2026-08-25 Windows teardown destroyed 464 lines of tracked configuration
+# that way, contradicting the script's own "NEVER touched: the repo/vault
+# content" banner. In a clone that is recoverable with git checkout; in a
+# deployed vault -- not under version control, which is the normal case -- it
+# is not recoverable at all.
+#
+# The invariant: delete the artifacts the pin manifest names, never the tree.
+# ---------------------------------------------------------------------------
+
+class TestUninstallersPreservePluginSettings:
+
+    @pytest.fixture
+    def repo_root(self, scripts_dir: Path) -> Path:
+        return scripts_dir.parent.parent
+
+    @pytest.mark.parametrize("rel,banned", [
+        ("uninstall.sh", 'rm_path "$PLUGINS"'),
+        ("Templates/Scripts/windows/uninstall.ps1",
+         "Remove-PathSafe (Join-Path $repo '.obsidian\\plugins')"),
+    ])
+    def test_does_not_delete_the_plugins_tree(self, repo_root: Path,
+                                              rel: str, banned: str) -> None:
+        target = repo_root / rel
+        assert target.is_file(), f"uninstaller not found at {target}"
+        assert banned not in target.read_text(encoding="utf-8"), (
+            f"{rel} removes the whole plugins directory ({banned!r}). That "
+            f"destroys every plugin's data.json -- user settings no reinstall "
+            f"restores, and unrecoverable outside a git clone. Delete the "
+            f"filenames plugin-pins.json names, then the directory only if it "
+            f"is empty.")
+
+    @pytest.mark.parametrize("rel", [
+        "uninstall.sh", "Templates/Scripts/windows/uninstall.ps1"])
+    def test_removal_is_driven_by_the_pin_manifest(self, repo_root: Path,
+                                                   rel: str) -> None:
+        text = (repo_root / rel).read_text(encoding="utf-8")
+        assert "plugin-pins.json" in text, (
+            f"{rel} does not consult plugin-pins.json, so it cannot tell a "
+            f"downloaded artifact from a user's settings file")
+
+
+# ---------------------------------------------------------------------------
 # 5. Installer Keychain invariants.
 #
 # These are source assertions rather than behavior tests because the behavior
