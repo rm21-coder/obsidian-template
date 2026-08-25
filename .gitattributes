@@ -1,0 +1,35 @@
+# Line endings are part of the contract here, not incidental formatting.
+#
+# Without this file, a Windows clone with core.autocrlf=true (the git-for-
+# Windows default) rewrites every text file to CRLF on checkout. That is
+# harmless for most of them and fatal for anything a POSIX shell parses: a
+# 2026-08-25 Windows ARM64 re-validation found all 40 tracked .sh files
+# checked out as CRLF, so run_tests.sh died with
+#     syntax error near unexpected token `$'do\r''
+# and every installer component was broken the same way under Git Bash or
+# WSL2. The blobs in the repo were correct LF throughout; only the checkout
+# was wrong, and nothing in the repo asserted otherwise.
+#
+# After this lands, existing clones need one renormalization:
+#     git add --renormalize . && git checkout -- .
+
+* text=auto
+
+# LF-only: parsed by a POSIX shell, by launchd, or by an interpreter that
+# reads the shebang line -- a trailing CR there is a syntax error.
+*.sh            text eol=lf
+*.py            text eol=lf
+*.plist         text eol=lf
+*.applescript   text eol=lf
+installers/lib/hooks/pre-commit text eol=lf
+
+# CRLF: the Windows PowerShell layer, which is Windows-only by definition.
+# Note this is about line endings only -- the same files are also held
+# ASCII-only, for a different reason, by
+# Templates/Scripts/tests/test_static.py::TestPowerShellEncoding.
+*.ps1           text eol=crlf
+*.psd1          text eol=crlf
+
+# Binary: never touch, never diff as text.
+*.png           binary
+*.pdf           binary
