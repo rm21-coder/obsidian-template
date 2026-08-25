@@ -1,0 +1,63 @@
+# security-suppressions.txt - accepted findings, one per line, with the reason.
+#
+#   <tool>  <path>  <rule>   # why this is accepted
+#
+# A finding here does not fail the suite. Everything else does. The point of a
+# file rather than an inline comment is that an accepted risk stays reviewable
+# in a diff: adding a line is a visible act someone can argue with.
+#
+# Anything accepted rather than fixed carries a rationale AND a re-check date.
+# Past its date it should be re-argued, not renewed by habit.
+#
+# Established 2026-08-25 from the first full sweep of this repository.
+
+# --- urllib with permitted schemes (bandit B310 / semgrep dynamic-urllib) ----
+# The rule fires on any urllib call whose URL is not a literal. In all four
+# cases the URL is built from constants or from a tracked manifest, never from
+# untrusted input, and none uses a caller-supplied scheme.
+bandit   Templates/Scripts/graph_calendar_fetch.py  B310   # Microsoft Graph host + path from constants; no user input. re-check 2026-11-25
+bandit   installers/lib/pin_plugins.py              B310   # GitHub API; URL from the tracked pin manifest, maintainer-run only. re-check 2026-11-25
+bandit   Templates/Scripts/youtube_summarize.py     B310   # routed through url_safety's SSRF guard; asserted by test_youtube_summarize.py::test_ssrf_guard_called_in_extract_transcript. re-check 2026-11-25
+semgrep  Templates/Scripts/graph_calendar_fetch.py  dynamic-urllib-use-detected   # as above. re-check 2026-11-25
+semgrep  installers/lib/pin_plugins.py              dynamic-urllib-use-detected   # as above. re-check 2026-11-25
+semgrep  Templates/Scripts/youtube_summarize.py     dynamic-urllib-use-detected   # as above. re-check 2026-11-25
+
+# --- subprocess with config-derived argv (semgrep) --------------------------
+# All three are list-form subprocess.run with no shell=True, so there is no
+# shell-injection surface. The argv elements come from constants, from
+# sys.executable, or from this project's own config - not from the network.
+# The residual is PATH resolution of `claude` (shutil.which), which requires an
+# attacker who can already write to the user's PATH, i.e. who already has
+# execution as that user.
+semgrep  Templates/Scripts/graph_calendar_fetch.py  dangerous-subprocess-use-tainted-env-args   # list form, argv from constants + config. re-check 2026-11-25
+semgrep  Templates/Scripts/meeting_pull.py          dangerous-subprocess-use-tainted-env-args   # list form; `claude` via shutil.which, user's own PATH. re-check 2026-11-25
+semgrep  Templates/Scripts/morning_dashboard.py     dangerous-subprocess-use-tainted-env-args   # list form; LAUNCHCTL_BIN defaults to /bin/launchctl, env override is a test seam. re-check 2026-11-25
+
+# --- XML parsed with ElementTree (bandit B314 / semgrep use-defused-xml) -----
+# ACCEPTED, NOT DISMISSED. These are real: xml.etree.ElementTree is documented
+# as not secure against maliciously constructed data (entity expansion /
+# quadratic blowup). The fix is defusedxml, which is already present in the
+# resolved dependency tree transitively but is NOT declared in
+# requirements.txt - declaring a new dependency on a cross-platform template is
+# a deliberate change, not a drive-by. Tracked as an open finding for CISO
+# packet v2.3 rather than silently closed.
+#   podcast_transcribe.py parses a podcast RSS feed, which is genuinely
+#   untrusted external input. This is the one that matters.
+#   handoff_blob_pull.py parses an Azure Blob listing; the Blob relay was
+#   dropped 2026-08-13 and survives as an optional secondary path.
+bandit   Templates/Scripts/podcast_transcribe.py    B314   # OPEN FINDING: untrusted RSS via ElementTree. Fix = declare defusedxml. re-check 2026-09-25
+bandit   Templates/Scripts/handoff_blob_pull.py     B314   # OPEN FINDING: Azure listing via ElementTree; relay is dropped/optional. re-check 2026-09-25
+semgrep  Templates/Scripts/podcast_transcribe.py    use-defused-xml   # as above. re-check 2026-09-25
+semgrep  Templates/Scripts/handoff_blob_pull.py     use-defused-xml   # as above. re-check 2026-09-25
+
+# --- unpinned model download (bandit B615) ----------------------------------
+# ACCEPTED, NOT DISMISSED. snapshot_download() has no `revision`, so it fetches
+# whatever the repo's default branch currently holds - an unpinned
+# supply-chain fetch in a project whose headline control is pinning community
+# plugins by tag and SHA256. The asymmetry is worth stating in the packet
+# rather than leaving for a reviewer to notice.
+# Establishing the pin is a maintainer act with review, exactly like
+# installers/lib/pin_plugins.py: resolve each repo to a commit SHA, record it,
+# review the diff, commit. It is deliberately NOT done unattended, and no SHA
+# is invented here.
+bandit   Templates/Scripts/whisper_onnx.py          B615   # OPEN FINDING: HF snapshot_download without revision=. Fix = pin per repo, maintainer-reviewed. re-check 2026-09-25

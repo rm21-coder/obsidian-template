@@ -22,7 +22,7 @@
 # does not include user-installed tool locations, so every binary below is
 # called by its absolute path rather than relying on PATH resolution.
 set -uo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")" || { echo "dashboard_actions: cannot cd to $(dirname "$0")" >&2; exit 1; }
 
 PY=/usr/bin/python3
 VENV_PY=./.venv/bin/python3
