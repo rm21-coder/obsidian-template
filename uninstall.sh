@@ -60,6 +60,11 @@ export REPO_ROOT="$SCRIPT_DIR"
 # Reuse the installer's logging/confirm/run helpers.
 # shellcheck source=installers/lib/common.sh
 source "$REPO_ROOT/installers/lib/common.sh"
+# secrets.sh is safe to source: variable assignments and function definitions
+# only, no prompts. Needed for _security -- the bounded, latching wrapper for
+# /usr/bin/security. See the Keychain section for why a bare call is not
+# acceptable here.
+source "$REPO_ROOT/installers/lib/secrets.sh"
 
 # ---- defaults & argument parsing -------------------------------------------
 INTERACTIVE=1
@@ -209,10 +214,17 @@ if [[ "$do_state" -eq 1 ]]; then
     rm_path "$VAULT_SCRIPTS/logs"
     rm_path "$VAULT_SCRIPTS/.locks"
     rm_path "$VAULT_SCRIPTS/.state"
-    rm_path "$VAULT_SCRIPTS/.config"
+    # .config is NOT removed. It holds meeting_pull.json and
+    # meeting_prepopulate.json -- hand-built configuration the prompt above
+    # would otherwise be lying about, since a reinstall only recreates them by
+    # re-asking component 54's questions and install.ps1 never provisions them
+    # at all. Same principle as each plugin's data.json: if a reinstall cannot
+    # put it back, a teardown does not take it.
     rm_path "$VAULT/.tag_tracking.json"
     rm_path "$VAULT_SCRIPTS/.tag_tracking.json"
     rm_path "$HOME/.local/share/obsidian-security"
+    [[ -d "$VAULT_SCRIPTS/.config" ]] && \
+        info "  kept $VAULT_SCRIPTS/.config (hand-built job configuration)"
 else
     info "  kept runtime state."
 fi
@@ -243,22 +255,48 @@ fi
 # ---- 6. Secrets (opt-in: --secrets) ----------------------------------------
 if [[ "$DO_SECRETS" -eq 1 ]]; then
     section "Secrets"
+    # $HOME/dev/secrets/.env is NOT deleted, deliberately -- matching what the
+    # Windows uninstaller already does and states: "other tools may share it,
+    # this uninstaller doesn't own it and never deletes it." That directory is
+    # a machine-wide secrets location, not a per-project one, so removing the
+    # file to uninstall one project can break everything else reading it.
+    # Name this project's keys instead and let the operator edit.
     ENV_FILE="$HOME/dev/secrets/.env"
     if [[ -f "$ENV_FILE" ]]; then
-        if [[ "$INTERACTIVE" -eq 0 ]] || confirm "Delete $ENV_FILE (contains your API keys)?" N; then
-            rm_path "$ENV_FILE"
-        fi
+        info "  keeping $ENV_FILE - a shared secrets file this project does"
+        info "  not own. To remove only this project's entries, delete these"
+        info "  keys by hand:"
+        info "    LLM_BASE_URL, LLM_API_KEY_NAME, OPEN_WEBUI_API_KEY,"
+        info "    SOURCE_MAIL_*, TAGGER_*, CLASSIFIER_*"
     fi
     # gemini_api_key is LEGACY: the YouTube summarizer used Gemini before it
     # moved to llm_endpoint, and nothing writes this item any more. It stays in
     # the list on purpose - an install predating that change still holds the
     # key, and uninstall is the right place to offer a stale credential for
     # deletion rather than leaving it in the Keychain forever.
+    # Every Keychain call goes through _security: /usr/bin/security -- not
+    # whatever `security` resolves to on PATH -- under a hard timeout, latching
+    # so the first hang skips the Keychain for the rest of the run.
+    #
+    # Not defensive styling. A `security` call blocked on a consent dialog
+    # nobody can answer wedges the whole Keychain stack for the user, including
+    # git-over-HTTPS through the osxkeychain helper, and every retry queues
+    # another dialog. secret_store.py was hardened for exactly this on
+    # 2026-08-20 and this caller was missed -- so an uninstall could still wedge
+    # a machine whose Keychain was already unhappy, which is the state someone
+    # reaching for uninstall.sh is most likely to be in.
     for svc in gemini_api_key obsidian-allowlist-hmac; do
-        if security find-generic-password -a "$USER" -s "$svc" >/dev/null 2>&1; then
+        if _security "$KEYCHAIN_TIMEOUT_SECONDS" find-generic-password \
+                -a "$USER" -s "$svc" >/dev/null 2>&1; then
             if [[ "$INTERACTIVE" -eq 0 ]] || confirm "Delete Keychain entry '$svc'?" N; then
-                run security delete-generic-password -a "$USER" -s "$svc" >/dev/null 2>&1 || true
-                ok "  removed Keychain entry: $svc"
+                if [[ "$DRY_RUN" -eq 1 ]]; then
+                    info "  [dry-run] would delete Keychain entry: $svc"
+                elif _security "$KEYCHAIN_TIMEOUT_SECONDS" delete-generic-password \
+                        -a "$USER" -s "$svc" >/dev/null 2>&1; then
+                    ok "  removed Keychain entry: $svc"
+                else
+                    warn "  could not remove Keychain entry: $svc"
+                fi
             fi
         fi
     done
