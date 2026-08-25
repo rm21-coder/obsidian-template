@@ -145,6 +145,12 @@ def sync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scripts_dir: Path):
     vault = home / "Obsidian"
     (vault / "Creations").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    # Windows derives Path.home() from USERPROFILE, not HOME, and the module
+    # puts its state under %LOCALAPPDATA% there rather than ~/.local/share.
+    # Redirect all three or the guard below trips on Windows and every test
+    # in this file errors out rather than running.
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
     monkeypatch.setenv("OPEN_WEBUI_URL", "http://webui.invalid")
     monkeypatch.setenv("OBSIDIAN_COLLECTION_ID", "test-collection")

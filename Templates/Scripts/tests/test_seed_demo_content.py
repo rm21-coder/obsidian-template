@@ -219,7 +219,10 @@ def test_no_broken_wikilinks(seeded):
     targets = set()
     for p, _ in mod.seeded_files():
         targets.add(p.stem)
-        targets.add(str(p.relative_to(vault).with_suffix("")))
+        # as_posix(): wikilinks are always forward-slash, but relative_to()
+        # yields backslashes on Windows, so a folder-qualified [[a/b]] would
+        # never match the "a\\b" this set otherwise holds.
+        targets.add(p.relative_to(vault).with_suffix("").as_posix())
 
     # Attachments and Bases ship with the repo, not the seeder.
     known_external = {"placeholder-person.png", "Meetings.base", "People.base",

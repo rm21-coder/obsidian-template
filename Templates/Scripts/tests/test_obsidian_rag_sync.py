@@ -33,13 +33,19 @@ import requests
 def rag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scripts_dir: Path):
     """Import obsidian-rag-sync.py against a throwaway HOME, vault and state.
 
-    STATE_DIR is derived from Path.home() at import time, so HOME has to be
+    STATE_DIR is derived at import time, so the environment it reads has to be
     redirected before the module executes — after that it is baked in.
     """
     home = tmp_path / "home"
     vault = home / "Obsidian"
     vault.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
+    # Windows derives Path.home() from USERPROFILE, not HOME, and the module
+    # puts its state under %LOCALAPPDATA% there rather than ~/.local/share.
+    # Redirect all three or the guard below trips on Windows and every test
+    # in this file errors out rather than running.
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "AppData" / "Local"))
     monkeypatch.setenv("OBSIDIAN_VAULT", str(vault))
     monkeypatch.setenv("OPEN_WEBUI_URL", "http://webui.invalid")
     monkeypatch.setenv("OBSIDIAN_COLLECTION_ID", "test-collection")
