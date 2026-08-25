@@ -88,7 +88,12 @@ def find_claude(override):
 
 def load_config(path):
     if not path.is_file():
-        die("config not found: %s (run: ./install.sh --only 54-meeting-pull)" % path)
+        # install.ps1 has no per-component switch and never provisions this
+        # config, so pointing a Windows operator at ./install.sh is a dead end.
+        fix = ("see docs/Meeting-Handoff-MCP-Producer.md for the config shape"
+               if sys.platform == "win32"
+               else "run: ./install.sh --only 54-meeting-pull")
+        die("config not found: %s (%s)" % (path, fix))
     try:
         config = json.loads(path.read_text())
     except json.JSONDecodeError as exc:
