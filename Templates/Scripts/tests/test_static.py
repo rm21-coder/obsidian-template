@@ -428,6 +428,64 @@ class TestUninstallersPreservePluginSettings:
 
 
 # ---------------------------------------------------------------------------
+# 4d. macOS uninstaller safety.
+#
+# Three defects found by inspection on 2026-08-25, before the first macOS
+# teardown was ever run. All three are the same shape as the Windows
+# Finding F: a teardown taking something a reinstall cannot put back, or
+# taking something it does not own.
+# ---------------------------------------------------------------------------
+
+class TestMacUninstallerSafety:
+
+    @pytest.fixture
+    def uninstall_sh(self, scripts_dir: Path) -> str:
+        target = scripts_dir.parent.parent / "uninstall.sh"
+        assert target.is_file(), f"uninstall.sh not found at {target}"
+        return target.read_text(encoding="utf-8")
+
+    def test_does_not_delete_the_shared_secrets_file(self,
+                                                     uninstall_sh: str) -> None:
+        """~/dev/secrets/.env is a machine-wide secrets location, not a
+        per-project one. The Windows uninstaller refuses to touch it and says
+        why; this one used to delete it under --secrets, which --all sets."""
+        assert 'rm_path "$ENV_FILE"' not in uninstall_sh, (
+            "uninstall.sh deletes ~/dev/secrets/.env. That file is shared with "
+            "every other project on the machine -- uninstalling this one must "
+            "not break them. Name this project's keys and let the operator "
+            "edit, as the Windows uninstaller already does.")
+
+    def test_does_not_delete_handbuilt_job_config(self,
+                                                  uninstall_sh: str) -> None:
+        """.config holds meeting_pull.json / meeting_prepopulate.json, which a
+        reinstall only recreates by re-asking prompts -- and install.ps1 never
+        provisions at all."""
+        assert 'rm_path "$VAULT_SCRIPTS/.config"' not in uninstall_sh, (
+            "uninstall.sh removes .config as 'scratch state regenerated on "
+            "reinstall'. It is not regenerated; it is hand-built job "
+            "configuration. If a reinstall cannot put it back, a teardown "
+            "does not take it.")
+
+    @pytest.mark.parametrize("verb", ["find-generic-password",
+                                      "delete-generic-password"])
+    def test_keychain_calls_are_time_bounded(self, uninstall_sh: str,
+                                             verb: str) -> None:
+        """A bare `security` call blocked on an unanswerable consent dialog
+        wedges the whole Keychain stack, git-over-HTTPS included, and every
+        retry queues another dialog. secret_store.py was hardened for this;
+        this caller was missed."""
+        for line in uninstall_sh.splitlines():
+            if verb not in line or line.lstrip().startswith("#"):
+                continue
+            assert "_security" in line, (
+                f"uninstall.sh calls `security {verb}` without the bounded, "
+                f"latching wrapper:\n    {line.strip()}\n"
+                f"Route it through _security (installers/lib/secrets.sh), "
+                f"which uses /usr/bin/security under a hard timeout and "
+                f"latches so the first hang skips the rest of the run.")
+
+
+# ---------------------------------------------------------------------------
 # 5. Installer Keychain invariants.
 #
 # These are source assertions rather than behavior tests because the behavior
