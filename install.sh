@@ -124,6 +124,11 @@ export INTERACTIVE DRY_RUN REBASELINE FORCE
 LOG_FILE="$HOME/Library/Logs/obsidian-template-install.log"
 if [[ "$DRY_RUN" -eq 0 && "$LIST_ONLY" -eq 0 ]]; then
     mkdir -p "$HOME/Library/Logs"
+    # 0600 before anything is written. This log captures every prompt and answer
+    # of an interactive install; at the default 0644 it is readable by any
+    # account on the machine. Bounds the damage if something ever echoes a
+    # value it should not.
+    touch "$LOG_FILE" && chmod 600 "$LOG_FILE"
     exec > >(tee -a "$LOG_FILE") 2>&1
 fi
 

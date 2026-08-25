@@ -41,6 +41,11 @@
 #   - Obsidian.app, Homebrew, and brew packages (python, yt-dlp, ffmpeg,
 #     ollama, Docker Desktop)
 #   - Ollama models (remove with: ollama rm <model>)
+#   - ~/SourceMedia/ and its VoiceInput/ PodcastInput/ drop folders. Created by
+#     the installer; kept on purpose, because they can hold captures that have
+#     arrived from a device and not yet been processed. Deleting them would
+#     discard the user's own recordings, which no reinstall can bring back.
+#     Remove by hand once you have confirmed they are empty.
 #
 # Usage:
 #   ./uninstall.sh                 interactive; safe defaults
@@ -144,7 +149,13 @@ rm_path() {
         # directory that was still on disk (2026-08-25); a teardown that says
         # "removed" about something still present means the next install
         # silently inherits state it was supposed to start without.
-        if [[ "$DRY_RUN" -eq 1 || ! -e "$p" && ! -L "$p" ]]; then
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            # A dry run removed nothing, so it must not say "removed". The old
+            # wording put 24 lines of "removed: <path>" into a --dry-run
+            # capture; anyone grepping for `removed:`, or pasting that log into
+            # a packet as teardown evidence, would read it as a real teardown.
+            ok "  would remove: $p"
+        elif [[ ! -e "$p" && ! -L "$p" ]]; then
             ok "  removed: $p"
         else
             warn "  reported removed but still present: $p"

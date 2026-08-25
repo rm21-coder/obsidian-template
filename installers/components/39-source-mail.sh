@@ -65,15 +65,32 @@ else
     # dies silently in transit. Alphanumeric only — it has to survive
     # quoted-printable encoding, mail line-wrapping, iOS smart punctuation and
     # dotenv parsing (`#` starts a comment in some parsers, `$` interpolates).
-    TOKEN="$(LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 40)"
+    # No pipeline. `tr -dc ... < /dev/urandom | head -c 40` looks obvious and
+    # is fatal here: head closes the pipe at 40 bytes, tr is still reading an
+    # infinite source and takes SIGPIPE, and under `set -euo pipefail` that 141
+    # aborts the component at this line. The consequence was silent -- the
+    # source-mail LaunchAgent was never installed, 90-verify showed a bare
+    # `agent X` that reads as "not configured yet", and the install still
+    # exited 0. Found on a Mac Studio full-cycle run 2026-08-25; deterministic
+    # wherever SOURCE_MAIL_TOKEN is not already set.
+    #
+    # python3 is already a hard prerequisite (00-preflight), and `secrets` is
+    # the right generator for a shared signing token in any case.
+    TOKEN="$(python3 -c 'import secrets, string; print("".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(40)))')"
     if [[ "${#TOKEN}" -ne 40 ]]; then
         err "  token generation produced ${#TOKEN} chars, expected 40"
         exit 1
     fi
     env_set SOURCE_MAIL_TOKEN "$TOKEN"
     ok "  generated a 40-character SOURCE_MAIL_TOKEN"
-    info "  Enter this same value in the signing script on each device:"
-    info "    $TOKEN"
+    # The token is NOT printed. install.sh tees all output to
+    # ~/Library/Logs/obsidian-template-install.log, so echoing it writes the
+    # transport's shared HMAC signing key -- the one secret this design says is
+    # never transmitted -- in clear to a file on disk. It is already in the
+    # 0600 secrets file; point there instead.
+    info "  Enter this same value in the signing script on each device."
+    info "  Read it from the secrets file (mode 0600), it is not printed here:"
+    info "    grep '^SOURCE_MAIL_TOKEN=' ~/dev/secrets/.env"
 fi
 
 prompt_env_value SOURCE_MAIL_ALLOWED_SENDERS \
