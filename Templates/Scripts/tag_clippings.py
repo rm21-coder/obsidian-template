@@ -656,7 +656,9 @@ def main():
                     continue
             except OSError:
                 pass
-        file_key = str(filepath.relative_to(VAULT_ROOT))
+        # as_posix(): see integrity_monitor.scan_dir -- str(Path) is
+        # backslash-separated on Windows, which makes this cache platform-specific.
+        file_key = filepath.relative_to(VAULT_ROOT).as_posix()
         text = filepath.read_text(encoding="utf-8")
         file_hash = content_hash(text)
 
