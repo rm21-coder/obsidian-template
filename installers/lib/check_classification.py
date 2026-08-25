@@ -164,11 +164,25 @@ def git_ignored(repo_root: Path, paths: list[Path]) -> set[Path]:
     """
     if not paths:
         return set()
+    # -z and as_posix() are both load-bearing on Windows, and the first
+    # version of this filter had neither -- it silently matched nothing there
+    # while appearing to work, which is the same silent-no-op failure mode it
+    # was written to remove. Two separate causes:
+    #
+    #   1. str(Path) yields backslashes on Windows. git treats a path
+    #      containing one as needing quoting and echoes it back quoted and
+    #      escaped ("Creations\\RAG-Sync-....md"), which never compares equal
+    #      to what was sent. as_posix() keeps git in unquoted territory.
+    #   2. text=True translates \n to \r\n on stdin, so with newline
+    #      delimiters git receives the CR as part of the filename. NUL
+    #      delimiters have no newline to translate.
+    #
+    # -z also makes the output unquoted, so the parse side needs no unescaping.
     try:
         proc = subprocess.run(
-            ["git", "check-ignore", "--stdin"],
+            ["git", "check-ignore", "-z", "--stdin"],
             cwd=repo_root,
-            input="\n".join(str(p) for p in paths) + "\n",
+            input="\0".join(p.as_posix() for p in paths) + "\0",
             capture_output=True,
             text=True,
         )
@@ -177,8 +191,7 @@ def git_ignored(repo_root: Path, paths: list[Path]) -> set[Path]:
     # git check-ignore: 0 = some ignored, 1 = none ignored, other = error.
     if proc.returncode not in (0, 1):
         return set()
-    return {Path(line.strip()) for line in proc.stdout.splitlines()
-            if line.strip()}
+    return {Path(s) for s in proc.stdout.split("\0") if s.strip()}
 
 
 def all_md_files(repo_root: Path) -> list[Path]:
