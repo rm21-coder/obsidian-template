@@ -150,14 +150,23 @@ def scan_dir(directory: Path, *, exts: set[str]) -> dict[str, dict]:
             continue
         try:
             stat = path.stat()
-            rel = str(path.relative_to(directory))
+            # as_posix(), not str(): baseline keys are relative paths, and
+            # str(Path) is backslash-separated on Windows. A baseline is only
+            # ever compared against itself on one machine, so the old form was
+            # self-consistent -- but it made the state file platform-specific
+            # and put the same latent defect here that made RAG-sync state
+            # unportable. Deliberately NOT normalized on read: collapsing
+            # backslashes to slashes inside a tamper-detection control would
+            # let two distinct paths share a key (a POSIX filename may legally
+            # contain a backslash), and re-running --update costs nothing.
+            rel = path.relative_to(directory).as_posix()
             out[rel] = {
                 "sha256": sha256_file(path),
                 "size": stat.st_size,
                 "mtime": int(stat.st_mtime),
             }
         except OSError as e:
-            out[str(path.relative_to(directory))] = {"error": str(e)}
+            out[path.relative_to(directory).as_posix()] = {"error": str(e)}
     return out
 
 

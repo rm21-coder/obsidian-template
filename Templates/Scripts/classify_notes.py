@@ -1069,7 +1069,9 @@ def main() -> int:
             except OSError:
                 pass
         try:
-            key = str(filepath.relative_to(VAULT_ROOT))
+            # as_posix(): tracking keys are relative vault paths, and
+            # str(Path) is backslash-separated on Windows.
+            key = filepath.relative_to(VAULT_ROOT).as_posix()
             digest = content_hash(filepath.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, ValueError):
             continue
@@ -1102,7 +1104,7 @@ def main() -> int:
                       f"{record['rationale']}")
             if not args.dry_run:
                 try:
-                    tracking[str(filepath.relative_to(VAULT_ROOT))] = content_hash(
+                    tracking[filepath.relative_to(VAULT_ROOT).as_posix()] = content_hash(
                         filepath.read_text(encoding="utf-8"))
                 except (OSError, ValueError):
                     pass
