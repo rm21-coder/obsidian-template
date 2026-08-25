@@ -147,8 +147,45 @@ def git_staged_files(repo_root: Path) -> list[Path]:
     return paths
 
 
+def git_ignored(repo_root: Path, paths: list[Path]) -> set[Path]:
+    """Return the subset of `paths` that git would ignore.
+
+    The audit exists to keep non-public content out of a PUBLIC repo, so a
+    file git will never track cannot be a violation. Without this the audit
+    walks the filesystem and flags local runtime output -- most visibly
+    `Creations/RAG-Sync-*.md`, which the RAG sync writes on every run and
+    `.gitignore` names explicitly. On any machine that has run the sync,
+    `install.sh` / `install.ps1` then hard-fail at component 02 until
+    `--skip-audit` is passed, which is exactly the wrong reflex to train.
+
+    Fails OPEN (returns an empty set, so nothing is excluded) when git is
+    unavailable or this is not a checkout: the audit is a safety net, and a
+    missing git must not quietly shrink what it looks at.
+    """
+    if not paths:
+        return set()
+    try:
+        proc = subprocess.run(
+            ["git", "check-ignore", "--stdin"],
+            cwd=repo_root,
+            input="\n".join(str(p) for p in paths) + "\n",
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    # git check-ignore: 0 = some ignored, 1 = none ignored, other = error.
+    if proc.returncode not in (0, 1):
+        return set()
+    return {Path(line.strip()) for line in proc.stdout.splitlines()
+            if line.strip()}
+
+
 def all_md_files(repo_root: Path) -> list[Path]:
-    """Return paths (relative to repo_root) of all .md files in the repo."""
+    """Return paths (relative to repo_root) of all .md files in the repo.
+
+    Gitignored files are excluded -- see git_ignored().
+    """
     paths: list[Path] = []
     for f in repo_root.rglob("*.md"):
         try:
@@ -159,7 +196,8 @@ def all_md_files(repo_root: Path) -> list[Path]:
         if any(part in SKIPPED_FOLDERS for part in rel.parts):
             continue
         paths.append(rel)
-    return paths
+    ignored = git_ignored(repo_root, paths)
+    return [p for p in paths if p not in ignored]
 
 
 def audit_files(
