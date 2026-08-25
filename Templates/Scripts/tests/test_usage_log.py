@@ -99,6 +99,101 @@ def test_estimate_cache_reads_are_cheap() -> None:
     assert cached < fresh / 5
 
 
+def test_estimate_pins_absolute_list_prices() -> None:
+    """The relative tests above (haiku < sonnet, reads are cheap) all still
+    passed while Opus sat at a stale $15/$75 — three times its real rate.
+    Pin the actual per-MTok numbers so a price change has to be deliberate."""
+    for model, dollars_per_mtok_in in (("claude-opus-5", 5.00),
+                                       ("claude-fable-5", 10.00),
+                                       ("claude-sonnet-5", 3.00),
+                                       ("claude-haiku-4-5", 1.00),
+                                       ("claude-3-opus-20240229", 15.00)):
+        usd = usage_log.estimate_usd({
+            "model": model, "input_tokens": 1_000_000, "output_tokens": 0,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0})
+        assert usd == pytest.approx(dollars_per_mtok_in), model
+
+
+def test_legacy_opus_3_does_not_match_the_opus_family() -> None:
+    """Substring matching is order-sensitive: "claude-3-opus" has to be
+    tested before "opus" or Opus 3 silently reprices to a third of its rate."""
+    legacy = usage_log.estimate_usd({
+        "model": "claude-3-opus-20240229", "input_tokens": 1_000_000,
+        "output_tokens": 0, "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0})
+    current = usage_log.estimate_usd({
+        "model": "claude-opus-5", "input_tokens": 1_000_000,
+        "output_tokens": 0, "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0})
+    assert legacy == pytest.approx(3 * current)
+
+
+def test_cache_writes_priced_by_ttl() -> None:
+    """A 1-hour write costs 2x input, a 5-minute write 1.25x."""
+    base = {"model": "claude-haiku-4-5", "input_tokens": 0,
+            "output_tokens": 0, "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 1_000_000}
+    short = usage_log.estimate_usd({**base,
+                                    "cache_creation_5m_input_tokens": 1_000_000,
+                                    "cache_creation_1h_input_tokens": 0})
+    long = usage_log.estimate_usd({**base,
+                                   "cache_creation_5m_input_tokens": 0,
+                                   "cache_creation_1h_input_tokens": 1_000_000})
+    assert short == pytest.approx(1.25)
+    assert long == pytest.approx(2.00)
+
+
+def test_write_with_no_ttl_split_is_not_free() -> None:
+    """Regression: record() writes both TTL fields unconditionally, so a row
+    from an SDK that reports no usage.cache_creation arrives as 0/0 rather
+    than absent. Keying the fallback on absence priced those writes at zero
+    and silently dropped the whole write line from the estimate."""
+    usd = usage_log.estimate_usd({
+        "model": "claude-haiku-4-5", "input_tokens": 0, "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 1_000_000,
+        "cache_creation_5m_input_tokens": 0,
+        "cache_creation_1h_input_tokens": 0})
+    assert usd == pytest.approx(2.00)  # unattributed remainder -> 1h multiple
+
+
+def test_partial_ttl_split_prices_the_remainder() -> None:
+    usd = usage_log.estimate_usd({
+        "model": "claude-haiku-4-5", "input_tokens": 0, "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 1_000_000,
+        "cache_creation_5m_input_tokens": 400_000,
+        "cache_creation_1h_input_tokens": 0})
+    # 400k at 1.25x + the unattributed 600k at 2x
+    assert usd == pytest.approx(0.4 * 1.25 + 0.6 * 2.00)
+
+
+def test_billable_excludes_cache_reads_and_total_includes_them() -> None:
+    row = {"input_tokens": 10, "output_tokens": 20,
+           "cache_creation_input_tokens": 30, "cache_read_input_tokens": 40_000}
+    assert usage_log.billable_tokens(row) == 60
+    assert usage_log.total_tokens(row) == 40_060
+
+
+def test_billable_ignores_the_ttl_breakdown() -> None:
+    """The TTL fields are a breakdown OF cache_creation_input_tokens, not an
+    addition to it — counting them again would double the write line."""
+    row = {"input_tokens": 0, "output_tokens": 0,
+           "cache_creation_input_tokens": 1_000,
+           "cache_creation_5m_input_tokens": 400,
+           "cache_creation_1h_input_tokens": 600,
+           "cache_read_input_tokens": 0}
+    assert usage_log.billable_tokens(row) == 1_000
+
+
+def test_cache_read_usd_is_the_read_slice_of_the_estimate() -> None:
+    row = {"model": "claude-opus-5", "input_tokens": 1_000,
+           "output_tokens": 1_000, "cache_creation_input_tokens": 1_000,
+           "cache_read_input_tokens": 1_000_000}
+    assert usage_log.cache_read_usd(row) == pytest.approx(0.50)  # 5.00 * 0.1
+    assert usage_log.cache_read_usd(row) < usage_log.estimate_usd(row)
+
+
 def test_unknown_model_gets_default_pricing() -> None:
     usd = usage_log.estimate_usd({
         "model": "my-gateway-alias", "input_tokens": 1_000_000,

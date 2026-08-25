@@ -1476,43 +1476,55 @@ def render(today: _dt.date,
     else:
         total_usd = sum(b["est_usd"] for b in usage)
         total_calls = sum(b["calls"] for b in usage)
+        total_billable = sum(b["billable_tokens"] for b in usage)
         parts.append(
             f'      <div class="meta">{total_calls} calls · '
+            f'{total_billable:,} billable tok · '
             f'~${total_usd:.2f} at list price (estimate)</div>\n')
         for b in usage:
-            toks = (b["input_tokens"] + b["output_tokens"]
-                    + b["cache_creation_input_tokens"]
-                    + b["cache_read_input_tokens"])
             cache_note = ""
             if b["cache_read_input_tokens"]:
-                cache_note = (f' · {b["cache_read_input_tokens"]:,} cached-read')
+                cache_note = f' · {b["cache_read_input_tokens"]:,} cached-read'
             parts.append('      <div class="pipe-row">\n')
             parts.append(f'        <span class="pipe-name">{html.escape(b["pipeline"])}'
                          f' <span class="pipe-when">({html.escape(b["model"])})</span></span>\n')
-            parts.append(f'        <span class="pipe-when">{toks:,} tok'
+            parts.append(f'        <span class="pipe-when">'
+                         f'{b["billable_tokens"]:,} billable'
                          f'{html.escape(cache_note)} · ~${b["est_usd"]:.2f}</span>\n')
             parts.append('      </div>\n')
 
     # Claude Code (this machine, 30 days) — a different meter than the
     # pipelines above: local session transcripts, not the gateway scripts.
     # On a seat plan the $ figure is a list-price estimate, not a bill.
+    #
+    # Billable tokens lead; raw throughput is the secondary line. The raw total
+    # runs ~35x the billable one because every turn re-reads the whole cached
+    # context, so it tracks session length rather than work done — a headline
+    # number in the billions reads as alarming and optimizes nothing.
     if cc_usage:
         parts.append('      <h2 style="margin-top:14px">Claude Code · 30 days (this machine)</h2>\n')
-        cc_toks = (cc_usage["input_tokens"] + cc_usage["output_tokens"]
-                   + cc_usage["cache_creation_input_tokens"]
-                   + cc_usage["cache_read_input_tokens"])
         parts.append(
             f'      <div class="meta">{cc_usage["sessions"]} sessions · '
-            f'{cc_usage["calls"]:,} responses · {cc_toks:,} tok · '
+            f'{cc_usage["calls"]:,} responses · '
+            f'{cc_usage["billable_tokens"]:,} billable tok '
+            f'(input + output + cache writes) · '
             f'~${cc_usage["est_usd"]:,.0f} at list price (estimate; '
             f'seat plans are not billed per token)</div>\n')
+        cc_total = cc_usage["total_tokens"]
+        read_share = (cc_usage["cache_read_input_tokens"] / cc_total
+                      if cc_total else 0.0)
+        cost_share = (cc_usage["cache_read_usd"] / cc_usage["est_usd"]
+                      if cc_usage["est_usd"] else 0.0)
+        parts.append(
+            f'      <div class="meta">context throughput {cc_total:,} tok · '
+            f'{read_share:.0%} of it cache re-reads, priced at 0.1x input '
+            f'({cost_share:.0%} of the estimate)</div>\n')
         for b in cc_usage["by_model"][:4]:
-            btoks = (b["input_tokens"] + b["output_tokens"]
-                     + b["cache_creation_input_tokens"]
-                     + b["cache_read_input_tokens"])
             parts.append('      <div class="pipe-row">\n')
             parts.append(f'        <span class="pipe-name">{html.escape(b["model"])}</span>\n')
-            parts.append(f'        <span class="pipe-when">{btoks:,} tok · '
+            parts.append(f'        <span class="pipe-when">'
+                         f'{b["billable_tokens"]:,} billable · '
+                         f'{b["total_tokens"]:,} tok · '
                          f'~${b["est_usd"]:,.2f}</span>\n')
             parts.append('      </div>\n')
     parts.append('    </div>\n')
