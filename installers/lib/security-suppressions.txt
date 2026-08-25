@@ -61,3 +61,11 @@ semgrep  Templates/Scripts/handoff_blob_pull.py     use-defused-xml   # as above
 # review the diff, commit. It is deliberately NOT done unattended, and no SHA
 # is invented here.
 bandit   Templates/Scripts/whisper_onnx.py          B615   # OPEN FINDING: HF snapshot_download without revision=. Fix = pin per repo, maintainer-reviewed. re-check 2026-09-25
+
+# --- secret value reaching an output sink (local rule, new 2026-08-25) -------
+# Added after an external review asked whether secrets reach logs. Registry
+# rules could not express the question; installers/lib/semgrep-rules/
+# secret-to-sink.yml now does. Two of these are genuine flows that are
+# deliberate; two are taint over-approximation. Any NEW site fails the run.
+semgrep  Templates/Scripts/secret_store.py   secret-value-reaches-output-sink   # DELIBERATE: `secret_store.py get NAME` is an operator CLI whose purpose is emitting the value to stdout; its own usage text warns about shell history. No script invokes it. re-check 2026-09-25
+semgrep  Templates/Scripts/source_mail_pull.py   secret-value-reaches-output-sink   # DELIBERATE + OVER-APPROX: --emit prints an HMAC signature (not the key) for pasting into a device; the other two hits are taint following a (name, value) tuple into a list that keeps only names, and following a call into integer counts. re-check 2026-09-25
