@@ -177,17 +177,34 @@ def get_access_token(config):
     return tok["access_token"]
 
 
-def _graph_get(url, access_token):
-    req = urllib.request.Request(url, headers={
-        "Authorization": "Bearer " + access_token,
-        "Accept": "application/json"})
+def _graph_get(url, access_token, prefer_tz=None):
+    headers = {"Authorization": "Bearer " + access_token,
+               "Accept": "application/json"}
+    if prefer_tz:
+        headers["Prefer"] = 'outlook.timezone="%s"' % prefer_tz
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read())
 
 
-def fetch_events(access_token, day_start_iso, day_end_iso):
+def fetch_events(access_token, day_start_iso, day_end_iso, tz_name=None):
     """calendarView for the window, following pagination. Returns raw Graph
-    event dicts."""
+    event dicts.
+
+    tz_name (an IANA zone, the same one the window was built in) is sent as
+    `Prefer: outlook.timezone` so start/end come back as wall clock in that
+    zone. WITHOUT it Graph answers in UTC, and an all-day event — which has
+    no real clock time — arrives as midnight *labelled UTC*. The transform's
+    to_utc_iso keeps that 00:00Z, and the consumer's local-time conversion
+    then lands the note on the PREVIOUS day (00:00Z on 8/19 -> 8/18 20:00
+    EDT), shifting the filename date and the past-meeting fence with it.
+    With the header, an all-day event is midnight local (04:00Z in EDT),
+    which is what the MCP producer already returns — so both producers feed
+    the transform identical times. Graph accepts IANA names here and echoes
+    the requested zone back in each event's `timeZone` field; tenants that
+    answer with the Windows name instead are covered by the transform's
+    WINDOWS_TZ_MAP.
+    """
     params = urllib.parse.urlencode({
         "startDateTime": day_start_iso,
         "endDateTime": day_end_iso,
@@ -197,7 +214,7 @@ def fetch_events(access_token, day_start_iso, day_end_iso):
     url = GRAPH + "/me/calendarView?" + params
     events = []
     while url:
-        page = _graph_get(url, access_token)
+        page = _graph_get(url, access_token, prefer_tz=tz_name)
         events.extend(page.get("value") or [])
         url = page.get("@odata.nextLink")
     return events
@@ -278,7 +295,8 @@ def main():
 
     access_token = get_access_token(config)
     events = fetch_events(access_token,
-                          day_start.isoformat(), day_end.isoformat())
+                          day_start.isoformat(), day_end.isoformat(),
+                          tz_name=str(tz))
     log("fetched %d event(s) for %s..%s" % (len(events), day.isoformat(),
                                             last_day.isoformat()))
 

@@ -118,7 +118,7 @@ def test_fetch_events_follows_nextlink(monkeypatch: pytest.MonkeyPatch) -> None:
     }
     seen = []
 
-    def fake_get(url, token):
+    def fake_get(url, token, prefer_tz=None):
         seen.append(url)
         return pages[url]
 
@@ -128,6 +128,62 @@ def test_fetch_events_follows_nextlink(monkeypatch: pytest.MonkeyPatch) -> None:
     events = gcf.fetch_events("tok", "2026-08-19T00:00:00", "2026-08-20T00:00:00")
     assert [e["id"] for e in events] == ["1", "2"]
     assert len(seen) == 2
+
+
+# ---------------------------------------------------------------------------
+# Prefer: outlook.timezone — the all-day-event date fence
+# ---------------------------------------------------------------------------
+
+class TestPreferTimezone:
+    """Without the header Graph answers in UTC and an all-day event comes back
+    as 00:00Z, which the consumer converts to 20:00 the PREVIOUS day. These
+    assert the header, not merely that some request went out."""
+
+    def _capture(self, monkeypatch):
+        sent = []
+
+        def fake_urlopen(req, timeout=None):
+            sent.append(req)
+            return io.BytesIO(json.dumps({"value": []}).encode())
+
+        monkeypatch.setattr(gcf.urllib.request, "urlopen", fake_urlopen)
+        return sent
+
+    def test_calendarview_requests_the_window_timezone(self, monkeypatch) -> None:
+        sent = self._capture(monkeypatch)
+        gcf.fetch_events("tok", "2026-08-19T00:00:00-04:00",
+                         "2026-08-20T00:00:00-04:00",
+                         tz_name="America/New_York")
+        assert len(sent) == 1
+        assert sent[0].get_header("Prefer") == 'outlook.timezone="America/New_York"'
+
+    def test_no_prefer_header_when_no_zone_given(self, monkeypatch) -> None:
+        sent = self._capture(monkeypatch)
+        gcf.fetch_events("tok", "2026-08-19T00:00:00", "2026-08-20T00:00:00")
+        assert sent[0].get_header("Prefer") is None
+
+    def test_local_midnight_all_day_keeps_its_date_through_the_transform(self) -> None:
+        """The end-to-end reason the header exists: Graph's reply under the
+        header is local midnight, and that must survive to_utc_iso ->
+        local-time conversion on the SAME calendar day."""
+        import datetime as dt
+        from zoneinfo import ZoneInfo
+        import mcp_meeting_transform as mt
+
+        with_header = mt.to_utc_iso("2026-08-19T00:00:00.0000000",
+                                    "America/New_York")
+        assert with_header == "2026-08-19T04:00:00Z"
+        local = (dt.datetime.strptime(with_header, "%Y-%m-%dT%H:%M:%SZ")
+                 .replace(tzinfo=dt.timezone.utc)
+                 .astimezone(ZoneInfo("America/New_York")))
+        assert local.date() == dt.date(2026, 8, 19)
+
+        # the pre-fix behaviour, kept as the contrast that motivates the header
+        without_header = mt.to_utc_iso("2026-08-19T00:00:00.0000000", "UTC")
+        slipped = (dt.datetime.strptime(without_header, "%Y-%m-%dT%H:%M:%SZ")
+                   .replace(tzinfo=dt.timezone.utc)
+                   .astimezone(ZoneInfo("America/New_York")))
+        assert slipped.date() == dt.date(2026, 8, 18)
 
 
 # ---------------------------------------------------------------------------
