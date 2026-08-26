@@ -1,18 +1,30 @@
-Fetch today's calendar events using the MCP calendar connector: call
-{{SEARCH_TOOL}} with query="*", afterDateTime="today", beforeDateTime="tomorrow",
-order="oldest", limit=25, offset=0 (page through with nextOffset if present, though a
-single day should rarely need it). For each event returned, call {{READ_TOOL}} on its
-URI to get full detail — the list call alone omits attendees, sensitivity, and body.
+Fetch the calendar events in a fixed, pre-computed window using the MCP calendar
+connector: call {{SEARCH_TOOL}} with query="*", afterDateTime="{{AFTER_DATETIME}}",
+beforeDateTime="{{BEFORE_DATETIME}}", order="oldest", limit=25, offset=0 (page
+through with nextOffset if present).
+
+Pass those two datetime strings through EXACTLY as written. Do not substitute
+"today"/"tomorrow" or any other natural-language date, and do not widen or
+narrow the range — the bounds are computed by the caller and the upper bound is
+already exclusive at midnight.
+
+The window deliberately spans more than one day. Include EVERY event the search
+returns; do not drop events that fall on a later date than the first day of the
+window. For each event returned, call {{READ_TOOL}} on its URI to get full
+detail — the list call alone omits attendees, sensitivity, and body.
 
 Assemble a JSON object with this exact shape:
 {
   "user": {"display_name": "{{DISPLAY_NAME}}", "email": "{{EMAIL}}", "tenant": "{{TENANT}}", "timezone": "{{TIMEZONE}}"},
-  "week": {"start": "<today's date, YYYY-MM-DD, {{TIMEZONE}}>", "end": "<same date>"},
+  "week": {"start": "{{WEEK_START}}", "end": "{{WEEK_END}}"},
   "events": [ <one {{READ_TOOL}}-shaped object per event: id, subject, bodyPreview,
     organizer{name,address}, attendees[{name,address,type,responseStatus}],
     start/end{dateTime,timeZone}, location{displayName}, isAllDay, isCancelled,
     sensitivity, categories, createdDateTime, lastModifiedDateTime, recurrence> ]
 }
+
+Copy the "week" values verbatim from above — they describe the window that was
+requested, and must not be recomputed from the events you happened to get back.
 
 Write that JSON to a temp file, then run:
 python3 {{TRANSFORM_SCRIPT}} \
@@ -21,7 +33,7 @@ python3 {{TRANSFORM_SCRIPT}} \
 
 Do NOT run meeting_prepopulate.py yourself — the consumer is scheduled
 separately and picks up the dropped handoff trio from {{OUT_DIR}} on its own.
-If the calendar search returns zero events for today, still run the transform
+If the calendar search returns zero events, still run the transform
 with an empty events array (harmless) rather than skipping.
 
 Report the transform script's JSON output (meetingCount, contactCount, etc.)

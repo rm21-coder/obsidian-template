@@ -116,6 +116,13 @@ config.update({
 # docs/Meeting-Handoff-MCP-Producer.md, "Skipping the LLM entirely").
 # Preserve an existing explicit choice on re-runs.
 config.setdefault("producer", "claude")
+# Days of lookahead beyond today: 0 = today only, 1 = today + tomorrow.
+# Both producers read this, so the window does not depend on which ran.
+# Preserve an existing explicit choice on re-runs.
+config.setdefault("lookahead_days", 1)
+# Count that lookahead in weekdays, so Friday reaches Monday rather than
+# an empty Saturday. false = literal calendar days.
+config.setdefault("lookahead_skips_weekends", True)
 path.write_text(json.dumps(config, indent=2) + "\n")
 PYEOF
 ok "  wrote: $CONFIG_FILE"

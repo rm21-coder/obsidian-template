@@ -71,6 +71,9 @@ if config_path.exists():
     except json.JSONDecodeError:
         config = {}
 config.setdefault("treat_start_as_utc", False)
+# Subject prefixes marking an invite as informational (a placeholder to be
+# aware of, not a meeting to take notes in). [] disables the gate.
+config.setdefault("skip_subject_prefixes", ["fyi"])
 if emails:
     existing = set(config.get("admin_emails", []))
     config["admin_emails"] = sorted(existing | set(emails))

@@ -95,6 +95,7 @@ Optional JSON config at `<scripts>/.config/meeting_prepopulate.json`:
 ```json
 {
   "admin_emails": ["assistant@example.com"],
+  "skip_subject_prefixes": ["fyi"],
   "treat_start_as_utc": false
 }
 ```
@@ -106,6 +107,12 @@ Optional JSON config at `<scripts>/.config/meeting_prepopulate.json`:
   don't have to discover the need for it the hard way — any custom producer
   you build should read the same file and drop these emails at the source
   too, not just rely on the consumer's demotion.
+- `skip_subject_prefixes` — subject prefixes that mark an invite as
+  informational: a calendar placeholder to be aware of, not a meeting to take
+  notes in. Matched in the `PREFIX:` / `PREFIX -` shape people actually type,
+  so `FYI: Budget Review` is gated and `FYI Roundtable` is not. Default:
+  `["fyi"]`. Set to `[]` to disable the gate and let every invite produce a
+  note.
 - `treat_start_as_utc` — a workaround for a *specific* producer bug where local
   times are emitted without an offset. Leave `false` unless your producer is
   known to do this; enabling it against a correct producer shifts every timed
@@ -195,6 +202,21 @@ every attendee email you want resolved to a rich People note.
 - **Classification.** 2–9 counted attendees → a group meeting (matched against
   `Groups/` rosters by subject); 1 → individual; 10+ → broadcast. Resources,
   optional attendees, decliners, and `admin_emails` are not counted.
+- **Optional attendees on group-mailbox invites.** The rule above has one
+  exception, and it exists because ignoring optional attendees outright
+  produces a specific wrong answer. When a departmental or shared mailbox
+  sends the invite, the convention inverts: the coordinator is booked
+  `required` and the whole distribution — you included — is `optional`.
+  Counting required-only then leaves exactly **one** participant, so a
+  nine-person announcement is filed as a 1:1 with whoever happens to hold the
+  required slot, every time it recurs. On these invites (and only these)
+  non-declined optional attendees are counted. Because this is a property of
+  how the invite was built, no change of producer or connector affects it —
+  which is what makes it easy to misdiagnose as an integration bug.
+- **Two filters, one decision.** `classify()` and `build_people_wikilinks()`
+  must agree on whether optional attendees count; they are passed the same
+  value. Letting them drift yields a note whose `type:` says one thing and
+  whose `people:` list says another.
 - **Reschedule / cancel.** Re-emitting the same `uid` at a new time moves the
   note (leaving a redirect stub so old wikilinks resolve) and drops a banner. A
   cancelled or declined meeting removes the generated note.

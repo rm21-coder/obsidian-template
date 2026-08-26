@@ -173,6 +173,18 @@ def build_handoff(events: list[dict], user: dict, week: dict,
         attendees = []
         n_req_human = n_optional = n_declined = n_resources = n_external = 0
 
+        # Decided before the attendee loop because the counters below need it.
+        # On a departmental-mailbox blast the coordinator is the lone
+        # `required` attendee and everyone else, the user included, is
+        # `optional` -- so a required-only count returns 1 and the event is
+        # hinted as a 1:1 with the coordinator. Counting non-declined optional
+        # attendees on these invites (and only these) keeps the hint honest.
+        # The consumer applies the identical rule in classify(); the two must
+        # agree or the note's `type:` and `people:` disagree.
+        org_pre = ev.get("organizer") or {}
+        org_is_group = is_group_mailbox(org_pre.get("name") or "",
+                                        lc(org_pre.get("address")))
+
         for a in raw_attendees:
             email = lc(a.get("address"))
             name = a.get("name") or ""
@@ -202,7 +214,8 @@ def build_handoff(events: list[dict], user: dict, week: dict,
                 n_declined += 1
             if ext:
                 n_external += 1
-            if not resource and not declined and not optional and email != user_email:
+            counts_as_participant = not optional or org_is_group
+            if not resource and not declined and counts_as_participant and email != user_email:
                 n_req_human += 1
             attendees.append({
                 "display_name": name or None, "email": email,
@@ -281,6 +294,7 @@ def build_handoff(events: list[dict], user: dict, week: dict,
             "organizer": organizer, "my_response_status": my_resp, "attendees": attendees,
             "attendee_counts": {
                 "required_non_declined_non_resource": n_req_human,
+                "optional_counted_as_required": org_is_group,
                 "optional": n_optional, "declined": n_declined,
                 "resources": n_resources, "external": n_external,
             },
@@ -292,7 +306,8 @@ def build_handoff(events: list[dict], user: dict, week: dict,
             "created_at": ev.get("createdDateTime"), "last_modified_at": ev.get("lastModifiedDateTime"),
             "producer_classification_hint": {
                 "class": cls,
-                "rationale": f"{n_req_human} required non-resource human attendees; "
+                "rationale": f"{n_req_human} counted non-resource human attendees"
+                             f"{' (group-mailbox invite: optional counted)' if org_is_group else ' (required only)'}; "
                              f"recurring={recurrence is not None}",
             },
         })

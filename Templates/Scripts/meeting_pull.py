@@ -25,6 +25,7 @@ point this at a non-Microsoft connector:
 """
 
 import argparse
+import datetime as _dt
 import json
 import os
 import shutil
@@ -43,6 +44,18 @@ DEFAULT_SEARCH_TOOL = "outlook_calendar_search"
 DEFAULT_READ_TOOL = "read_resource"
 
 REQUIRED_KEYS = ("display_name", "email", "tenant", "timezone")
+
+# Days of lookahead beyond today. 1 == today + the next working day, which is
+# what the morning refresh wants: tomorrow's notes land in the vault a day
+# early so there is somewhere to put prep. Override per machine in
+# .config/meeting_pull.json ("lookahead_days"); 0 restores today-only.
+DEFAULT_LOOKAHEAD_DAYS = 1
+
+# Count lookahead in weekdays rather than calendar days, so Friday reaches
+# Monday instead of stopping in an empty Saturday. Off ("lookahead_skips_
+# weekends": false) makes the lookahead literal calendar days again -- which
+# only makes sense for a calendar that is genuinely used at weekends.
+DEFAULT_SKIP_WEEKENDS = True
 
 
 def log(message):
@@ -113,6 +126,89 @@ def tenant_domains(config, path):
     return domains
 
 
+def last_day_of_window(first, lookahead, skip_weekends):
+    """Return the inclusive last day of a window starting on `first`.
+
+    With skip_weekends the lookahead counts weekdays, so the day after Friday
+    is Monday. The *range* stays contiguous -- Saturday and Sunday remain
+    inside it -- because the calendar is fetched as a single span. That costs
+    nothing in practice: weekend entries are nearly always all-day PTO, which
+    the consumer already drops as solo blocks.
+    """
+    if lookahead <= 0:
+        return first
+    if not skip_weekends:
+        return first + _dt.timedelta(days=lookahead)
+    day = first
+    remaining = lookahead
+    while remaining > 0:
+        day += _dt.timedelta(days=1)
+        if day.weekday() < 5:          # Mon-Fri
+            remaining -= 1
+    return day
+
+
+def window_days(config, first=None):
+    """Resolve the pull window to (first_day, last_day), both inclusive dates.
+
+    Shared by BOTH producers -- meeting_pull.py renders these into the prompt,
+    graph_calendar_fetch.py turns them into a Graph calendarView range -- so
+    the window cannot come to depend on which producer happened to run.
+
+    Raises ValueError rather than exiting, so each caller can report the
+    problem in its own voice.
+    """
+    raw = config.get("lookahead_days", DEFAULT_LOOKAHEAD_DAYS)
+    try:
+        lookahead = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError("config 'lookahead_days' must be an integer, not %r" % (raw,))
+    if lookahead < 0:
+        raise ValueError("config 'lookahead_days' must be >= 0, not %d" % lookahead)
+
+    skip_weekends = config.get("lookahead_skips_weekends", DEFAULT_SKIP_WEEKENDS)
+    if not isinstance(skip_weekends, bool):
+        raise ValueError("config 'lookahead_skips_weekends' must be true or false, not %r"
+                         % (skip_weekends,))
+
+    if first is None:
+        tzname = config.get("timezone") or "UTC"
+        try:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(tzname)
+        except Exception:
+            raise ValueError("config timezone %r is not a valid IANA zone" % tzname)
+        first = _dt.datetime.now(tz).date()
+
+    return first, last_day_of_window(first, lookahead, skip_weekends)
+
+
+def window_bounds(config):
+    """Resolve the pull window to explicit ISO bounds.
+
+    Returns (after_iso, before_iso, week_start, week_end).
+
+    Computed here rather than left to the producer session, because the
+    connector resolves natural-language dates on its own terms: an upper
+    bound of "tomorrow" is read as the END of tomorrow. The old
+    today/tomorrow pair therefore asked for two days, while the same prompt
+    told the session to stamp a single-day `week` -- so whether tomorrow
+    survived depended on whether the session noticed the contradiction and
+    trimmed. Observed: 3 of 17 runs kept it. Explicit bounds make the
+    window a config decision instead of a coin flip.
+
+    The upper bound is exclusive at midnight, verified against the
+    connector: beforeDateTime=2026-08-27T00:00:00 returns nothing on 08-27.
+    """
+    try:
+        first, last = window_days(config)
+    except ValueError as exc:
+        die(str(exc))
+    after = _dt.datetime.combine(first, _dt.time.min)
+    before = _dt.datetime.combine(last + _dt.timedelta(days=1), _dt.time.min)
+    return after.isoformat(), before.isoformat(), first.isoformat(), last.isoformat()
+
+
 def render_prompt(template_path, config, config_path, out_dir):
     """Substitute the template's {{TOKEN}} placeholders.
 
@@ -127,7 +223,12 @@ def render_prompt(template_path, config, config_path, out_dir):
 
     search_tool = config.get("search_tool") or DEFAULT_SEARCH_TOOL
     read_tool = config.get("read_tool") or DEFAULT_READ_TOOL
+    after_iso, before_iso, week_start, week_end = window_bounds(config)
     tokens = {
+        "AFTER_DATETIME": after_iso,
+        "BEFORE_DATETIME": before_iso,
+        "WEEK_START": week_start,
+        "WEEK_END": week_end,
         "DISPLAY_NAME": config["display_name"],
         "EMAIL": config["email"],
         "TENANT": config["tenant"],
