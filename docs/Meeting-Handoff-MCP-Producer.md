@@ -108,6 +108,57 @@ python3 Templates/Scripts/meeting_pull.py --dry-run   # render the prompt, call 
 python3 Templates/Scripts/meeting_pull.py             # real run
 ```
 
+### The window is computed by the caller, not described to the producer
+
+`meeting_pull.py` resolves the date window to explicit ISO bounds and renders
+them into the prompt as `{{AFTER_DATETIME}}` / `{{BEFORE_DATETIME}}`. The
+upper bound is exclusive at midnight, so a window ending `2026-08-28T00:00:00`
+covers through the end of 08-27.
+
+It did not always work that way, and the failure is worth knowing about if you
+adapt this prompt to another connector. The template used to ask for
+`afterDateTime="today", beforeDateTime="tomorrow"` and let the connector parse
+the words. Two things then went wrong at once:
+
+- The connector reads an upper bound of `"tomorrow"` as the **end** of
+  tomorrow, so the call actually requested two days.
+- The same prompt told the session to stamp `week: {start: today, end: today}`.
+
+The session was therefore handed a contradiction — two days of events, one day
+of declared window — and resolved it however it liked that morning: sometimes
+trimming tomorrow away, sometimes writing a handoff whose `week` disagreed with
+its own `events`. Nothing downstream enforces `week` (the transform copies it
+through verbatim; the consumer ignores it), so the vault got one day or two on
+no discernible schedule. Three of seventeen consecutive runs kept the second
+day.
+
+Set the span with `lookahead_days` in `.config/meeting_pull.json`:
+
+| value | window |
+|-------|--------|
+| `0`   | today only |
+| `1`   | today + the next working day (default) |
+| `n`   | today + `n` working days |
+
+The lookahead is counted in **weekdays**, so Friday reaches Monday rather than
+stopping in an empty Saturday:
+
+| run day | last day covered |
+|---------|------------------|
+| Mon–Thu | the next day |
+| Fri     | Monday |
+
+The requested range stays contiguous — a Friday run asks for Fri–Mon inclusive,
+so Saturday and Sunday are inside it. That is deliberate and costs nothing:
+weekend entries are nearly always all-day PTO, which the consumer already drops
+as solo blocks, and a genuine weekend commitment is one you would want the note
+for anyway. Set `"lookahead_skips_weekends": false` to count literal calendar
+days instead.
+
+Both producers resolve the window through the same `window_days()` in
+`meeting_pull.py` — `graph_calendar_fetch.py` imports it rather than
+recomputing — so the vault does not depend on which one ran.
+
 Producer and consumer stay decoupled through the drop folder: the runner never
 calls `meeting_prepopulate.py`. Either half can be rescheduled, replaced, or
 run by hand without touching the other.

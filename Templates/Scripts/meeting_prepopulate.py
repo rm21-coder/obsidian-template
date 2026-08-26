@@ -215,8 +215,42 @@ def is_group_mailbox(email: str, display: str | None,
     return False
 
 
+def organizer_is_group_mailbox(m: dict) -> bool:
+    """True when the invite came from a shared/departmental mailbox rather
+    than from a person. The producer already decides this (it needs the same
+    answer to attribute an organizer), so trust its flag and fall back to
+    the local heuristic only when the field is absent."""
+    org = m.get('organizer') or {}
+    if org.get('is_group_mailbox'):
+        return True
+    return is_group_mailbox(org.get('email') or '', org.get('display_name'))
+
+
+def count_optional_as_participants(m: dict) -> bool:
+    """Whether optional attendees count toward this meeting's participant set.
+
+    Normally they must not: an optional attendee is a courtesy copy, and
+    counting them would turn every 1:1 into a crowd (Pre-Pop Spec §5.5).
+
+    A departmental-mailbox blast inverts that convention. The coordinator is
+    booked `required` and the entire distribution — the user included — is
+    `optional`. Counting required-only there leaves exactly one participant,
+    so the invite is filed as a 1:1 with whoever holds the required slot.
+Seen in the wild on a recurring
+    announcement from a finance-office mailbox: 1 required + 7-8 optional,
+    filed as a 1:1 with the lone required attendee on every occurrence for
+    months.
+
+    This is a property of the invite, not of any one integration path, which
+    is why it survived every producer the pipeline has had.
+    """
+    return organizer_is_group_mailbox(m)
+
+
 def should_skip_meeting(m: dict, now: dt.datetime,
-                        tz: ZoneInfo, treat_as_utc: bool) -> str | None:
+                        tz: ZoneInfo, treat_as_utc: bool,
+                        skip_subject_re: 're.Pattern | None' = None
+                        ) -> str | None:
     """Apply §5.1 skip rules. Return reason or None."""
     if m.get('my_response_status') == 'declined':
         return 'declined'
@@ -224,6 +258,8 @@ def should_skip_meeting(m: dict, now: dt.datetime,
         return 'cancelled'
     if m.get('is_private_appointment'):
         return 'private'
+    if skip_subject_re and skip_subject_re.match(m.get('subject') or ''):
+        return 'informational-subject'
     hint = (m.get('producer_classification_hint') or {}).get('class')
     if hint == 'solo':
         return 'solo-block'
@@ -252,14 +288,18 @@ def classify(m: dict, user_email: str, groups_idx: 'GroupsIndex',
 
     Admin-assistant emails (config-driven) are treated as effectively-
     optional and excluded from n_others.
+
+    Optional attendees are excluded too, EXCEPT on group-mailbox invites --
+    see count_optional_as_participants() for why that exception exists.
     """
+    include_optional = count_optional_as_participants(m)
     others_emails: set[str] = set()
     for a in m.get('attendees') or []:
         if a.get('is_resource'):
             continue
         if a.get('response_status') == 'declined':
             continue
-        if a.get('is_optional'):
+        if a.get('is_optional') and not include_optional:
             continue
         if is_group_mailbox(a.get('email') or '', a.get('display_name')):
             continue
@@ -925,6 +965,31 @@ def load_admin_emails() -> set[str]:
     return {e.lower() for e in (load_config().get('admin_emails') or [])}
 
 
+DEFAULT_SKIP_SUBJECT_PREFIXES = ('fyi',)
+
+
+def load_skip_subject_re() -> 're.Pattern | None':
+    """Compile the informational-subject gate, or None if disabled.
+
+    Some invites are calendar placeholders to be aware of rather than
+    meetings to take notes in; the sender flags them in the subject line.
+    Matching reuses the `PREFIX:` / `PREFIX -` shape Outlook users actually
+    type, so "FYI: Budget Review" is gated and "FYI Roundtable" is not.
+
+    Config shape: {"skip_subject_prefixes": ["fyi", "save the date"]}
+    Omit the key for the default (["fyi"]); set it to [] to disable.
+    """
+    prefixes = load_config().get('skip_subject_prefixes')
+    if prefixes is None:
+        prefixes = list(DEFAULT_SKIP_SUBJECT_PREFIXES)
+    cleaned = [str(p).strip().lower() for p in prefixes if str(p).strip()]
+    if not cleaned:
+        return None
+    return re.compile(
+        r'^\s*(%s)\s*[:\-]\s*' % '|'.join(re.escape(p) for p in cleaned),
+        re.I)
+
+
 def load_treat_start_as_utc() -> bool:
     """Workaround for a known producer bug (handoff contract pre-v0.5):
     the producer sends the UTC instant value in the `start` / `end` fields
@@ -992,10 +1057,16 @@ def build_people_wikilinks(attendees: list[dict],
                            counters: Counter,
                            user_email: str,
                            admin_emails: set[str],
+                           include_optional: bool = False,
                            ) -> list[str]:
     """Return list of required-attendee wikilinks for the meeting's
     `people:` frontmatter list. Optional attendees and configured admin-
-    assistant emails are excluded entirely (Pre-Pop Spec §5.5)."""
+    assistant emails are excluded entirely (Pre-Pop Spec §5.5).
+
+    `include_optional` must be passed the same value classify() used, or the
+    note's `type:` and its `people:` list disagree -- an Ad-hoc meeting
+    listing a single person is exactly the bug this pair of call sites
+    caused before the two filters were kept in step."""
     required: list[str] = []
     seen: set[str] = set()
     for a in attendees:
@@ -1003,7 +1074,7 @@ def build_people_wikilinks(attendees: list[dict],
             continue
         if a.get('response_status') == 'declined':
             continue
-        if a.get('is_optional'):
+        if a.get('is_optional') and not include_optional:
             continue
         email = (a.get('email') or '').lower()
         if not email or email == user_email:
@@ -1297,6 +1368,10 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
     admin_emails = load_admin_emails()
     if admin_emails:
         log.info('Admin-demote list: %s', sorted(admin_emails))
+    skip_subject_re = load_skip_subject_re()
+    if skip_subject_re:
+        log.info('Informational-subject gate active: %s',
+                 skip_subject_re.pattern)
     treat_as_utc = load_treat_start_as_utc()
     if treat_as_utc:
         log.info('treat_start_as_utc=True — reinterpreting non-all-day '
@@ -1365,7 +1440,8 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                     continue
 
             # --- New meeting (or recreate after un-cancel / vanished note) ---
-            skip = should_skip_meeting(m, now, tz, treat_as_utc)
+            skip = should_skip_meeting(m, now, tz, treat_as_utc,
+                                       skip_subject_re)
             if skip:
                 counters[f'skipped-{skip}'] += 1
                 log.info('SKIP (%s): uid=%s', skip, uid[:24])
@@ -1384,7 +1460,8 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
             # optional and admin-demoted attendees excluded)
             required = build_people_wikilinks(
                 m.get('attendees') or [], contact_by_email, people_idx,
-                now_iso, dry_run, counters, user_email, admin_emails)
+                now_iso, dry_run, counters, user_email, admin_emails,
+                count_optional_as_participants(m))
 
             # Meeting file path
             path = meeting_filename(start, MEETINGS_DIR)

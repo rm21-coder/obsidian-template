@@ -232,7 +232,8 @@ def main():
     parser.add_argument("--out-dir", default=None,
                         help="drop folder for the handoff trio (default: config out_dir)")
     parser.add_argument("--date", default=None,
-                        help="YYYY-MM-DD to fetch (default: today in the config timezone)")
+                        help="YYYY-MM-DD of the FIRST day to fetch (default: today in the "
+                             "config timezone); the window extends lookahead_days beyond it")
     parser.add_argument("--auth", action="store_true",
                         help="interactive one-time device-code sign-in; stores the refresh token")
     parser.add_argument("--dry-run", action="store_true",
@@ -257,20 +258,36 @@ def main():
         day = _dt.date.fromisoformat(args.date)
     else:
         day = _dt.datetime.now(tz).date()
+
+    # The window comes from meeting_pull.window_days() rather than being
+    # recomputed here: both producers feed the same transform and the same
+    # consumer, so any difference would make the vault's contents depend on
+    # which producer ran. meeting_pull imports cleanly (module level is
+    # constants and defs only).
+    if str(SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+    from meeting_pull import window_days
+    try:
+        day, last_day = window_days(config, first=day)
+    except ValueError as exc:
+        die(str(exc))
+
     day_start = _dt.datetime.combine(day, _dt.time.min, tzinfo=tz)
-    day_end = day_start + _dt.timedelta(days=1)
+    day_end = _dt.datetime.combine(last_day + _dt.timedelta(days=1),
+                                   _dt.time.min, tzinfo=tz)
 
     access_token = get_access_token(config)
     events = fetch_events(access_token,
                           day_start.isoformat(), day_end.isoformat())
-    log("fetched %d event(s) for %s" % (len(events), day.isoformat()))
+    log("fetched %d event(s) for %s..%s" % (len(events), day.isoformat(),
+                                            last_day.isoformat()))
 
     raw = {
         "user": {"display_name": config.get("display_name"),
                  "email": config.get("email"),
                  "tenant": config.get("tenant"),
                  "timezone": config.get("timezone")},
-        "week": {"start": day.isoformat(), "end": day.isoformat()},
+        "week": {"start": day.isoformat(), "end": last_day.isoformat()},
         "events": [flatten_event(e) for e in events],
     }
 
