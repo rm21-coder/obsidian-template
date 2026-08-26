@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import plistlib
+import re
 import py_compile
 import shutil
 import subprocess
@@ -735,3 +736,91 @@ class TestInstallerKeychainWrites:
             "-T pre-authorizes /usr/bin/security on the new item, which is "
             "what lets launchd jobs read it later without their own consent "
             "prompt")
+
+
+# ---------------------------------------------------------------------------
+# Install-profile parity between the two installers.
+#
+# The same installers/profiles/<name>.env file is handed to a macOS colleague
+# and a Windows one, so a key that only one installer honours is a silent
+# half-configured machine rather than an error: the profile loads, the run
+# reports success, and whatever that key turned on is simply missing. The
+# macOS side is the reference (install.sh sources the file and the components
+# read it), so this asserts the Windows side keeps up with what the profile
+# documentation promises.
+#
+# Deliberately driven off installers/profiles/README.md rather than a list
+# kept here: the README is the contract a colleague reads, so a key that gets
+# documented without being implemented is exactly the drift worth failing on.
+# ---------------------------------------------------------------------------
+
+class TestInstallProfileParity:
+
+    @pytest.fixture(scope="class")
+    def repo_root(self, scripts_dir: Path) -> Path:
+        return scripts_dir.parent.parent
+
+    @pytest.fixture(scope="class")
+    def windows_sources(self, scripts_dir: Path) -> str:
+        win = scripts_dir / "windows"
+        return "\n".join(
+            f.read_text(encoding="utf-8")
+            for f in sorted(win.glob("*.ps1")))
+
+    @pytest.fixture(scope="class")
+    def documented_keys(self, repo_root: Path) -> list[str]:
+        readme = repo_root / "installers" / "profiles" / "README.md"
+        assert readme.is_file(), f"profile README not found at {readme}"
+        # Markdown table rows: | `KEY` | meaning |
+        keys = re.findall(r"^\|\s*`([A-Z_][A-Z0-9_]*)`\s*\|",
+                          readme.read_text(encoding="utf-8"), re.M)
+        assert keys, "no profile keys parsed out of the README table"
+        return sorted(set(keys))
+
+    def test_windows_installer_honours_every_documented_key(
+            self, documented_keys: list[str], windows_sources: str) -> None:
+        """A documented key must be reachable from the Windows installer.
+
+        The helpers take the name with the PROFILE_ prefix stripped
+        (Get-ProfileValue $prof 'EMAIL'), so either spelling counts as
+        handled. 'Handled' includes deliberately reporting a key as
+        macOS-only -- saying so is fine, silently dropping it is not.
+        """
+        missing = []
+        for key in documented_keys:
+            bare = key[len("PROFILE_"):] if key.startswith("PROFILE_") else key
+            if key in windows_sources:
+                continue
+            if f"'{bare}'" in windows_sources:
+                continue
+            missing.append(key)
+        assert not missing, (
+            "installers/profiles/README.md documents profile keys the Windows "
+            "installer never reads, so a profile carrying them half-configures "
+            "a Windows machine and reports success: "
+            f"{missing}. Handle them in install.ps1 (or say explicitly that "
+            "they are macOS-only, the way PROFILE_DASHBOARD_ACTIONS does).")
+
+    def test_windows_never_executes_a_profile(self, windows_sources: str) -> None:
+        """The Windows side parses a profile as data. install.sh sources it, so
+        a profile is shell code at the installer's trust level there; that is
+        the platform's convention and documented as such. Nothing should quietly
+        introduce the same property on Windows, where a profile is currently
+        safe to accept from a colleague."""
+        for danger in ("Invoke-Expression", "iex "):
+            assert danger not in windows_sources, (
+                f"{danger} appeared in the Windows installer layer; a profile "
+                "must never be evaluated, only parsed")
+
+    def test_profile_parameter_does_not_shadow_the_automatic_variable(
+            self, scripts_dir: Path) -> None:
+        """PowerShell has an automatic $PROFILE. A parameter literally named
+        Profile rebinds it for the whole script scope, which surfaces later as
+        an unrelated bug in anything dot-sourced from here -- so the switch is
+        exposed as an alias over a differently-named variable."""
+        src = (scripts_dir / "windows" / "install.ps1").read_text(encoding="utf-8")
+        assert "[Alias('Profile')]" in src, (
+            "install.ps1 no longer exposes -Profile as an alias")
+        assert not re.search(r"^\s*\[[^\]]*\]\$Profile\s*,?\s*$", src, re.M), (
+            "a parameter named $Profile shadows PowerShell's automatic "
+            "$PROFILE variable; keep the alias over $InstallProfile")

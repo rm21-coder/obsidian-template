@@ -46,15 +46,54 @@
                        passed. Set this for unattended installs; a normal
                        console run still offers RAG interactively (default
                        answer: no).
+.PARAMETER InstallProfile
+                       Passed as -Profile (its alias). Pre-answer the prompts
+                       from an install profile -- the
+                       same installers\profiles\<name>.env files the macOS
+                       installer takes, so one profile serves both platforms.
+                       A bare name resolves to installers\profiles\<name>.env;
+                       a path (or anything ending .env) is taken as a file, so
+                       a profile handed to you out-of-band works without being
+                       copied into the repo. A profile carries where Claude
+                       calls go, which opt-in jobs to turn on, and the
+                       tenant-specific answers those jobs need -- never a key.
+                       With -NonInteractive the profile IS the consent for the
+                       opt-in jobs, which is the only way an unattended run
+                       installs them. Read a profile before running it.
+.PARAMETER ListProfiles  Print the available profiles and exit.
+.PARAMETER Force       Let a profile overwrite a value already present in
+                       %USERPROFILE%\dev\secrets\.env. Without this an
+                       existing non-empty value is left alone and reported
+                       (matching the macOS installer's --force).
 #>
 [CmdletBinding()] param(
     [switch]$SkipTasks,
     [switch]$WithRAG,
     [switch]$SkipAudit,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    # Exposed as -Profile (the alias) but stored in $InstallProfile: a
+    # parameter literally named Profile would shadow PowerShell's automatic
+    # $PROFILE variable for the whole script scope, which is the kind of
+    # action-at-a-distance that surfaces as an unrelated bug much later.
+    [Alias('Profile')][string]$InstallProfile,
+    [switch]$ListProfiles,
+    [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\common.ps1"
+
+if ($ListProfiles) { Show-InstallProfiles; exit 0 }
+
+# Loaded before any step reads an answer out of it. Parsed as data, never
+# executed -- see the profile section of common.ps1 for why that differs from
+# the macOS installer, which sources the same file as shell code.
+$prof = $null
+if ($InstallProfile) {
+    Write-Host '== 01 install profile =='
+    $prof = Import-InstallProfile -Spec $InstallProfile
+    $profGateway = Get-ProfileRaw $prof 'LLM_BASE_URL'
+    if ($profGateway) { Write-Host "    Claude calls route through: $profGateway" }
+}
 
 # Idempotent re-runs (and step 06 below) check for winget-installed tools via
 # Get-Command in this same process -- refresh PATH first so a prior run's
@@ -221,6 +260,41 @@ if (-not (Test-Path $secrets)) {
     Write-Host "  created stub $secrets - fill in your keys."
 } else { Write-Host "  secrets present: $secrets" }
 
+# A profile carries the gateway endpoint and the NAME of its key. Neither is a
+# credential, and the key itself appears in neither the profile nor .env -- it
+# goes into DPAPI via secret_store.py (the command is printed at the end of
+# this run). Both values are PERSISTED to .env rather than left in this
+# process's environment because the scheduled tasks start from a bare
+# environment: a gateway that existed only here would work now and quietly
+# fall back to stock Anthropic auth at 03:00. Mirrors 20-secrets.sh.
+$gatewayKeyName = ''
+$gatewayHelpUrl = ''
+if ($prof) {
+    $gwUrl = Get-ProfileRaw $prof 'LLM_BASE_URL'
+    if ($gwUrl) {
+        $gatewayKeyName = Get-ProfileRaw $prof 'LLM_API_KEY_NAME' 'ANTHROPIC_API_KEY'
+        # Where a colleague requests a key, if the profile says. Not persisted:
+        # it is guidance for the human running this, not config any script
+        # reads. Falls back to the endpoint itself, as the macOS prompt does.
+        $gatewayHelpUrl = Get-ProfileRaw $prof 'LLM_GATEWAY_HELP_URL' $gwUrl
+        Write-Host "  AI gateway endpoint: $gwUrl"
+        Set-EnvValue -Key 'LLM_BASE_URL'     -Value $gwUrl          -Path $secrets -Force:$Force
+        Set-EnvValue -Key 'LLM_API_KEY_NAME' -Value $gatewayKeyName -Path $secrets -Force:$Force
+        # Only the ones the profile actually set; otherwise the scripts' own
+        # defaults win. A gateway that exposes model ALIASES rather than dated
+        # Anthropic ids needs the alias to reach the SCHEDULED runs too, not
+        # just a manual one -- which is the whole reason these land in .env.
+        foreach ($opt in @('TAGGER_MODEL', 'TAGGER_PROMPT_CACHE',
+                           'CLASSIFIER_MODEL', 'CLASSIFIER_PROMPT_CACHE',
+                           'CLASSIFIER_ORG_CONTEXT', 'YOUTUBE_MODEL')) {
+            $ov = Get-ProfileRaw $prof $opt
+            if ($ov) { Set-EnvValue -Key $opt -Value $ov -Path $secrets -Force:$Force }
+        }
+    } else {
+        Write-Host '  profile sets no gateway; stock api.anthropic.com auth applies'
+    }
+}
+
 Write-Host '== 30 plugins =='
 # Fetch the community plugins listed in .obsidian\community-plugins.json,
 # each verified against its pinned tag + SHA256 in installers\plugin-pins.json.
@@ -332,9 +406,154 @@ if ($doRAG) {
     Write-Host '  Optional local RAG. Add later:  install.ps1 -WithRAG   (or run setup-rag.ps1)'
 }
 
+# ---- 52/54 meeting pipeline (opt-in; a profile is what turns it on) --------
+# The two halves of meeting pre-population. On Windows the CONSUMER
+# (meeting-prepopulate) already ships registered and enabled, so this step's
+# job is the config both halves read plus enabling the PRODUCER, which ships
+# disabled because it needs a Claude CLI and an approved MCP calendar
+# connector -- things an installer cannot provision. Config shapes are the
+# macOS components' shapes verbatim (installers\components\5{2,4}-*.sh);
+# meeting_pull.py and meeting_prepopulate.py are the same files on both
+# platforms and read the same two JSON files.
+$enableMeetingPull = $false
+if ($prof) {
+    Write-Host '== 52/54 meeting pipeline (profile) =='
+    $configDir  = Join-Path $scriptsDir '.config'
+    $wantPull   = Get-ProfileFlag $prof 'MEETING_PULL'
+    $wantPrepop = Get-ProfileFlag $prof 'MEETING_PREPOPULATE'
+
+    if ($wantPrepop -eq $true -or $wantPull -eq $true) {
+        # Assistant/EA exclusion: any real calendar eventually hands you a 1:1
+        # your EA booked, where counting them as a second participant makes it
+        # classify as a group meeting.
+        $adminCsv = Read-Answer -Question '  Assistant/EA email(s) who schedule on your behalf (comma-separated, blank for none)' `
+                                -Default (Get-ProfileValue $prof 'ADMIN_EMAILS') -NoPrompt:$NonInteractive
+        $admins = @($adminCsv -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $prepopPath = Join-Path $configDir 'meeting_prepopulate.json'
+        $prepopSet = @{}
+        if ($admins.Count -gt 0) { $prepopSet['admin_emails'] = [string[]]$admins }
+        Merge-JsonConfig -Path $prepopPath -Set $prepopSet -Default @{
+            treat_start_as_utc    = $false
+            skip_subject_prefixes = [string[]]@('fyi')
+            admin_emails          = [string[]]@()
+        } | Out-Null
+        Write-Host "  wrote: $prepopPath"
+        if ($admins.Count -eq 0) {
+            Write-Host "  no assistant/EA email(s) given - add them later to $prepopPath if needed"
+        }
+    }
+
+    if ($wantPull -ne $true) {
+        Write-Host '  producer (meeting-pull) not requested by this profile; left disabled'
+    } else {
+        # A user-level install, so a missing CLI on a fresh machine is normal
+        # and worth a warning rather than a failure: the config is still worth
+        # writing now, ready for the CLI to arrive.
+        if (-not (Get-Command claude -ErrorAction SilentlyContinue)) {
+            Write-Warning '  Claude CLI not found on PATH'
+            Write-Host   '     install it, then verify the connector with: claude mcp list'
+        }
+
+        $mpName  = Read-Answer -Question '  Your display name, as it should appear in meeting notes' `
+                               -Default (Get-ProfileValue $prof 'DISPLAY_NAME' $env:USERNAME) -NoPrompt:$NonInteractive
+        $mpEmail = Read-Answer -Question '  Your work email (the calendar''s owner)' `
+                               -Default (Get-ProfileValue $prof 'EMAIL') -NoPrompt:$NonInteractive
+
+        if ([string]::IsNullOrWhiteSpace($mpEmail)) {
+            # The calendar owner is the one answer a shared profile cannot
+            # carry. Name the two ways out rather than leaving a half-installed
+            # pipeline: consumer enabled, producer silently absent, nothing
+            # arriving and nothing saying why.
+            Write-Warning '  an email is required; leaving the producer disabled'
+            if ($NonInteractive) {
+                Write-Host '     an unattended run needs PROFILE_EMAIL in the profile, or run'
+                Write-Host '     interactively so it can ask.'
+            }
+        } else {
+            $tzGuess = Get-ProfileValue $prof 'TIMEZONE' (Get-IanaTimeZoneGuess)
+            $mpTz = Read-Answer -Question "  Your calendar's timezone (IANA, e.g. America/New_York)" `
+                                -Default $tzGuess -NoPrompt:$NonInteractive
+            if ([string]::IsNullOrWhiteSpace($mpTz)) {
+                $mpTz = 'UTC'
+                $winZone = [System.TimeZoneInfo]::Local.Id
+                Write-Warning "  no IANA timezone given, and this machine's ($winZone) is not in the small map; using UTC."
+                Write-Host   "     A wrong zone here shifts every meeting note's date. Set 'timezone' in the config by hand."
+            }
+            $mpTenant = Read-Answer -Question '  Your tenant/primary domain' `
+                                    -Default (Get-ProfileValue $prof 'TENANT' ($mpEmail -replace '^.*@', '')) -NoPrompt:$NonInteractive
+            # Multi-domain tenants (a university and its hospital, say) need
+            # every domain listed or the classification quietly marks half your
+            # colleagues external.
+            $mpDomainsCsv = Read-Answer -Question '  Internal domain(s), comma-separated' `
+                                        -Default (Get-ProfileValue $prof 'TENANT_DOMAINS' $mpTenant) -NoPrompt:$NonInteractive
+            $mpDomains = @($mpDomainsCsv -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            # Tool names must match what `claude mcp list` exposes, NOT what a
+            # desktop client shows -- a wrong prefix is the usual cause of a
+            # first run that produces nothing and reads like a permissions
+            # failure.
+            $mpPrefix = Read-Answer -Question '  MCP tool-name prefix' `
+                                    -Default (Get-ProfileValue $prof 'MCP_PREFIX' 'mcp__claude_ai_Microsoft_365') -NoPrompt:$NonInteractive
+            $mpSearch = Read-Answer -Question '  Calendar-search tool name' `
+                                    -Default (Get-ProfileValue $prof 'SEARCH_TOOL' 'outlook_calendar_search') -NoPrompt:$NonInteractive
+            $mpRead   = Read-Answer -Question '  Resource-read tool name' `
+                                    -Default (Get-ProfileValue $prof 'READ_TOOL' 'read_resource') -NoPrompt:$NonInteractive
+            # Outside the vault on purpose: raw handoff JSON should never sync
+            # to your other devices or get walked by the vault scans.
+            $outDefault = Get-ProfileValue $prof 'OUT_DIR' (Join-Path $env:USERPROFILE 'MeetingIngest')
+            $mpOut = Read-Answer -Question '  Drop folder the consumer watches' -Default $outDefault -NoPrompt:$NonInteractive
+            # A profile written for macOS spells this with forward slashes.
+            $mpOut = $mpOut.Replace('/', '\')
+
+            New-Item -ItemType Directory -Force -Path $mpOut | Out-Null
+            $pullPath = Join-Path $configDir 'meeting_pull.json'
+            Merge-JsonConfig -Path $pullPath -Set @{
+                display_name   = $mpName
+                email          = $mpEmail
+                tenant         = $mpTenant
+                timezone       = $mpTz
+                tenant_domains = [string[]]$mpDomains
+                mcp_prefix     = $mpPrefix
+                search_tool    = $mpSearch
+                read_tool      = $mpRead
+                out_dir        = $mpOut
+            } -Default @{
+                # "claude" (default) or "graph" (direct Microsoft Graph, no LLM
+                # in the loop). An explicit choice survives a re-run.
+                producer                 = 'claude'
+                # Days of lookahead beyond today, counted in weekdays so Friday
+                # reaches Monday. Both producers read it, so the window does not
+                # depend on which one ran.
+                lookahead_days           = 1
+                lookahead_skips_weekends = $true
+            } | Out-Null
+            Write-Host "  wrote: $pullPath"
+            Write-Host "  drop folder: $mpOut"
+            $enableMeetingPull = $true
+        }
+    }
+
+    # macOS-only opt-in, so say so rather than accepting the key silently: the
+    # dashboard's buttons work by registering an obsidian-dashboard:// URL
+    # scheme handler as a native .app, which has no Windows counterpart here.
+    if ((Get-ProfileFlag $prof 'DASHBOARD_ACTIONS') -eq $true) {
+        Write-Host '  PROFILE_DASHBOARD_ACTIONS: macOS-only (URL-scheme handler app); ignored on Windows'
+    }
+}
+
 if (-not $SkipTasks) {
     Write-Host '== 80 scheduled tasks (12 enabled, 3 disabled) =='
     & (Join-Path $PSScriptRoot 'Register-Tasks.ps1')
+
+    # Enabled only after Register-Tasks has created it, and only when the
+    # profile asked for the producer AND the config above actually got written.
+    if ($enableMeetingPull) {
+        Enable-ScheduledTask -TaskName 'meeting-pull' -TaskPath '\Obsidian\' -ErrorAction Stop | Out-Null
+        Write-Host '  enabled: meeting-pull (weekdays 05:00, per profile)'
+        Write-Warning '  Validate it by hand before trusting the 05:00 run:'
+        Write-Host ("     {0} `"{1}`" --dry-run   # renders the prompt, calls nothing" -f $venvPy, (Join-Path $scriptsDir 'meeting_pull.py'))
+        Write-Host '     A headless run cannot answer a permission prompt, so a connector your'
+        Write-Host '     tenant has not approved fails in a way that looks silent rather than loud.'
+    }
 }
 
 Write-Host '== 90 status =='
@@ -343,13 +562,27 @@ Get-ScheduledTask -TaskPath '\Obsidian\*' -ErrorAction SilentlyContinue |
 
 Write-Host ''
 Write-Host 'install.ps1 complete.'
+if ($prof) { Write-Host ("profile in effect: {0} ({1})" -f $prof.Name, $prof.Path) }
 Write-Host ''
+# The one thing a profile deliberately does NOT carry. Print the exact command
+# rather than "fill in your key": the gateway key goes into DPAPI under the
+# name the profile chose, which is not the name the .env stub suggests.
+if ($gatewayKeyName) {
+    Write-Host 'Gateway key (the profile names it; it is not in the profile or in .env):'
+    Write-Host ("  {0} `"{1}`" set {2}" -f $venvPy, (Join-Path $scriptsDir 'secret_store.py'), $gatewayKeyName)
+    if ($gatewayHelpUrl) { Write-Host "  Request one at: $gatewayHelpUrl" }
+    Write-Host ''
+}
 Write-Host 'Optional add-on (off by default; re-run with the switch, or answer the prompt):'
 Write-Host '  -WithRAG      Local RAG: Ollama + llama3.1:8b + Open WebUI (Docker)'
 Write-Host ''
 Write-Host 'Extras (optional, run when you want them):'
 Write-Host '  windows\Install-SendTo.ps1   right-click "Send to -> Markitdown to Obsidian" (file -> .md)'
 Write-Host '  Fill in %USERPROFILE%\dev\secrets\.env: ANTHROPIC_API_KEY, RAG keys'
+if (-not $prof) {
+    Write-Host '  -Profile <name>   pre-answer all of the above from an install profile'
+    Write-Host '                    (-ListProfiles to see what is available)'
+}
 Write-Host ''
 Write-Host 'The 12 enabled jobs are LIVE now and will fire on their triggers -- fill in'
 Write-Host '.env first if you have not, or they will log errors until you do.'

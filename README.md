@@ -134,9 +134,15 @@ fill in your organization's values, and hand the file over with the repo URL.
 Every key is documented in
 [`installers/profiles/README.md`](installers/profiles/README.md).
 
-Two cautions. A profile is *sourced*, so it is shell code at the same trust
-level as `install.sh` — read one before running it, and only run profiles from
-someone you trust. And profiles never contain a key: they name the secret, the
+The same file works on Windows — `install.ps1 -Profile ours`,
+`-ListProfiles` to see what is available — so one profile serves a
+mixed-platform team. See [`docs/Windows Setup.md`](docs/Windows%20Setup.md).
+
+Two cautions. A profile is *sourced* by `install.sh`, so on macOS it is shell
+code at the same trust level as the installer — read one before running it,
+and only run profiles from someone you trust. (`install.ps1` parses it as data
+and never evaluates a value, so keep values literal and one profile serves
+both.) And profiles never contain a key: they name the secret, the
 installer prompts for the value, and it lands in the Keychain.
 `installers/profiles/*.env` is gitignored, because a real profile names
 internal endpoints and tenant domains — fine to send a colleague, a
