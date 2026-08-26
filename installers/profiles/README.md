@@ -1,12 +1,25 @@
 # Install profiles
 
-A profile is a small env file that pre-answers `install.sh`.
+A profile is a small env file that pre-answers the installer. The same file
+works on both platforms, so one profile serves a mixed-platform team.
 
 ```bash
 ./install.sh --profile gateway          # installers/profiles/gateway.env
 ./install.sh --profile ~/ours.env       # a file someone handed you
 ./install.sh --list-profiles            # what's available here
 ```
+
+```powershell
+.\Templates\Scripts\windows\install.ps1 -Profile gateway
+.\Templates\Scripts\windows\install.ps1 -ListProfiles
+```
+
+The two installers read the same keys, with two differences that are properties
+of the platforms rather than gaps: `PROFILE_DASHBOARD_ACTIONS` is macOS-only
+(it registers a URL-scheme handler app, and the Windows run says so rather than
+ignoring the key), and `install.sh` *sources* a profile — shell code at the
+installer's trust level — while `install.ps1` parses it as data and never
+evaluates a value. Keep values literal and both sides agree.
 
 ## Why this exists
 

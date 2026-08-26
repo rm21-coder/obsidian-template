@@ -103,7 +103,57 @@ and the watchers read only the local `~/SourceMedia/` drop folders.
 .\Templates\Scripts\windows\install.ps1 -SkipTasks              # everything except registering tasks
 .\Templates\Scripts\windows\install.ps1 -SkipAudit               # skip the classification audit
 .\Templates\Scripts\windows\install.ps1 -NonInteractive           # never prompt (for scripted/unattended installs)
+.\Templates\Scripts\windows\install.ps1 -Profile ours            # pre-answer the prompts from a profile
+.\Templates\Scripts\windows\install.ps1 -ListProfiles             # what's available here
+.\Templates\Scripts\windows\install.ps1 -Profile ours -Force      # let the profile overwrite existing .env values
 ```
+
+### Install profiles
+
+Windows takes the **same** `installers\profiles\<name>.env` files the macOS
+installer takes, so one profile serves a mixed-platform team. A bare name
+resolves inside `installers\profiles\`; anything with a separator or an
+`.env` suffix is treated as a path, so a profile a colleague handed you works
+without being copied into the repo first:
+
+```powershell
+.\Templates\Scripts\windows\install.ps1 -Profile ours
+.\Templates\Scripts\windows\install.ps1 -Profile $env:USERPROFILE\ours.env
+```
+
+What a profile does here:
+
+- **Points every Claude call at your institution's gateway.** `LLM_BASE_URL`
+  and `LLM_API_KEY_NAME` are written to `%USERPROFILE%\dev\secrets\.env`,
+  which is what the scheduled tasks read — they start from a bare environment,
+  so a gateway set only in your shell would work now and quietly fall back to
+  stock Anthropic auth at 03:00. The key itself is never in the profile or in
+  `.env`: the run ends by printing the exact `secret_store.py set <NAME>`
+  command for it.
+- **Turns on the meeting pipeline.** Writes `.config\meeting_pull.json` and
+  `.config\meeting_prepopulate.json`, creates the drop folder, and enables the
+  `meeting-pull` task (which otherwise ships disabled, since it needs a Claude
+  CLI and an approved MCP calendar connector). Per-person answers — display
+  name, email, assistant's address — arrive as editable prompt defaults.
+- **Says what it cannot do.** `PROFILE_DASHBOARD_ACTIONS` is macOS-only (it
+  registers a URL-scheme handler app); the run reports that rather than
+  silently ignoring the key.
+
+Two cautions. Under `-NonInteractive` the profile *is* the consent for the
+opt-in jobs — that is the only way an unattended run installs them — but a
+profile with no `PROFILE_EMAIL` cannot name the calendar owner, so the
+producer is left disabled and says so. And a profile names internal endpoints
+and tenant domains, so read one before you run it and only accept one from
+someone you trust.
+
+One difference from macOS worth knowing: `install.sh` *sources* a profile,
+which makes it shell code running at the installer's trust level. `install.ps1`
+**parses** it as data and never evaluates a value, so a profile cannot execute
+anything on Windows. The trade-off is that shell constructs in a value have no
+meaning here — `$HOME` is translated, and a value carrying a command
+substitution is refused rather than taken literally.
+
+Full key reference: [`installers/profiles/README.md`](../installers/profiles/README.md).
 
 ## Prerequisites
 
