@@ -623,7 +623,7 @@ Contacts can be bulk-imported from a CSV file into People records:
 - CSV format: Name (Firstname Lastname), Email, Phone, Organization.
 - Names are converted from "Firstname Lastname" to "Lastname, Firstname" format for the filename.
 - Business names (e.g., "American Express") and entries with only a first name are filtered out.
-- Middle initials are detected and handled (e.g., "Bernard S. Gulachek" becomes "Gulachek, Bernard").
+- Middle initials are detected and handled (e.g., "Yusuf A. Baptiste" becomes "Baptiste, Yusuf").
 - Existing People records are checked to avoid duplicates.
 - New files are created using the People Template with email, phone, and organization populated.
 

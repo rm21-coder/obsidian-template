@@ -1,0 +1,38 @@
+# identity-allowed-domains.txt — email domains an example address may use.
+#
+# Safe to publish: this file names only placeholders. The real values live in
+# identity-denylist.local, which is gitignored.
+#
+# Checked by check_identity_leak.py. An entry beginning with a dot matches any
+# domain under it (".example" allows "nimbuswidgets.example"). One per line;
+# '#' starts a comment.
+#
+# Adding a domain here is a disclosure decision — it says "an address at this
+# domain is a placeholder, not a person". Do not add a real organization.
+
+# RFC 2606 / RFC 6761 reserved for documentation and testing
+example.com
+example.net
+example.org
+.example
+.test
+.invalid
+.localhost
+
+# Conventional in this repo's docs for a generic institution
+example.edu
+
+# Consumer providers, used only in placeholder form (you@..., intake-xxxx@...)
+gmail.com
+icloud.com
+outlook.com
+hotmail.com
+yahoo.com
+
+# Anthropic's no-reply, which appears in commit trailers
+anthropic.com
+
+# "yourdomain"-style placeholders used in this repo's setup docs
+yourdomain.edu
+yourdomain.com
+.yourdomain.edu

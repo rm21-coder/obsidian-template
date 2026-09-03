@@ -791,7 +791,7 @@ def _protected_spans(text):
 
 
 def _swap_name(name):
-    """'Brian Hasselfeld' -> 'hasselfeld, brian' for order-insensitive matching."""
+    """'Dana Ackerman' -> 'ackerman, dana' for order-insensitive matching."""
     if "," in name:
         last, _, first = name.partition(",")
         return (first.strip() + " " + last.strip()).lower()
@@ -892,7 +892,7 @@ def fix_links(notes, broken):
                 lines[i] = new_line
 
         new_text = "\n".join(lines)
-        # A relink can turn '[[[Fuller, Burton]]' into '[[[Fuller, Burton]]' with
+        # A relink can turn '[[[Nguyen, Chris]]' into '[[[Nguyen, Chris]]' with
         # the target corrected but the stray bracket still there; drop it.
         new_text = re.sub(r"\[\[\[(?=[^\[\]]+\]\])", "[[", new_text)
         if new_text != original:

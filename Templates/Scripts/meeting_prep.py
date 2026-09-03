@@ -137,7 +137,7 @@ def parse_preferred_name(fm: str) -> str | None:
 
     Honors the convention added 2026-05-15: People notes may carry a
     `preferred_name:` field for the name the person likes to be called
-    (e.g., `preferred_name: Ted` on the canonical `Deweese, Theodore.md`).
+    (e.g., `preferred_name: Kate` on the canonical `Kowalski, Katherine.md`).
     """
     m = re.search(r"(?m)^preferred_name\s*:\s*(.+)$", fm)
     if not m:

@@ -103,3 +103,9 @@ Creations/*
 
 # git filter-repo / filter-branch leftovers
 .git-rewrite/
+
+# Local identity deny-list for the pre-commit identity scan. Holds the real
+# tenant domains and colleague names that must never reach a public commit —
+# so committing the list itself would publish exactly what it protects.
+# Regenerate with: installers/lib/check_identity_leak.py --init
+installers/lib/identity-denylist.local
