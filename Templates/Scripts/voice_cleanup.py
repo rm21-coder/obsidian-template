@@ -200,6 +200,30 @@ def get_pending_files(inbox: Path) -> list[Path]:
 
 
 # ---------------------------------------------------------------------------
+# Endpoint resolution
+# ---------------------------------------------------------------------------
+
+# Set a file aside after this many consecutive failures, so one bad dictation
+# cannot wedge every drop queued behind it. Renamed, never deleted.
+MAX_FILE_ATTEMPTS = 3
+
+
+def _resolve_client(cache: dict):
+    """The API client, resolved on first need and reused after that.
+
+    Raises llm_endpoint.EndpointError (GatewayUnreachable included) to the
+    caller, which decides whether that ends the run (--once) or is a skipped
+    cycle (watch mode). Resolving lazily is what lets the watcher outlive a
+    VPN drop: nothing is resolved at startup, so nothing can fail there.
+    """
+    import llm_endpoint
+    if cache.get("client") is None:
+        cache["client"] = llm_endpoint.client()
+        log.info("Endpoint: %s", llm_endpoint.describe())
+    return cache["client"]
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -221,19 +245,11 @@ def main():
     # Load config
     cfg = load_config()
 
-    # Resolve the endpoint and its credential (env/.env first, then the
-    # platform keystore). Stock Anthropic unless LLM_BASE_URL redirects it.
+    # The endpoint and its credential (env/.env first, then the platform
+    # keystore; stock Anthropic unless LLM_BASE_URL redirects it) are resolved
+    # on first use, not here — see _resolve_client.
     import llm_endpoint
-    try:
-        client = llm_endpoint.client()
-    except llm_endpoint.GatewayUnreachable as exc:
-        # Skipped, not failed — see the note in classify_notes.py.
-        log.warning("Skipped: %s", exc)
-        sys.exit(0)
-    except llm_endpoint.EndpointError as exc:
-        log.error("%s", exc)
-        sys.exit(1)
-    log.info("Endpoint: %s", llm_endpoint.describe())
+    endpoint: dict = {}
 
     # Ensure inbox folder exists
     inbox = Path(cfg["watch_folder"])
@@ -245,6 +261,17 @@ def main():
         if not files:
             log.info("No pending voice notes in %s", inbox)
             return
+        # A one-shot run has no later cycle to recover into, so an
+        # unreachable gateway ends it here.
+        try:
+            client = _resolve_client(endpoint)
+        except llm_endpoint.GatewayUnreachable as exc:
+            # Skipped, not failed — see the note in classify_notes.py.
+            log.warning("Skipped: %s", exc)
+            sys.exit(0)
+        except llm_endpoint.EndpointError as exc:
+            log.error("%s", exc)
+            sys.exit(1)
         for f in files:
             process_file(f, client, cfg)
         log.info("Done — processed %d file(s).", len(files))
@@ -253,11 +280,51 @@ def main():
         print(f"   Watching: {inbox}")
         print(f"   Notes saved to: {vault / 'Creations'}")
         print(f"   Press Ctrl+C to stop.\n")
+        # This process is the always-on job (KeepAlive in
+        # com.voice-cleanup.plist), so exiting is never the right answer to a
+        # recoverable fault: launchd respawns us at once, and its 10s minimum
+        # runtime turns that into a spin that logs forever and watches
+        # nothing. A laptop off the VPN is a normal, recurring state, so an
+        # unreachable gateway is a skipped cycle here, not an exit.
+        attempts: dict[str, int] = {}
+        paused = False
         try:
             while True:
-                files = get_pending_files(inbox)
-                for f in files:
-                    process_file(f, client, cfg)
+                try:
+                    client = _resolve_client(endpoint)
+                except llm_endpoint.EndpointError as exc:
+                    # Log the transition, not the condition: it persists for
+                    # as long as the VPN is down, and a line per cycle is
+                    # what grew this job's error log to 19MB.
+                    if not paused:
+                        log.warning("Paused — %s", exc)
+                        paused = True
+                    time.sleep(args.interval)
+                    continue
+                if paused:
+                    log.info("Endpoint reachable again — resuming.")
+                    paused = False
+
+                for f in get_pending_files(inbox):
+                    try:
+                        process_file(f, client, cfg)
+                        attempts.pop(f.name, None)
+                    except Exception:
+                        n = attempts[f.name] = attempts.get(f.name, 0) + 1
+                        log.exception("Failed (%d/%d): %s",
+                                      n, MAX_FILE_ATTEMPTS, f.name)
+                        # A permanent fault — a retired model, a malformed
+                        # drop — repeats on every cycle. Set the file aside so
+                        # it stops blocking the drops behind it, but keep it:
+                        # nothing dictated should ever be lost to a bug.
+                        if n >= MAX_FILE_ATTEMPTS and f.exists():
+                            f.rename(f.with_suffix(f.suffix + ".failed"))
+                            log.error("Quarantined after %d attempts: %s.failed",
+                                      n, f.name)
+                            attempts.pop(f.name, None)
+                        # The endpoint itself may be what broke; re-resolve it
+                        # next cycle rather than reuse a dead client.
+                        endpoint["client"] = None
                 time.sleep(args.interval)
         except KeyboardInterrupt:
             print("\nStopped.")
