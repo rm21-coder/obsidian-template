@@ -217,6 +217,49 @@ every attendee email you want resolved to a rich People note.
   must agree on whether optional attendees count; they are passed the same
   value. Letting them drift yields a note whose `type:` says one thing and
   whose `people:` list says another.
+- **Solo blocks, and the exception.** An event with no other human attendees
+  is treated as a personal block and produces no note — "Hold", "PTO", an
+  errand. The exception is a block carrying a hosted-meeting join URL (Zoom,
+  Teams, Meet, Webex): someone who blocks their own time and pastes a join
+  link into it is convening a meeting without sending invitations, and it is
+  often the one meeting of the day they most needed somewhere to type. The
+  link is looked for in the structured location fields and then the body —
+  note the body is redacted for `private`/`confidential` sensitivity, so a
+  link hiding only in a sensitive body is not seen and the event stays solo.
+- **Ambiguous blocks get a note, not silence.** An event with no participants
+  at all is usually personal time, but not always: a working session booked
+  through delegate access to the user's calendar arrives looking identical to
+  self-booked time, and no calendar field separates the two. Dropping those
+  silently is how someone walks into a meeting with nowhere to type, so the
+  benefit of the doubt goes to creating the note. Decisions are made in order
+  of certainty: a hosted join link means it is definitely a meeting; then
+  learned rules; then a seed vocabulary of blocks (travel legs, time off,
+  errands, heads-down work); and anything still unresolved becomes an `Ad-hoc`
+  note carrying the subject as its `title:` and tagged `#needs-attendees`.
+- **The pipeline learns from corrections instead of guessing.** Participants
+  are never inferred from subject text or correlated email — a wrong
+  `[[Person]]` link does not sit still, it propagates into the People graph
+  and the follow-up scanner. Instead the two edits a user naturally makes to a
+  flagged note are read back on the next run:
+
+  | the user does this | the pipeline learns |
+  |---|---|
+  | deletes the generated note | suppress that subject from now on |
+  | fills in `people:` | every later occurrence inherits those people |
+
+  Rules are keyed on a normalized subject (`block_key()`), not the `uid`,
+  because a repeating block gets a fresh `uid` every occurrence — and the key
+  strips parentheticals, digits and clock times so that "Delta Air Lines
+  flight 2712 to Atlanta (G5WFPS)" and the next week's flight number collapse
+  to one rule. The store lives at `<scripts>/.state/meeting_block_learning.json`
+  and is plain, hand-editable JSON. The point is that identification is paid
+  once per recurring subject rather than once per occurrence, which is what
+  makes it possible to automate around a scheduling practice you do not
+  control.
+- **In progress counts as current.** Past meetings are skipped on the *end*
+  time, not the start, so a meeting already under way still gets its note.
+  Judging on the start meant any run after the hour struck refused to create
+  a note for the meeting the user was sitting in.
 - **Reschedule / cancel.** Re-emitting the same `uid` at a new time moves the
   note (leaving a redirect stub so old wikilinks resolve) and drops a banner. A
   cancelled or declined meeting removes the generated note.
