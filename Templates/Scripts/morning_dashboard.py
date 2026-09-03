@@ -491,6 +491,22 @@ def collect_rag_sync_status() -> dict | None:
 #   2. Log freshness -- the newest mtime of the job's StandardOutPath /
 #      StandardErrorPath is the last time it ran. Older than the job's cadence
 #      allows means it has stopped firing.
+#   3. `launchctl print` -- runs, last exit code, state and minimum runtime.
+#      Only consulted for a job already known to be unhealthy, because it
+#      costs a subprocess each. A high run count with a clean exit code is a
+#      definitive crash-loop signature that `launchctl list` cannot see.
+#   4. The tail of the job's error log -- for a job failing right now, the
+#      last distinct line is usually the cause stated outright.
+#   5. Targeted probes of shared dependencies -- the venv behind the job's
+#      interpreter, and the LLM gateway every Claude-calling script routes
+#      through (Section 5b).
+#
+# Signals 3-5 were added on 2026-09-03 after this section reported a guess as
+# a diagnosis. The standing rule since: a cause appears here only once it has
+# been checked, and a failure whose cause was not established is reported as
+# symptoms plus where to look. See the notes above PIPELINE_HINTS and
+# "Verified diagnosis helpers".
+#
 # No other pipeline scripts need to change: discovery reads the installed
 # .plist files directly. The two env overrides exist only so the render can be
 # exercised against fixtures in a test; in production the defaults are used.
@@ -498,6 +514,7 @@ def collect_rag_sync_status() -> dict | None:
 LAUNCHAGENTS_DIR = Path(os.environ.get(
     "MD_LAUNCHAGENTS_DIR", str(HOME / "Library" / "LaunchAgents")))
 LAUNCHCTL_BIN = os.environ.get("MD_LAUNCHCTL", "/bin/launchctl")
+PLUTIL_BIN    = os.environ.get("MD_PLUTIL", "/usr/bin/plutil")
 
 # Only agents whose program runs a script from here are treated as ours.
 PIPELINE_MARKER = "/Obsidian/Templates/Scripts/"
@@ -530,15 +547,29 @@ PIPELINE_NAMES = {
 }
 
 # Short remediation hints, shown only when a job is unhealthy.
+# A hint says what the job is FOR and where its own evidence lives. It must
+# never name a cause -- causes are computed from checked signals further down
+# (see "Verified diagnosis helpers"), and a guessed cause in a fixed string
+# reads exactly like a finding.
+#
+# What this rule is paying for, 2026-09-03: the voice-cleanup hint used to read
+# "Shares the same .venv as the tagger; if the tagger is down too, one venv
+# rebuild fixes both." Both halves were wrong. Templates/Scripts/.venv was
+# healthy, and the tagger was not down -- it was running on schedule and
+# cleanly skipping. The actual cause was voice_cleanup.py resolving its LLM
+# client once before entering its watch loop and calling sys.exit(0) when
+# api.ai.example.edu did not resolve (the VPN was down), which under KeepAlive
+# produced 7,152 respawns at launchd's 10s minimum-runtime floor. The hint
+# had invented a shared-dependency story out of nothing but a shared path,
+# and it cost a morning aimed at the wrong component.
 PIPELINE_HINTS = {
     "com.tag-clippings": (
-        "Tags stop appearing on new clippings. Common cause: the shared "
-        "Templates/Scripts/.venv is missing -- rebuild it with Homebrew "
-        "python (3.10+), not /usr/bin/python3."
+        "Tags stop appearing on new clippings. Its own account of what went "
+        "wrong is in ~/Library/Logs/tag-clippings.err."
     ),
     "com.voice-cleanup": (
-        "Shares the same .venv as the tagger; if the tagger is down too, one "
-        "venv rebuild fixes both."
+        "Dropped voice memos stop becoming notes. The watcher logs every "
+        "cause it hits to ~/Library/Logs/voice-cleanup.err."
     ),
     "com.obsidian.meeting-pull": (  # same job, namespaced label
         "See com.meeting-pull below."
@@ -610,22 +641,60 @@ DAILY_STALE_HOURS   = 28.0   # matches RAG_STALE_HOURS for once-a-day jobs
 
 
 def _plist_load(path: Path) -> dict | None:
-    """Parse a plist, or None if it can't be read.
+    """Parse a plist the way launchd does, or None if even it can't.
 
-    A None here silently drops the job from pipeline health, so log why.
-    The classic cause: `--` inside an XML comment — plutil and launchd
-    tolerate it, plistlib (expat) does not, so the agent keeps running
-    while vanishing from the dashboard.
+    Two parsers, strict first. plistlib is expat, and it rejects things
+    launchd accepts: `--` inside an XML comment, and a DOCTYPE carrying a
+    shell-style `\\` line continuation (Pulse Secure's installer writes one).
+    An agent that loads and runs perfectly well would then vanish from this
+    section, which is the same class of failure as the incident above -- a
+    real state, reported as an absence. Falling back to `plutil -convert
+    xml1` means this section sees what launchd sees.
+
+    Both the fallback and the warning are reserved for a plist that would
+    have been ours. ~/Library/LaunchAgents holds third-party agents too, and
+    announcing that a VPN helper is "missing from pipeline health" is noise:
+    it was never going to appear there. Skipping those also keeps this to at
+    most one extra process per vault plist, not per agent on the machine.
     """
+    import plistlib
     try:
-        import plistlib
         with path.open("rb") as fh:
             return plistlib.load(fh)
     except Exception as exc:
-        print(f"[morning_dashboard] WARNING: unparseable plist "
-              f"{path.name}: {exc} — job will be missing from "
-              f"pipeline health", file=sys.stderr)
+        # Bound to a second name deliberately: Python unbinds an `except ... as`
+        # target at the end of its block, so `exc` is gone by the report below.
+        strict_exc = f"{type(exc).__name__}: {exc}"
+
+    # Decide whether this plist would have been ours BEFORE spending anything
+    # else on it. Only a vault job can appear in this section, so a third-party
+    # agent that expat dislikes needs neither a second parser nor a warning --
+    # and this folder is shared with every installer on the machine. Matched
+    # against the raw bytes because parsing is the thing that just failed.
+    try:
+        ours = PIPELINE_MARKER in path.read_text(encoding="utf-8",
+                                                 errors="ignore")
+    except OSError:
         return None
+    if not ours:
+        return None
+
+    try:
+        pr = subprocess.run(
+            [PLUTIL_BIN, "-convert", "xml1", "-o", "-", str(path)],
+            capture_output=True, timeout=10)
+        if pr.returncode == 0:
+            return plistlib.loads(pr.stdout)
+        lenient_exc: str = (pr.stderr.decode(errors="ignore").strip()
+                            or f"plutil exited {pr.returncode}")
+    except Exception as exc:
+        lenient_exc = f"{type(exc).__name__}: {exc}"
+
+    print(f"[morning_dashboard] WARNING: unparseable plist "
+          f"{path.name}: {strict_exc}; plutil also failed "
+          f"({lenient_exc}) — job will be missing from pipeline "
+          f"health", file=sys.stderr)
+    return None
 
 
 def _launchctl_status(label: str) -> dict:
@@ -646,6 +715,220 @@ def _launchctl_status(label: str) -> dict:
     exit_code = int(m.group(1)) if m else None
     running = bool(re.search(r'"PID"\s*=\s*\d+', out))
     return {"loaded": True, "exit": exit_code, "running": running}
+
+
+# --- Verified diagnosis helpers ---------------------------------------------
+#
+# Everything below exists so this section stops guessing. The rule is that a
+# cause is printed only after it has been checked; when nothing was checked,
+# the dashboard says what it observed and stops. Silence costs less than a
+# confident wrong answer, which sends someone at the wrong component and is
+# harder to recover from than no answer at all (see the note above
+# PIPELINE_HINTS for the morning that proved it).
+#
+# The reassuring part of that incident is that every signal needed to name the
+# real cause was already sitting on disk: `launchctl print` had runs = 7152
+# with last exit code = 0 -- a program returning immediately, over and over --
+# and the tail of the stderr log said "gateway host api.ai.example.edu did not
+# resolve" outright. Nothing had to be inferred. It just had to be read.
+
+# How many clean restarts before "it ran again" reads as "it is crash-looping".
+# A watcher that has been up since boot has runs = 1; a scheduled job earns one
+# run per fire and can legitimately reach a few hundred over months. The
+# signature that matters is a KeepAlive job with a large run count AND clean
+# exits: launchd only respawns that fast when the program returns immediately.
+CRASH_LOOP_RUNS = 20
+
+
+def _launchctl_print(label: str) -> dict:
+    """Restart/exit detail for a label via `launchctl print gui/<uid>/<label>`.
+
+    `launchctl list` cannot answer "is this crash-looping?". It reports a last
+    exit status and a PID, and a job respawning every ten seconds looks exactly
+    like a healthy one caught between cycles. `print` carries the run counter,
+    the state and the minimum runtime, which together are definitive.
+
+    A field absent from the output comes back as None and must not be read as
+    zero -- a job that has never run has no `last exit code` at all, which is a
+    different fact from exiting with 0.
+
+    Only top-level fields are parsed: `print` nests its own `state = active`
+    lines under endpoints and event sources, so every pattern here anchors on a
+    single leading tab."""
+    blank = {"state": None, "runs": None, "exit": None, "min_runtime": None}
+    try:
+        pr = subprocess.run([LAUNCHCTL_BIN, "print", f"gui/{os.getuid()}/{label}"],
+                            capture_output=True, timeout=10)
+    except Exception:
+        return blank
+    if pr.returncode != 0:
+        return blank
+    out = pr.stdout.decode(errors="ignore")
+
+    def field(pattern: str, cast):
+        m = re.search(pattern, out, re.MULTILINE)
+        if not m:
+            return None
+        try:
+            return cast(m.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    return {
+        "state":       field(r"^\tstate = (.+)$", lambda v: v.strip()),
+        "runs":        field(r"^\truns = (\d+)$", int),
+        "exit":        field(r"^\tlast exit code = (-?\d+)$", int),
+        "min_runtime": field(r"^\tminimum runtime = (\d+)$", int),
+    }
+
+
+def _log_tail_lines(path: str, max_bytes: int = 65536) -> list[str]:
+    """Non-empty lines from the end of a log, reading at most max_bytes.
+
+    Bounded on purpose: a crash-looping job writes an enormous log -- the one
+    that prompted this reached 19MB -- and the dashboard must not read all of
+    it to find out what it says. The first line after a seek is dropped
+    because it is almost certainly a partial one."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            if size > max_bytes:
+                fh.seek(size - max_bytes)
+                fh.readline()
+            data = fh.read()
+    except OSError:
+        return []
+    return [ln.rstrip() for ln in data.decode(errors="ignore").splitlines()
+            if ln.strip()]
+
+
+# Lines shaped like an error report that carry no diagnosis: the traceback
+# header names nothing, a frame names only a file, a caret line only a column.
+# The final exception line below them is the part that says what went wrong.
+_LOG_NOISE_RE = re.compile(
+    r'^(?:Traceback \(most recent call last\):?|\s*File ".*", line \d+.*|\s*\^+\s*)$')
+
+
+def last_error_line(path: str) -> str | None:
+    """The most informative single line from the end of an error log, or None.
+
+    A crash-looping job repeats one line thousands of times, so the last
+    distinct line IS the diagnosis. In the case this was built for it read
+    "gateway host api.ai.example.edu did not resolve" -- which points straight at
+    the VPN, and which the dashboard was previously ignoring in favour of
+    telling the operator to go read the log themselves."""
+    for ln in reversed(_log_tail_lines(path)):
+        if _LOG_NOISE_RE.match(ln):
+            continue
+        return ln.strip()[:300]
+    return None
+
+
+# Probing a venv costs a subprocess and a dozen jobs share one, so remember the
+# verdict per interpreter for the life of the run.
+_VENV_VERDICT: dict[str, str | None] = {}
+
+
+def venv_defect(interpreter: str) -> str | None:
+    """A CHECKED defect in the venv behind `interpreter`, or None if it works.
+
+    Returns a sentence only for something actually observed: the interpreter
+    does not exist, or it cannot import the SDK every LLM-backed vault script
+    needs. "Two jobs share this path and both are unhealthy" is not evidence
+    and never reaches this function -- that inference is precisely what aimed a
+    morning's debugging at a perfectly healthy venv.
+
+    A probe that fails for its own reasons (timeout, no permission to exec)
+    also returns None. Not knowing is reported as not knowing."""
+    if interpreter in _VENV_VERDICT:
+        return _VENV_VERDICT[interpreter]
+    verdict: str | None = None
+    if not os.path.exists(interpreter):
+        verdict = (f"Verified: the interpreter {interpreter} does not exist, so "
+                   f"the job cannot start at all. Rebuild the venv with "
+                   f"Homebrew python (3.10+), not /usr/bin/python3.")
+    else:
+        try:
+            probe = subprocess.run([interpreter, "-c", "import anthropic"],
+                                   capture_output=True, timeout=30)
+            if probe.returncode != 0:
+                verdict = (f"Verified: {interpreter} exists but cannot import "
+                           f"anthropic, so the venv's packages are missing or "
+                           f"broken. Reinstall from "
+                           f"Templates/Scripts/requirements.txt.")
+        except Exception:
+            verdict = None
+    _VENV_VERDICT[interpreter] = verdict
+    return verdict
+
+
+# Matches making a call, not merely knowing the module exists: a top-level
+# import of the SDK, or a call to the endpoint module's client factory.
+# Importing llm_endpoint alone does NOT count -- this very file imports it to
+# ask whether a hostname resolves, and under a looser pattern reported itself
+# as a job whose Claude calls were failing.
+#
+# It is a text scan, so it also matches a mention inside a comment or a
+# docstring. That is a deliberate trade: the failure mode is naming one extra
+# job in a banner that is already true, whereas a hand-maintained label list
+# would go stale silently and put a wrong cause on a specific job. Keep prose
+# in this file from spelling out either pattern verbatim -- an earlier draft
+# of this very comment matched itself.
+# A venv interpreter, by its path shape: <something>/[.]venv*/bin/python*.
+# Matched on the path rather than by stat because the case that matters most
+# is the interpreter having been deleted, when there is nothing left to stat.
+# A job running /usr/bin/python3 must not match: probing the system
+# interpreter for `anthropic` would report a defect that is not one.
+_VENV_INTERPRETER_RE = re.compile(r"/\.?venv[^/]*/bin/python")
+
+_LLM_CALL_RE = re.compile(
+    r"^\s*(?:import|from)\s+anthropic\b|llm_endpoint\.client\s*\(",
+    re.MULTILINE)
+_LLM_SCRIPT_CACHE: dict[str, bool] = {}
+
+
+def _script_uses_llm(script: str | None) -> bool:
+    """True when this job's script actually routes through the LLM endpoint.
+
+    Read out of the source rather than kept as a hand-maintained list of
+    labels: a list goes stale the first time a script gains or loses an LLM
+    call, and a stale list here would pin a wrong cause on a job -- the exact
+    failure this whole section was rewritten to stop committing."""
+    if not script:
+        return False
+    if script not in _LLM_SCRIPT_CACHE:
+        try:
+            src = Path(script).read_text(encoding="utf-8", errors="ignore")
+            _LLM_SCRIPT_CACHE[script] = bool(_LLM_CALL_RE.search(src))
+        except OSError:
+            _LLM_SCRIPT_CACHE[script] = False
+    return _LLM_SCRIPT_CACHE[script]
+
+
+def _keepalive_diagnosis(label: str) -> str:
+    """Why an always-on job is loaded but not running, from `launchctl print`.
+
+    The old text here was "it may be crash-looping or throttled by launchd;
+    check its error log" -- two guesses and a chore, when the run counter and
+    exit code that settle it are one subprocess away."""
+    pr = _launchctl_print(label)
+    runs, code, state = pr["runs"], pr["exit"], pr["state"]
+    if runs is not None and runs >= CRASH_LOOP_RUNS and code == 0:
+        floor = pr["min_runtime"]
+        pace = (f" launchd is respawning it at its {floor}s minimum-runtime "
+                f"floor." if floor else "")
+        return (f"Crash-looping: {runs} runs with last exit code 0 -- the "
+                f"program starts and returns immediately instead of staying "
+                f"up.{pace}")
+    seen = []
+    if state:
+        seen.append(f"state {state}")
+    if runs is not None:
+        seen.append(f"{runs} runs")
+    if code is not None:
+        seen.append(f"last exit code {code}")
+    detail = "; ".join(seen) if seen else "launchctl print returned no detail"
+    return f"Always-on job is loaded but not running ({detail})."
 
 
 def _scheduled_weekdays(plist: dict) -> set[int] | None:
@@ -905,8 +1188,100 @@ def _collect_pipeline_health_windows() -> list[dict]:
     return results
 
 
-def collect_pipeline_health() -> list[dict]:
-    """Discover vault jobs and classify each pass / stale / fail."""
+# ---------------------------------------------------------------------------
+# Section 5b: LLM gateway reachability -- one cause behind many symptoms
+# ---------------------------------------------------------------------------
+#
+# Nearly every LLM-backed job in this vault routes its Claude calls through
+# LLM_BASE_URL (set in ~/dev/secrets/.env, resolved by llm_endpoint.py). When
+# that host does not resolve -- the ordinary case being that the VPN is down --
+# each of those jobs independently gives up and logs its own "Skipped" warning.
+# The dashboard then reports N failures with N apparent causes, and whoever
+# reads it goes looking for N bugs.
+#
+# Checking the gateway once, before any job is judged, collapses that cluster
+# into the single fact that explains all of it. This is the same shape of fix
+# as everything in Section 5: ask the cheap question that has a real answer
+# instead of narrating a plausible one per job.
+
+SECRETS_ENV = Path(os.environ.get(
+    "MD_SECRETS_ENV", str(HOME / "dev" / "secrets" / ".env")))
+
+# The endpoint config this check needs -- deliberately an allowlist. That file
+# also holds credentials, and nothing here should pull a secret into the
+# dashboard's environment just to learn whether a hostname resolves.
+_ENDPOINT_ENV_KEYS = ("LLM_BASE_URL", "LLM_API_KEY_NAME", "LLM_SKIP_PREFLIGHT")
+
+
+def _load_endpoint_env() -> None:
+    """Copy the non-secret endpoint config out of ~/dev/secrets/.env.
+
+    Parsed by hand rather than with python-dotenv because the dashboard runs
+    under /usr/bin/python3 (see com.morning-dashboard.plist), which does not
+    have it -- and a check that only works when run from the venv would be
+    missing exactly when the venv is the thing in question. An existing
+    environment value wins, matching load_dotenv's default."""
+    try:
+        text = SECRETS_ENV.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        if key in _ENDPOINT_ENV_KEYS and key not in os.environ:
+            os.environ[key] = val.strip().strip('"').strip("'")
+
+
+def collect_gateway_status() -> dict | None:
+    """Reachability of the configured LLM gateway, or None when there is
+    nothing worth saying.
+
+    None covers three cases, all of which should stay off the dashboard:
+      * No gateway configured. A stock Anthropic install that cannot resolve
+        api.anthropic.com has no working internet, and answering that with
+        "connect to the VPN" sends someone the wrong way -- llm_endpoint
+        declines to preflight it for the same reason.
+      * The preflight is stood down (LLM_SKIP_PREFLIGHT, or an egress proxy
+        that does its own resolution). Local DNS predicts nothing there, so
+        reporting either verdict would be a guess.
+      * llm_endpoint is unavailable. Then we know nothing and say nothing.
+    """
+    _load_endpoint_env()
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        import llm_endpoint
+    except Exception:
+        return None
+
+    url = llm_endpoint.base_url()
+    if not url:
+        return None
+    skip = getattr(llm_endpoint, "_skip_preflight", None)
+    if callable(skip) and skip():
+        return None
+
+    host = urllib.parse.urlparse(url).hostname
+    try:
+        llm_endpoint.check_reachable(url)
+    except llm_endpoint.GatewayUnreachable:
+        return {"host": host, "url": url, "reachable": False}
+    except Exception:
+        return None
+    return {"host": host, "url": url, "reachable": True}
+
+
+def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
+    """Discover vault jobs and classify each pass / stale / fail.
+
+    `gateway` is collect_gateway_status()'s verdict, threaded in so an
+    unreachable gateway is reported against the jobs it actually explains
+    rather than inferred separately by each of them."""
     if sys.platform == "win32":
         return _collect_pipeline_health_windows()
     if not LAUNCHAGENTS_DIR.is_dir():
@@ -966,9 +1341,18 @@ def collect_pipeline_health() -> list[dict]:
 
         st = _launchctl_status(label)
         is_keepalive = bool(plist.get("KeepAlive"))
+        interpreter = str(args[0]) if args else ""
+        script = next((str(a) for a in args
+                       if PIPELINE_MARKER in str(a) and str(a).endswith(".py")),
+                      None)
+        err_log = plist.get("StandardErrorPath") or plist.get("StandardOutPath")
 
         problems: list[str] = []
         status = "pass"
+        # Set when the failure is one the job has just been writing about, so
+        # its log tail is current and worth quoting. A job that is not loaded
+        # has not run, so its log describes some older life and is left alone.
+        log_is_current = False
         if st["loaded"] is False:
             status = "fail"
             problems.append(
@@ -979,13 +1363,13 @@ def collect_pipeline_health() -> list[dict]:
             # actually running now, not on the exit code of its last cycle.
             if not st["running"]:
                 status = "fail"
-                problems.append(
-                    "Always-on job is loaded but not running -- it may be "
-                    "crash-looping or throttled by launchd; check its error log.")
+                problems.append(_keepalive_diagnosis(label))
+                log_is_current = True
         elif st["exit"] not in (None, 0):
             status = "fail"
             problems.append(
                 f"Last run exited with status {st['exit']} (non-zero means it failed).")
+            log_is_current = True
         if max_age is not None and age_hours is not None and age_hours > max_age:
             if status == "pass":
                 status = "stale"
@@ -993,6 +1377,41 @@ def collect_pipeline_health() -> list[dict]:
                 f"No run in {age_hours:.0f}h (expected {trigger}); it may have stopped firing.")
         elif max_age is not None and last_run is None and st["loaded"]:
             problems.append("No log activity found yet.")
+
+        # --- Checked causes, most specific first --------------------------
+        # Each of these is silent unless it has something real to report. A
+        # failing job with no verified cause gets its observed symptoms and
+        # the hint, which is the honest outcome -- see the note above
+        # PIPELINE_HINTS for what happens when this section fills that gap
+        # with a story instead.
+
+        # The job's own last words. For the crash-loop this was built for, the
+        # repeated line named the unreachable host outright and would have
+        # pointed straight at the VPN.
+        if log_is_current and err_log:
+            line = last_error_line(err_log)
+            if line:
+                # "Last line", not "last error": several vault jobs send all
+                # of their logging to stderr, so this is what the job last
+                # said, which is not the same claim as it being the fault.
+                problems.append(f"Last line of {err_log}: {line}")
+
+        # Only ever raised about a venv that has been probed and found broken,
+        # and only for a job that actually runs out of one.
+        if status == "fail" and _VENV_INTERPRETER_RE.search(interpreter):
+            defect = venv_defect(interpreter)
+            if defect:
+                problems.append(defect)
+
+        # One unreachable gateway explains every LLM-backed job at once, so say
+        # it on each of them rather than letting each invent its own reason.
+        if (status != "pass" and gateway and not gateway["reachable"]
+                and _script_uses_llm(script)):
+            problems.append(
+                f"LLM gateway {gateway['host']} is not resolving. This job "
+                f"sends its Claude calls through it, so it will skip that work "
+                f"until the gateway is reachable again -- usually meaning the "
+                f"VPN is down.")
 
         hint = PIPELINE_HINTS.get(label)
         if hint and status != "pass":
@@ -1249,6 +1668,20 @@ footer { color: var(--muted); font-size: 11px; margin-top: 32px; text-align: rig
 }
 .rag-alert div + div { margin-top: 5px; }
 
+/* Full-width banner above the grid, for a single fact that explains a whole
+   column of failures below it (currently: the LLM gateway being unreachable).
+   Deliberately louder than a pipe-row alert -- it is the thing to read first. */
+.banner {
+  margin-bottom: 20px;
+  padding: 11px 14px;
+  border: 1px solid var(--todo);
+  border-left: 4px solid var(--todo);
+  border-radius: 8px;
+  background: var(--todo-soft);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
 /* Pipeline health sub-section (top of right column). */
 .section-pipes { --section-accent: var(--meet); }
 .pipe-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
@@ -1303,6 +1736,7 @@ def render(today: _dt.date,
            new_today: list[tuple[Path, _dt.datetime, dict]],
            rag: dict | None,
            health: list[dict],
+           gateway: dict | None = None,
            usage: list[dict] | None = None,
            cc_usage: dict | None = None,
            show_actions: bool | None = None) -> str:
@@ -1327,6 +1761,19 @@ def render(today: _dt.date,
   <div class="subtitle">Generated {now.strftime('%H:%M')} {html.escape(tz_label)}</div>
 </header>
 """)
+
+    # Above everything, because it is the one fact that reinterprets the rest
+    # of the page: with the gateway down, every LLM-backed job below is
+    # skipping rather than broken, and each of their individual complaints is
+    # a symptom of this line.
+    if gateway and not gateway["reachable"]:
+        parts.append(
+            '<div class="banner">\n'
+            f'  <strong>LLM gateway unreachable</strong> — '
+            f'{html.escape(gateway["host"] or gateway["url"])} is not '
+            'resolving, so every LLM-backed vault job will skip its work and '
+            'log a warning. Usual cause: the VPN is down.\n'
+            '</div>\n')
 
     # Action buttons only render when the obsidian-dashboard:// handler is
     # installed — otherwise they'd be dead clicks (see
@@ -1587,12 +2034,15 @@ def main() -> int:
     meetings  = collect_meetings(today)
     new_today = collect_new_today(today)
     rag       = collect_rag_sync_status()
-    health    = collect_pipeline_health()
+    # Before pipeline health, which uses the verdict: an unreachable gateway
+    # is the cause of every LLM-backed job's failure, not a separate finding.
+    gateway   = collect_gateway_status()
+    health    = collect_pipeline_health(gateway=gateway)
     usage     = collect_llm_usage()
     cc_usage  = collect_claude_code_usage()
 
     html_text = render(today, todos, meetings, new_today, rag, health,
-                       usage=usage, cc_usage=cc_usage)
+                       gateway=gateway, usage=usage, cc_usage=cc_usage)
 
     dated_path  = DASHBOARDS_DIR / f"morning-{today.isoformat()}.html"
     stable_path = DASHBOARDS_DIR / "morning.html"
@@ -1633,6 +2083,10 @@ def main() -> int:
               f"{rag['errors']} errors)")
     else:
         print("  rag sync:  no reports found")
+    if gateway is not None:
+        print(f"  gateway:   {gateway['host']} "
+              + ("reachable" if gateway["reachable"]
+                 else "UNREACHABLE -- LLM jobs will skip"))
     bad = [p for p in health if p["status"] != "pass"]
     print(f"  pipelines: {len(health)} monitored, {len(bad)} need attention"
           + (": " + ", ".join(f"{p['name']}={p['status']}" for p in bad) if bad else ""))
