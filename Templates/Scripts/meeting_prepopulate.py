@@ -223,13 +223,17 @@ def is_group_mailbox(email: str, display: str | None,
 # hand; deleting the note teaches it instead.
 PERSONAL_BLOCK_RE = re.compile(
     r'\b('
-    r'pto|ooo|out of office|vacation|holiday|'                     # time off
-    r'flight|fly to|airlines|airport|depart|layover|'              # travel
+    # Plural forms are spelled out deliberately: \b after a singular stem
+    # will not match "installers", and a block that slips through generates a
+    # junk note rather than failing loudly.
+    r'pto|ooo|out of office|vacation|holidays?|'                   # time off
+    r'flights?|fly to|airlines?|airport|departs?|layovers?|'       # travel
     r'hold|block(?:ed)?|placeholder|no meetings|busy|focus|'       # blocks
     r'work on|working on|finish up|finalize|write up|writing|'     # heads-down
-    r'appt|appointment|dentist|dental|doctor|physical|'            # errands
-    r'haircut|repair|installer|delivery|pick ?up|drop ?off|'
-    r'lunch|dinner|breakfast|gym|workout|commute|drive to'
+    r'appts?|appointments?|dentist|dental|doctors?|physical|'      # errands
+    r'haircuts?|repairs?|installers?|deliver(?:y|ies)|'
+    r'pick ?ups?|drop ?offs?|lunch|dinner|breakfast|gym|'
+    r'workouts?|commute|drive to'
     r')\b', re.I)
 
 # Confirmation codes, flight numbers and clock times make every occurrence of
