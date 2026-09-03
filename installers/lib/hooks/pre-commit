@@ -35,6 +35,35 @@ if ! python3 "$AUDIT" --staged --quiet; then
 fi
 
 # ---------------------------------------------------------------------------
+# Identity leak gate.
+#
+# gitleaks (below) finds credentials. It has no opinion about a tenant email
+# domain, a colleague's name or an internal meeting title -- strings that are
+# just as unpublishable and reach a public commit far more easily, through
+# docstrings, comments and test fixtures.
+#
+# Scans the INDEX, not the working tree. A new file is untracked until it is
+# staged, so a working-tree scan run while writing it reports clean; that
+# sequence is exactly how identity strings got one keystroke from a public
+# commit. The index is the last honest checkpoint.
+#
+# The deny-list of real values is gitignored -- committing it would publish
+# what it protects -- so a fresh clone runs only the generic address rule and
+# says so. Build the local list with:
+#     installers/lib/check_identity_leak.py --init
+LEAK="$REPO_ROOT/installers/lib/check_identity_leak.py"
+if [[ -x "$LEAK" ]]; then
+    if ! python3 "$LEAK" --staged --quiet; then
+        echo "" >&2
+        echo "pre-commit: identity leak scan FAILED. Commit refused." >&2
+        echo "Override with --no-verify only if the hit is genuinely a placeholder." >&2
+        exit 1
+    fi
+else
+    echo "pre-commit: $LEAK not found or not executable, skipping." >&2
+fi
+
+# ---------------------------------------------------------------------------
 # Standing security checks, fast subset.
 #
 # Only the two passes that stop an irreversible mistake on a PUBLIC repo: a
