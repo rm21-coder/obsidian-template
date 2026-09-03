@@ -36,6 +36,15 @@
     <key>KeepAlive</key>
     <true/>
 
+    <!-- Belt and braces. The watcher is built to ride out a gateway or VPN
+         outage without exiting (see voice_cleanup.py), so KeepAlive should
+         never actually fire. If some future fault does kill it, respawn once
+         a minute rather than at launchd's 10s floor — that floor is what
+         turned one unreachable-host check into 7,152 respawns and a 19MB
+         error log. -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
     <key>RunAtLoad</key>
     <true/>
 
