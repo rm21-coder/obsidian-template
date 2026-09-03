@@ -215,6 +215,89 @@ def is_group_mailbox(email: str, display: str | None,
     return False
 
 
+# Vocabulary of things that are a personal block rather than a meeting, seeded
+# from a month of real calendar data: travel legs, time off, errands, and
+# heads-down work. This list is only a SEED -- it is consulted solely for
+# events that carry no participants at all, and the learning store below picks
+# up whatever it misses from the user's own corrections. Resist growing it by
+# hand; deleting the note teaches it instead.
+PERSONAL_BLOCK_RE = re.compile(
+    r'\b('
+    r'pto|ooo|out of office|vacation|holiday|'                     # time off
+    r'flight|fly to|airlines|airport|depart|layover|'              # travel
+    r'hold|block(?:ed)?|placeholder|no meetings|busy|focus|'       # blocks
+    r'work on|working on|finish up|finalize|write up|writing|'     # heads-down
+    r'appt|appointment|dentist|dental|doctor|physical|'            # errands
+    r'haircut|repair|installer|delivery|pick ?up|drop ?off|'
+    r'lunch|dinner|breakfast|gym|workout|commute|drive to'
+    r')\b', re.I)
+
+# Confirmation codes, flight numbers and clock times make every occurrence of
+# a repeating block look unique, which would defeat subject-keyed learning.
+_KEY_PAREN_RE = re.compile(r'\([^)]*\)')
+_KEY_DIGIT_RE = re.compile(r'\d+')
+
+
+def block_key(subject: str) -> str:
+    """Normalize a subject into a stable learning key.
+
+    Collapses the variable parts of a repeating entry so that all its
+    occurrences share one key::
+
+        "Delta Air Lines flight 2712 to Atlanta (G5WFPS)" -> delta air lines flight to atlanta
+        "Delta Air Lines flight 1149 to Atlanta (G7QJ21)" -> delta air lines flight to atlanta
+        "PTO - offsite" / "PTO- offsite"                   -> pto offsite
+
+    Keys are for machine matching, not display; the original subject is stored
+    alongside so the state file stays readable.
+    """
+    s = (subject or '').lower()
+    while True:
+        new = _SUBJECT_PREFIX_RE.sub('', s)
+        if new == s:
+            break
+        s = new
+    s = _KEY_PAREN_RE.sub(' ', s)
+    s = _KEY_DIGIT_RE.sub(' ', s)
+    s = re.sub(r'[^a-z]+', ' ', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+
+def looks_like_personal_block(subject: str) -> bool:
+    """Seed heuristic: does this subject read as a personal block?"""
+    return bool(subject) and bool(PERSONAL_BLOCK_RE.search(subject))
+
+
+# Hosted-meeting join URLs. A calendar entry carrying one of these is a real
+# meeting someone will show up to, even when nobody was formally invited.
+JOIN_LINK_RE = re.compile(
+    r'(?:\b[\w.-]*zoom\.us/|teams\.microsoft\.com/l/meetup-join|'
+    r'teams\.live\.com/meet|\bmeet\.google\.com/|\b[\w.-]*webex\.com/|'
+    r'\bmeet\.jit\.si/|\bwhereby\.com/)',
+    re.I)
+
+
+def has_join_link(m: dict) -> bool:
+    """True if the event carries a hosted-meeting join URL.
+
+    Used to rescue self-organized working sessions from the solo-block skip:
+    someone who blocks time on their own calendar and pastes a Zoom link into
+    it is holding a meeting, not reserving quiet time. Checks the structured
+    location fields first, then the body.
+
+    Note the body is redacted upstream for `private`/`confidential`
+    sensitivity, so a link appearing only in the body of a sensitive event is
+    invisible here and the event keeps its solo classification.
+    """
+    loc = m.get('location') or {}
+    if loc.get('is_teams_meeting') or loc.get('teams_join_url'):
+        return True
+    for field in (loc.get('display'), m.get('body_preview')):
+        if field and JOIN_LINK_RE.search(field):
+            return True
+    return False
+
+
 def organizer_is_group_mailbox(m: dict) -> bool:
     """True when the invite came from a shared/departmental mailbox rather
     than from a person. The producer already decides this (it needs the same
@@ -249,7 +332,8 @@ Seen in the wild on a recurring
 
 def should_skip_meeting(m: dict, now: dt.datetime,
                         tz: ZoneInfo, treat_as_utc: bool,
-                        skip_subject_re: 're.Pattern | None' = None
+                        skip_subject_re: 're.Pattern | None' = None,
+                        learned: dict | None = None
                         ) -> str | None:
     """Apply §5.1 skip rules. Return reason or None."""
     if m.get('my_response_status') == 'declined':
@@ -262,7 +346,21 @@ def should_skip_meeting(m: dict, now: dt.datetime,
         return 'informational-subject'
     hint = (m.get('producer_classification_hint') or {}).get('class')
     if hint == 'solo':
-        return 'solo-block'
+        # An event with no participants is usually a personal block, but not
+        # always -- exec offices book working sessions through delegate access
+        # and they arrive looking identical to self-booked time. Silently
+        # dropping the ambiguous ones is how the user walks into a meeting
+        # with nowhere to type, so the benefit of the doubt goes to creating
+        # the note. Order matters: certainty first, learned rules next, seed
+        # heuristic last, and anything still unresolved becomes a flagged note.
+        subject = m.get('subject') or ''
+        if has_join_link(m):
+            pass                                   # hosted meeting: certain
+        elif block_key(subject) in (learned or {}).get('suppress', {}):
+            return 'learned-block'                 # user deleted it before
+        elif looks_like_personal_block(subject):
+            return 'solo-block'                    # reads as a block
+        # else: fall through and generate a flagged note
     if hint == 'personal_block':
         return 'personal-block-others-pto'
     try:
@@ -270,7 +368,17 @@ def should_skip_meeting(m: dict, now: dt.datetime,
             m['start'], bool(m.get('is_all_day')), tz, treat_as_utc)
     except (KeyError, ValueError, TypeError):
         return 'unparseable-start'
-    if start < now:
+    # Judged on the END time, not the start: a meeting already under way
+    # is in progress, not past, and that is exactly the moment a note is
+    # wanted. Comparing against the start meant any run after the hour
+    # struck refused to create the note for the meeting being sat in.
+    # max() guards an end time that parses earlier than the start.
+    try:
+        finish = normalize_event_time(
+            m['end'], bool(m.get('is_all_day')), tz, treat_as_utc)
+    except (KeyError, ValueError, TypeError):
+        finish = start
+    if max(start, finish) < now:
         return 'in-the-past'
     return None
 
@@ -1050,6 +1158,120 @@ def save_seen_state(state: dict[str, dict], dry_run: bool) -> None:
                           encoding='utf-8')
 
 
+LEARNING_FILE = STATE_DIR / 'meeting_block_learning.json'
+
+
+def load_learning() -> dict:
+    """Load the subject-keyed learning store.
+
+    Two maps, both keyed by block_key():
+
+      suppress     -- subjects whose generated note the user deleted, so the
+                      next occurrence is not generated again.
+      participants -- subjects where the user filled in `people:` by hand, so
+                      the next occurrence inherits them.
+
+    This is how the pipeline absorbs a scheduling practice it cannot change:
+    the identification cost is paid once per recurring subject rather than
+    once per occurrence.
+    """
+    if not LEARNING_FILE.exists():
+        return {'version': 1, 'suppress': {}, 'participants': {}}
+    try:
+        d = json.loads(LEARNING_FILE.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        log.warning('learning store unreadable; starting empty: %s', LEARNING_FILE)
+        return {'version': 1, 'suppress': {}, 'participants': {}}
+    d.setdefault('version', 1)
+    d.setdefault('suppress', {})
+    d.setdefault('participants', {})
+    return d
+
+
+def save_learning(learned: dict, dry_run: bool) -> None:
+    if dry_run:
+        return
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    LEARNING_FILE.write_text(json.dumps(learned, indent=2, sort_keys=True) + '\n',
+                             encoding='utf-8')
+
+
+def read_note_people(path: 'Path') -> list[str] | None:
+    """Return the `people:` wikilinks in a note's frontmatter.
+
+    None means the note is unreadable or has no frontmatter; [] means the list
+    is present but empty. Only the `people:` block is read -- a `group:` list
+    directly above it must not bleed in, so scanning stops at the next key.
+    """
+    try:
+        text = path.read_text(encoding='utf-8')
+    except OSError:
+        return None
+    fm = re.match(r'^---\n(.*?)\n---', text, re.S)
+    if not fm:
+        return None
+    out: list[str] = []
+    in_people = False
+    for line in fm.group(1).splitlines():
+        if re.match(r'^people\s*:', line):
+            in_people = True
+            continue
+        if in_people:
+            item = re.match(r'^\s*-\s*"?\[\[(.+?)\]\]"?\s*$', line)
+            if item:
+                out.append('[[%s]]' % item.group(1))
+                continue
+            if re.match(r'^\S', line):    # next frontmatter key
+                break
+    return out
+
+
+def harvest_learning(seen_state: dict, learned: dict, dry_run: bool,
+                     counters: 'Counter') -> None:
+    """Turn the user's edits to flagged notes into durable rules.
+
+    Only notes this pipeline flagged as low-confidence are inspected, and only
+    two edits are meaningful:
+
+      the note is gone      -> the user did not want it; suppress the subject
+      `people:` was filled  -> adopt those people for the subject
+
+    Keyed on the subject rather than the uid, because a recurring block gets a
+    fresh uid every occurrence -- suppressing this instance's uid would teach
+    nothing about next week's.
+    """
+    for entry in seen_state.values():
+        if not entry.get('low_confidence'):
+            continue
+        key = entry.get('block_key')
+        if not key:
+            continue
+        subject = entry.get('subject') or key
+        fname = entry.get('filename')
+        if not fname:
+            continue
+        people = read_note_people(MEETINGS_DIR / fname)
+        if people is None:
+            if key not in learned['suppress']:
+                learned['suppress'][key] = {
+                    'subject': subject, 'learned_at': entry.get('generated_at'),
+                    'reason': 'generated note was deleted',
+                }
+                log.info('  LEARNED suppress: %r (note removed)', subject)
+                counters['learned-suppress'] += 1
+            entry['status'] = 'suppressed'
+        elif people:
+            prior = (learned['participants'].get(key) or {}).get('people')
+            if prior != people:
+                learned['participants'][key] = {
+                    'subject': subject, 'people': people,
+                    'learned_at': entry.get('generated_at'),
+                }
+                log.info('  LEARNED participants for %r: %s', subject, ', '.join(people))
+                counters['learned-participants'] += 1
+    save_learning(learned, dry_run)
+
+
 def build_people_wikilinks(attendees: list[dict],
                            contact_by_email: dict,
                            people_idx: PeopleIndex,
@@ -1095,7 +1317,8 @@ def build_people_wikilinks(attendees: list[dict],
 
 
 def render_meeting_file(m: dict, mtype: str, group_stem: str | None,
-                        required_people: list[str], now_iso: str) -> str:
+                        required_people: list[str], now_iso: str,
+                        needs_attendees: bool = False) -> str:
     """Compose the meeting Markdown file in the canonical minimal form
     (Pre-Pop Spec §7 revised 2026-05-15). Matches the shape of the three
     canonical examples in ~/Obsidian/Meetings/History/:
@@ -1126,7 +1349,14 @@ def render_meeting_file(m: dict, mtype: str, group_stem: str | None,
     fm_lines.append('people:')
     for p in required_people:
         fm_lines.append(f'  - "{p}"')
-    fm_lines.append('tags: []')
+    if needs_attendees:
+        # The one thing the pipeline could not work out, surfaced in the vault
+        # so it is reviewable at a glance. Filling in `people:` here is what
+        # teaches harvest_learning() the answer for every later occurrence.
+        fm_lines.append('tags:')
+        fm_lines.append('  - needs-attendees')
+    else:
+        fm_lines.append('tags: []')
     fm_lines.append('classification: confidential')
     fm_lines.append(f'created: {now_iso[:16]}')
     fm_lines.append(f'updated: {now_iso[:16]}')
@@ -1383,6 +1613,14 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
     errors: list[str] = []
     changes: list[str] = []
 
+    # Absorb whatever the user taught us by editing last run's flagged notes
+    # before deciding anything about this run's events.
+    learned = load_learning()
+    harvest_learning(seen_state, learned, dry_run, counters)
+    if learned['suppress'] or learned['participants']:
+        log.info('Learned rules: %d suppressed subject(s), %d with participants',
+                 len(learned['suppress']), len(learned['participants']))
+
     for m in payload.get('meetings', []):
         uid = m.get('uid') or ''
         prev = seen_state.get(uid) if uid else None
@@ -1441,7 +1679,7 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
 
             # --- New meeting (or recreate after un-cancel / vanished note) ---
             skip = should_skip_meeting(m, now, tz, treat_as_utc,
-                                       skip_subject_re)
+                                       skip_subject_re, learned)
             if skip:
                 counters[f'skipped-{skip}'] += 1
                 log.info('SKIP (%s): uid=%s', skip, uid[:24])
@@ -1452,9 +1690,6 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
 
             mtype, group_stem, n_others = classify(
                 m, user_email, groups_idx, contact_by_email, admin_emails)
-            counters[f'class-{mtype}'] += 1
-            if mtype == 'Group' and group_stem:
-                counters['group-matched'] += 1
 
             # Resolve attendees -> stubs / wikilinks (required only;
             # optional and admin-demoted attendees excluded)
@@ -1463,15 +1698,39 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                 now_iso, dry_run, counters, user_email, admin_emails,
                 count_optional_as_participants(m))
 
+            # The calendar object names nobody. Either it is a block we chose
+            # to keep, or a working session booked without invitations. Adopt
+            # whatever this subject taught us previously; failing that, flag
+            # it rather than guessing -- an inferred [[Person]] link would
+            # propagate into the follow-up scanner and the People graph.
+            bkey = block_key(m.get('subject') or '')
+            needs_attendees = False
+            if not required:
+                inherited = (learned['participants'].get(bkey) or {}).get('people') or []
+                if inherited:
+                    required = list(inherited)
+                    counters['participants-inherited'] += 1
+                else:
+                    needs_attendees = True
+                    counters['flagged-needs-attendees'] += 1
+                # Ad-hoc is the only type carrying a title, and a note with
+                # neither people nor a title says nothing about what it is.
+                mtype, group_stem = 'Ad-hoc', None
+
+            counters[f'class-{mtype}'] += 1
+            if mtype == 'Group' and group_stem:
+                counters['group-matched'] += 1
+
             # Meeting file path
             path = meeting_filename(start, MEETINGS_DIR)
             content = render_meeting_file(
-                m, mtype, group_stem, required, now_iso)
+                m, mtype, group_stem, required, now_iso, needs_attendees)
 
-            log.info('  WRITE-MEETING %s  (type=%s%s, n_others=%d)',
+            log.info('  WRITE-MEETING %s  (type=%s%s, n_others=%d%s)',
                      path.name, mtype,
                      f', group=[[{group_stem}]]' if group_stem else '',
-                     n_others)
+                     n_others,
+                     ', NEEDS-ATTENDEES' if needs_attendees else '')
             if not dry_run:
                 MEETINGS_DIR.mkdir(parents=True, exist_ok=True)
                 path.write_text(content, encoding='utf-8')
@@ -1486,6 +1745,12 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                     'type': mtype,
                     'group': group_stem,
                     'status': 'active',
+                    # harvest_learning() reads these back next run. The subject
+                    # is stored because a suppressed event stops appearing in
+                    # the handoff, so it could not be recovered later.
+                    'low_confidence': needs_attendees,
+                    'block_key': bkey,
+                    'subject': m.get('subject') or '',
                 }
         except Exception as e:  # noqa: BLE001
             msg = f'Error processing meeting uid={(m.get("uid") or "")[:24]}: {e}'
