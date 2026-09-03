@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -184,6 +185,74 @@ def scan(lines, rules, allowed) -> list[tuple[str, int, str, str]]:
     return findings
 
 
+SOURCE_VAULT_MARKER = "# source-vault: "
+
+
+def read_source_vault() -> Path | None:
+    """Where --init last read People/ from, recorded in the deny-list header.
+
+    Stored in the file rather than re-derived so the staleness check needs no
+    config and no arguments -- it has to run inside a pre-commit hook, where
+    anything requiring setup would simply not run.
+    """
+    if not DENYLIST.is_file():
+        return None
+    for line in DENYLIST.read_text(encoding="utf-8").splitlines():
+        if line.startswith(SOURCE_VAULT_MARKER):
+            val = line[len(SOURCE_VAULT_MARKER):].strip()
+            if val:
+                return Path(val).expanduser()
+        if not line.startswith("#"):
+            break          # header is over; rules must not redirect the check
+    return None
+
+
+def stale_people(vault: Path | None) -> int:
+    """How many People notes are newer than the deny-list.
+
+    A colleague added after the last --init has no rules at all, and nothing
+    about a clean scan reveals that -- the protection for that name simply
+    does not exist. Comparing mtimes is the cheapest signal that says
+    "regenerate".
+
+    Deliberately a warning and not a block: a stale list is a gap in coverage,
+    not a leak, and refusing a commit over it would train the operator to pass
+    --no-verify, which also disables the check that catches real leaks.
+    """
+    if vault is None or not DENYLIST.is_file():
+        return 0
+    people = vault / "People"
+    if not people.is_dir():
+        return 0
+    cutoff = DENYLIST.stat().st_mtime
+    n = 0
+    try:
+        with os.scandir(people) as it:
+            for entry in it:
+                if entry.name.endswith(".md") and entry.is_file():
+                    if entry.stat().st_mtime > cutoff:
+                        n += 1
+    except OSError:
+        return 0
+    return n
+
+
+def warn_if_stale() -> None:
+    """Print a non-fatal staleness note. Runs even under --quiet: surfacing
+    this during an ordinary commit is the entire reason it exists."""
+    vault = read_source_vault()
+    n = stale_people(vault)
+    if n:
+        print(f"check_identity_leak: NOTE -- {n} People note(s) in "
+              f"{vault / 'People'} are newer than the deny-list.",
+              file=sys.stderr)
+        print("  Names added since the last --init are not protected yet. "
+              "Refresh with:", file=sys.stderr)
+        print(f"    {Path(__file__).name} --init", file=sys.stderr)
+        print("  (warning only -- this does not block the commit)",
+              file=sys.stderr)
+
+
 def init_denylist(vault: Path, config: Path) -> int:
     """Build the local deny-list from values already on this machine.
 
@@ -242,6 +311,10 @@ def init_denylist(vault: Path, config: Path) -> int:
         "# One value per line, matched case-insensitively as a literal.",
         "# Prefix with 're:' for a regular expression. '#' starts a comment.",
         "# Hand-edit freely; --init merges rather than overwrites.",
+        "#",
+        "# The marker below tells later runs where to look for People notes",
+        "# added since this file was built. Keep it inside the header block.",
+        SOURCE_VAULT_MARKER + str(vault),
         "",
     ]
     existing = []
@@ -293,6 +366,8 @@ def main() -> int:
         lines = worktree_lines(args.files)
 
     findings = scan(lines, rules, allowed)
+
+    warn_if_stale()
 
     if findings:
         print("check_identity_leak: real identities in content about to be "

@@ -254,6 +254,95 @@ class TestInit:
         assert "found nothing to protect" in capsys.readouterr().err
 
 
+class TestStalenessWarning:
+    """A colleague added after the last --init has no rules at all, and a clean
+    scan cannot reveal that. The warning is the only signal, so it is tested
+    for firing, for staying non-fatal, and for surviving --quiet."""
+
+    def _vault_with(self, tmp_path: Path, count: int) -> Path:
+        vault = tmp_path / "vault"
+        (vault / "People").mkdir(parents=True)
+        for i in range(count):
+            (vault / "People" / f"Person, Number{i}.md").write_text(
+                "x", encoding="utf-8")
+        return vault
+
+    def _cfg(self, tmp_path: Path) -> Path:
+        c = tmp_path / "c.json"
+        c.write_text('{"tenant_domains": ["acme-tenant.edu"]}', encoding="utf-8")
+        return c
+
+    def test_marker_round_trips(self, monkeypatch, lib, tmp_path) -> None:
+        m = load_module(monkeypatch, lib)
+        vault = self._vault_with(tmp_path, 1)
+        m.init_denylist(vault, self._cfg(tmp_path))
+        assert m.read_source_vault() == vault
+
+    def test_missing_marker_is_not_an_error(self, monkeypatch, lib) -> None:
+        """Deny-lists written before the marker existed must still load."""
+        m = load_module(monkeypatch, lib)
+        m.DENYLIST.write_text("# old header" + chr(10) + "acme-tenant.edu" + chr(10),
+                              encoding="utf-8")
+        assert m.read_source_vault() is None
+        assert m.stale_people(None) == 0
+
+    def test_marker_below_the_header_is_ignored(self, monkeypatch, lib,
+                                                tmp_path) -> None:
+        """Parsing stops at the first rule, so a value that merely looks like
+        the marker cannot redirect the check from inside the rule body."""
+        m = load_module(monkeypatch, lib)
+        nl = chr(10)
+        m.DENYLIST.write_text("# hdr" + nl + "acme-tenant.edu" + nl
+                              + f"# source-vault: {tmp_path}" + nl,
+                              encoding="utf-8")
+        assert m.read_source_vault() is None
+
+    def test_newer_people_notes_are_counted(self, monkeypatch, lib,
+                                            tmp_path) -> None:
+        import os
+        m = load_module(monkeypatch, lib)
+        vault = self._vault_with(tmp_path, 3)
+        os.utime(m.DENYLIST, (1_600_000_000, 1_600_000_000))   # long past
+        assert m.stale_people(vault) == 3
+
+    def test_older_people_notes_are_not_counted(self, monkeypatch, lib,
+                                                tmp_path) -> None:
+        import os
+        m = load_module(monkeypatch, lib)
+        vault = self._vault_with(tmp_path, 3)
+        for f in (vault / "People").glob("*.md"):
+            os.utime(f, (1_600_000_000, 1_600_000_000))
+        assert m.stale_people(vault) == 0
+
+    def test_absent_vault_is_silent(self, monkeypatch, lib, tmp_path) -> None:
+        """A clone on a machine with no vault must not nag on every commit."""
+        m = load_module(monkeypatch, lib)
+        assert m.stale_people(tmp_path / "nope") == 0
+
+    def test_warning_prints_and_names_the_fix(self, monkeypatch, lib,
+                                              tmp_path, capsys) -> None:
+        import os
+        m = load_module(monkeypatch, lib)
+        vault = self._vault_with(tmp_path, 2)
+        m.init_denylist(vault, self._cfg(tmp_path))
+        capsys.readouterr()
+        os.utime(m.DENYLIST, (1_600_000_000, 1_600_000_000))
+        m.warn_if_stale()
+        err = capsys.readouterr().err
+        assert "2 People note(s)" in err
+        assert "--init" in err
+        assert "does not block" in err
+
+    def test_no_warning_when_current(self, monkeypatch, lib, tmp_path,
+                                     capsys) -> None:
+        m = load_module(monkeypatch, lib)
+        vault = self._vault_with(tmp_path, 2)
+        m.init_denylist(vault, self._cfg(tmp_path))
+        capsys.readouterr()
+        m.warn_if_stale()
+        assert capsys.readouterr().err == ""
+
+
 class TestRepoIsClean:
     """The gate must pass on the committed tree, or it gets bypassed."""
 
