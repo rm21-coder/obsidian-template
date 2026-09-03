@@ -1,0 +1,12 @@
+Correction: the "three of seventeen consecutive runs" figure in this message
+was computed from a stale local view of the handoff archive and is not
+reliable. Do not cite it.
+
+What this commit describes and fixes is unaffected and was verified directly
+against the connector: an upper bound of "tomorrow" is resolved as the END of
+tomorrow, the prompt's single-day `week` stamp contradicted that, and nothing
+downstream enforced `week`. Only the claimed frequency of the resulting
+one-day/two-day flip was unmeasured.
+
+Recorded as a note rather than an amended message because this commit is
+published and carries live fixes under later work. See 79785ed.
