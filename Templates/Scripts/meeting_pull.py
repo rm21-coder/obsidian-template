@@ -28,6 +28,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -44,6 +45,64 @@ DEFAULT_SEARCH_TOOL = "outlook_calendar_search"
 DEFAULT_READ_TOOL = "read_resource"
 
 REQUIRED_KEYS = ("display_name", "email", "tenant", "timezone")
+
+# An expired CLI session is not a transient failure. The retry and catch-up
+# layers exist for a laptop that sleeps mid-run, which genuinely succeeds on a
+# second attempt; authentication cannot, because it needs a human at a browser.
+# Retrying it nine times across three firings -- observed 2026-09-04, still
+# hammering at 08:02 over a cause established at 05:00 -- buys nothing and
+# buries the one line that says what to do.
+AUTH_FAILURE_RE = re.compile(
+    r"OAuth session expired"
+    r"|Failed to authenticate"
+    r"|Not logged in"
+    r"|Please run /login"
+    r"|authentication_error"
+    r"|invalid[_ ]api[_ ]key"
+    r"|Unauthorized",
+    re.I)
+
+# Distinct from 1 so the caller can tell "needs a human" from "try again".
+EXIT_AUTH = 3
+
+AUTH_MARKER = SCRIPTS_DIR / ".state" / "meeting_pull_auth_block.json"
+
+
+def auth_block_active():
+    """True if today's run already established that the CLI needs re-auth.
+
+    The later catch-up firings are worth their cost only against failures that
+    a retry can clear. This makes them cheap no-ops for the one failure that a
+    retry never will, while still letting tomorrow try again from scratch --
+    the block is dated, not permanent, so a re-auth needs no cleanup step to
+    be remembered.
+    """
+    try:
+        rec = json.loads(AUTH_MARKER.read_text())
+    except (OSError, ValueError):
+        return False
+    return rec.get("date") == _dt.date.today().isoformat()
+
+
+def set_auth_block(detail):
+    try:
+        AUTH_MARKER.parent.mkdir(parents=True, exist_ok=True)
+        AUTH_MARKER.write_text(json.dumps({
+            "date": _dt.date.today().isoformat(),
+            "at": _dt.datetime.now().isoformat(timespec="seconds"),
+            "detail": detail[:300],
+        }, indent=2) + "\n")
+    except OSError as e:
+        log("could not write auth marker %s: %s" % (AUTH_MARKER, e))
+
+
+def clear_auth_block():
+    """Drop a stale block once a run gets through, so a later failure on the
+    same day is not mistaken for the one already reported."""
+    try:
+        AUTH_MARKER.unlink()
+    except OSError:
+        pass
 
 # Days of lookahead beyond today. 1 == today + the next working day, which is
 # what the morning refresh wants: tomorrow's notes land in the vault a day
@@ -401,6 +460,13 @@ def main():
         log("today's handoff already exists in %s - nothing to do" % out_dir)
         return 0
 
+    if args.skip_if_fresh and auth_block_active():
+        log("the Claude CLI needed re-authentication earlier today and still "
+            "does as far as this job knows - not retrying. Run `claude` in a "
+            "terminal, sign in with /login, then re-run this without "
+            "--skip-if-fresh (marker: %s)" % AUTH_MARKER)
+        return EXIT_AUTH
+
     out_dir.mkdir(parents=True, exist_ok=True)
     if producer == "claude":
         claude = find_claude(args.claude)
@@ -410,10 +476,36 @@ def main():
     attempts = max(1, args.retries + 1)
     for attempt in range(1, attempts + 1):
         log("starting (producer=%s, out_dir=%s, attempt %d/%d)" % (producer, out_dir, attempt, attempts))
-        completed = subprocess.run(command)
+        # Captured rather than inherited so the auth signature can be read
+        # out of it; re-emitted verbatim straight afterwards so the log keeps
+        # the producer's own words, which are what the dashboard reads.
+        completed = subprocess.run(command, capture_output=True, text=True)
+        transcript = (completed.stdout or "") + (completed.stderr or "")
+        if transcript.strip():
+            print(transcript.rstrip(), flush=True)
+
         if completed.returncode == 0:
+            clear_auth_block()
             log("done")
             return 0
+
+        if AUTH_FAILURE_RE.search(transcript):
+            detail = next((ln.strip() for ln in transcript.splitlines()
+                           if AUTH_FAILURE_RE.search(ln)), "authentication failed")
+            # Logged last, and deliberately so: the dashboard surfaces the
+            # final line of this log, and before this the last word belonged
+            # to "producer exited 1 - no handoff written" -- a symptom sitting
+            # on top of the one line that names the fix.
+            set_auth_block(detail)
+            notify_failure("Claude CLI sign-in expired - run `claude` then /login. "
+                           "No meeting notes until then.")
+            log("FATAL: the Claude CLI cannot authenticate (%s). This is not "
+                "retryable without a human: run `claude` in a terminal and "
+                "sign in with /login, then re-run "
+                "Templates/Scripts/meeting_pull.py. Skipping the remaining "
+                "attempts and today's later firings." % detail)
+            return EXIT_AUTH
+
         log("producer exited %d - no handoff written" % completed.returncode)
         # A handoff can exist despite a non-zero exit: the transform runs before
         # the CLI's final message, so a session that dies at the very end has

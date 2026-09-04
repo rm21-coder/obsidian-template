@@ -271,6 +271,88 @@ def test_print_survives_the_binary_being_absent(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# cli_auth_defect -- the one cause that cannot clear itself.
+#
+# Exists because last_error_line() provably misses it: the producer wrapper
+# logs its own summary after the CLI speaks, so on 2026-09-04 the dashboard
+# quoted "producer exited 1 - no handoff written" while the line above it
+# named both the cause and the fix.
+# ---------------------------------------------------------------------------
+
+def test_an_expired_session_is_found_under_the_wrappers_summary(tmp_path):
+    """The exact shape of the log that was misdiagnosed: the CLI's message,
+    then the wrapper's less informative last word on top of it."""
+    log = tmp_path / "meeting-pull.log"
+    log.write_text(textwrap.dedent("""\
+        2026-09-04 06:32:02 meeting_pull: starting (attempt 3/3)
+        Failed to authenticate: OAuth session expired and could not be refreshed
+        2026-09-04 06:32:03 meeting_pull: producer exited 1 - no handoff written
+        """), encoding="utf-8")
+
+    verdict = md.cli_auth_defect(str(log))
+    assert verdict is not None
+    assert "OAuth session expired" in verdict
+    # The generic signal picks the symptom, which is the whole point.
+    assert "producer exited 1" in md.last_error_line(str(log))
+
+
+def test_the_verdict_names_the_human_step(tmp_path):
+    """A scheduled job can never sign itself in, so a diagnosis that does not
+    say what the operator must do is useless here."""
+    log = tmp_path / "j.log"
+    log.write_text("Not logged in - Please run /login\n", encoding="utf-8")
+
+    verdict = md.cli_auth_defect(str(log))
+    assert "/login" in verdict and "claude" in verdict
+    assert verdict.startswith("Verified:")
+
+
+@pytest.mark.parametrize("line", [
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "Not logged in - Please run /login",
+    "API Error: authentication_error",
+    "Error: invalid_api_key",
+    "HTTP 403 Unauthorized",
+])
+def test_known_signatures_are_recognized(tmp_path, line):
+    log = tmp_path / "j.log"
+    log.write_text(line + "\n", encoding="utf-8")
+    assert md.cli_auth_defect(str(log)) is not None
+
+
+@pytest.mark.parametrize("line", [
+    "API Error: Can't reach the API server (ENOTFOUND)",
+    "Your computer went to sleep mid-response",
+    "2026-09-03 05:01:15 meeting_pull: done",
+    "gateway host api.ai.example.edu did not resolve",
+])
+def test_other_failures_are_not_called_auth(tmp_path, line):
+    """The expensive direction. Naming auth on a transient network failure
+    sends the operator to re-login for a problem a retry would have cleared,
+    and this signal deliberately outranks the generic one."""
+    log = tmp_path / "j.log"
+    log.write_text(line + "\n", encoding="utf-8")
+    assert md.cli_auth_defect(str(log)) is None
+
+
+def test_a_clean_or_missing_log_reports_nothing(tmp_path):
+    empty = tmp_path / "empty.log"
+    empty.write_text("", encoding="utf-8")
+    assert md.cli_auth_defect(str(empty)) is None
+    assert md.cli_auth_defect(str(tmp_path / "absent.log")) is None
+
+
+def test_the_hint_does_not_name_a_cause():
+    """The rule stated above PIPELINE_HINTS, asserted rather than trusted:
+    this hint carried two guessed causes in the same file as the rule
+    forbidding them."""
+    hint = md.PIPELINE_HINTS["com.meeting-pull"]
+    for guess in ("re-auth", "Usual causes", "no longer match"):
+        assert guess not in hint, f"hint names a cause: {guess!r}"
+    assert "meeting-pull.log" in hint
+
+
+# ---------------------------------------------------------------------------
 # last_error_line -- read the log instead of telling someone to read it.
 # ---------------------------------------------------------------------------
 

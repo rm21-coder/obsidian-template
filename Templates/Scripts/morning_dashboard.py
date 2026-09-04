@@ -575,11 +575,14 @@ PIPELINE_HINTS = {
         "See com.meeting-pull below."
     ),
     "com.meeting-pull": (
+        # Named two guessed causes until 2026-09-04, in the same file as the
+        # rule forbidding exactly that. One of them happened to be right that
+        # morning, which is the trap: a hint that guesses correctly once reads
+        # as authoritative the next time it guesses wrong. The auth case is now
+        # a checked signal (see cli_auth_defect).
         "The producer half: no fresh handoff means no meeting notes, even "
-        "though the pre-populate consumer looks healthy. Check "
-        "~/Library/Logs/meeting-pull.log. Usual causes: the Claude CLI needs "
-        "re-auth, or the MCP tool names in .config/meeting_pull.json no "
-        "longer match what `claude mcp list` exposes."
+        "though the pre-populate consumer looks healthy. Its own account of "
+        "what went wrong is in ~/Library/Logs/meeting-pull.log."
     ),
     "com.obsidian.security.integrity": (
         "Exits non-zero when it detects file drift -- usually your own recent "
@@ -821,6 +824,43 @@ def last_error_line(path: str) -> str | None:
         if _LOG_NOISE_RE.match(ln):
             continue
         return ln.strip()[:300]
+    return None
+
+
+# Signatures the Claude CLI prints when its stored session will not serve a
+# headless run. Read from the log, so this is a checked signal, not a guess.
+_CLI_AUTH_RE = re.compile(
+    r"OAuth session expired"
+    r"|Failed to authenticate"
+    r"|Not logged in"
+    r"|Please run /login"
+    r"|authentication_error"
+    r"|invalid[_ ]api[_ ]key"
+    r"|Unauthorized",
+    re.I)
+
+
+def cli_auth_defect(path: str) -> str | None:
+    """A CHECKED expired-Claude-CLI-session in this job's log, or None.
+
+    This earns its own signal because last_error_line() cannot find it. The
+    wrapper logs its own summary after the CLI speaks, so the final line of
+    meeting-pull.log read "producer exited 1 - no handoff written" -- a
+    symptom -- while the line directly above it named both the cause and the
+    remedy. Reported 2026-09-04 with the dashboard quoting the symptom.
+
+    Distinct from every other cause here in one way worth stating: it cannot
+    clear itself. A gateway comes back when the VPN reconnects and a venv
+    heals on rebuild, but a scheduled job can never re-authenticate, so this
+    is the one diagnosis that is useless unless it names the human step.
+    """
+    for ln in reversed(_log_tail_lines(path)):
+        if _CLI_AUTH_RE.search(ln):
+            return ("Verified: the Claude CLI's stored session has expired -- "
+                    f"the log says \"{ln.strip()[:120]}\". A scheduled run "
+                    "cannot sign itself back in, so every firing will fail "
+                    "identically until you run `claude` in a terminal and "
+                    "sign in with /login.")
     return None
 
 
@@ -1384,6 +1424,14 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
         # the hint, which is the honest outcome -- see the note above
         # PIPELINE_HINTS for what happens when this section fills that gap
         # with a story instead.
+
+        # Ahead of the generic last-line signal on purpose: when the CLI's
+        # session has expired that IS the whole story, and the wrapper's
+        # summary line underneath it would otherwise be the only thing shown.
+        if status != "pass" and log_is_current and err_log:
+            auth = cli_auth_defect(err_log)
+            if auth:
+                problems.append(auth)
 
         # The job's own last words. For the crash-loop this was built for, the
         # repeated line named the unreachable host outright and would have
