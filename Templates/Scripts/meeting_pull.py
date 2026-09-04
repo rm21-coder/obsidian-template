@@ -65,6 +65,31 @@ AUTH_FAILURE_RE = re.compile(
 # Distinct from 1 so the caller can tell "needs a human" from "try again".
 EXIT_AUTH = 3
 
+# Distinct again: nothing was attempted, so nothing is wrong with the job.
+EXIT_NO_NETWORK = 5
+
+
+def network_ready():
+    """True if the API host resolves and accepts a connection.
+
+    The 05:00 firing runs seconds after a scheduled wake, before Wi-Fi has
+    necessarily associated. Aug 20 failed that way -- ENOTFOUND across three
+    attempts -- and burning the retry budget on a machine with no route buries
+    the honest explanation under an error that reads like a service outage.
+
+    Fails OPEN. This gate is an optimisation, not a safety requirement: if the
+    probe itself cannot run for any reason, the run proceeds exactly as it did
+    before the gate existed. The one thing worse than a wasted 05:00 attempt
+    is a 05:00 attempt that never happens because a helper broke.
+    """
+    try:
+        if str(SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(SCRIPTS_DIR))
+        from claude_auth_check import network_ready as probe
+        return probe()
+    except Exception:
+        return True
+
 AUTH_MARKER = SCRIPTS_DIR / ".state" / "meeting_pull_auth_block.json"
 
 
@@ -459,6 +484,12 @@ def main():
     if args.skip_if_fresh and handoff_exists_for_today(out_dir):
         log("today's handoff already exists in %s - nothing to do" % out_dir)
         return 0
+
+    if not network_ready():
+        log("the API host is not reachable yet - most likely Wi-Fi has not "
+            "associated since the scheduled wake. Not attempting the pull; "
+            "the later catch-up firings will run it once there is a route.")
+        return EXIT_NO_NETWORK
 
     if args.skip_if_fresh and auth_block_active():
         log("the Claude CLI needed re-authentication earlier today and still "
