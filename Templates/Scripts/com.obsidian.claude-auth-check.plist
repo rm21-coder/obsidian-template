@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Claude CLI auth warm-and-check LaunchAgent - OPT-IN
+
+  Runs Templates/Scripts/claude_auth_check.py on weekday evenings. One trivial
+  `claude -p` request both refreshes the stored session and establishes whether
+  it still works, at an hour when a human can act on the answer.
+
+  Why the evening and not the morning: the failure this addresses is the
+  producer's 05:00 run dying on an expired session. At 05:00 nothing can be
+  done about it (signing in is interactive), so the check is worthless
+  there. At 21:00 a re-login costs a minute; the same re-login discovered from
+  an empty vault at 08:30 has already cost the morning's notes.
+
+  Timing: 21:00 leaves ~8 hours before the 05:00 meeting pull. Today's
+  evidence (last success 08:20, dead by 05:00 next day) puts the usable
+  window under 21 hours, so an 8-hour margin fits. If the session lifetime
+  turns out shorter than ~9 hours, add a second firing nearer the pull, but
+  note that anything at wake time competes with the Wi-Fi association delay
+  that caused the Aug 20 failures.
+
+  A missed firing (laptop asleep or away) runs once on wake, which is fine:
+  the answer is just as actionable an hour late.
+
+  Exit codes: 0 healthy, 3 needs re-login, 4 nothing established (no route,
+  timeout, or a non-auth failure). 4 is deliberately not a red dashboard for
+  an authentication problem it did not observe.
+
+  Manual installation:
+    cp Templates/Scripts/com.obsidian.claude-auth-check.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.obsidian.claude-auth-check.plist
+
+  To unload (e.g. before edits):
+    launchctl unload ~/Library/LaunchAgents/com.obsidian.claude-auth-check.plist
+
+  Logs:
+    ~/Library/Logs/claude-auth-check.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.claude-auth-check</string>
+
+    <!-- Stdlib only, so the system interpreter is enough; no dependency on
+         the shared Templates/Scripts/.venv. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/claude_auth_check.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+        <!-- Sunday too: Monday's 05:00 pull is the one furthest from any
+             weekday warm, and a weekend of disuse is when a sliding session
+             is most likely to have lapsed. -->
+        <dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>21</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- A wedged CLI must not hold a slot; the script's own probe timeout is
+         120s, so this is well clear of a healthy run. -->
+    <key>ExitTimeOut</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/claude-auth-check.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/claude-auth-check.log</string>
+</dict>
+</plist>
