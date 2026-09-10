@@ -439,6 +439,145 @@ class TestHarvestLearning:
         assert mp.block_key("Roadmap Discussion") in on_disk["suppress"]
 
 
+class TestReadNoteType:
+
+    def test_reads_type_and_group(self, learning_env: Path) -> None:
+        n = mp.MEETINGS_DIR / "n.md"
+        n.write_text('---\ntype: Group\ngroup:\n  - "[[Steering]]"\n'
+                     'people:\n  - "[[Nguyen, Chris]]"\ntags: []\n---\n',
+                     encoding="utf-8")
+        assert mp.read_note_type(n) == ("Group", "Steering")
+
+    def test_no_group_is_none(self, learning_env: Path) -> None:
+        n = mp.MEETINGS_DIR / "n.md"
+        n.write_text('---\ntype: Individual\npeople:\ntags: []\n---\n',
+                     encoding="utf-8")
+        assert mp.read_note_type(n) == ("Individual", None)
+
+    def test_people_list_is_not_mistaken_for_a_group(self, learning_env: Path) -> None:
+        """`people:` sits directly below `group:` in the note format, so the
+        group scan has to stop at the next key or it adopts a person as the
+        group roster."""
+        n = mp.MEETINGS_DIR / "n.md"
+        n.write_text('---\ntype: Group\ngroup:\npeople:\n'
+                     '  - "[[Nguyen, Chris]]"\ntags: []\n---\n', encoding="utf-8")
+        assert mp.read_note_type(n) == ("Group", None)
+
+    def test_missing_file_and_no_frontmatter(self, learning_env: Path) -> None:
+        assert mp.read_note_type(mp.MEETINGS_DIR / "absent.md") == (None, None)
+        n = mp.MEETINGS_DIR / "plain.md"
+        n.write_text("just a body\n", encoding="utf-8")
+        assert mp.read_note_type(n) == (None, None)
+
+
+class TestTypeLearning:
+    """The presenter pattern: two required humans, one of them the user.
+
+    Indistinguishable in the calendar from a genuine 1:1, so classify() calls
+    it Individual and no inference on the event could do better. The user is
+    the only one who knows, and this is how they say it once.
+    """
+
+    def _state(self, **over) -> dict:
+        entry = {
+            "filename": "2026-09-16 1030.md",
+            "generated_at": "2026-09-16T05:02:00-04:00",
+            "block_key": mp.block_key("SPG - Service Center - Hold"),
+            "subject": "SPG - Service Center - Hold",
+            "type": "Individual",
+            "status": "active",
+        }
+        entry.update(over)
+        return {"uid-1": entry}
+
+    def _note(self, text: str) -> None:
+        (mp.MEETINGS_DIR / "2026-09-16 1030.md").write_text(text, encoding="utf-8")
+
+    def test_a_corrected_type_is_learned(self, learning_env: Path) -> None:
+        self._note('---\ntype: Group\ngroup:\n  - "[[Steering]]"\n'
+                   'people:\n  - "[[Ackerman, Dana]]"\ntags: []\n---\n')
+        learned, c = mp.load_learning(), Counter()
+        mp.harvest_type_corrections(self._state(), learned, c)
+        rule = learned["types"][mp.block_key("SPG - Service Center - Hold")]
+        assert rule["type"] == "Group" and rule["group"] == "Steering"
+        assert c["learned-type"] == 1
+
+    def test_an_unchanged_type_teaches_nothing(self, learning_env: Path) -> None:
+        """The common case is a note left exactly as written; recording a rule
+        for it would fill the store with no-ops."""
+        self._note('---\ntype: Individual\npeople:\ntags: []\n---\n')
+        learned, c = mp.load_learning(), Counter()
+        mp.harvest_type_corrections(self._state(), learned, c)
+        assert learned["types"] == {}
+
+    def test_a_typo_is_refused_and_named(self, learning_env: Path,
+                                         caplog: pytest.LogCaptureFixture) -> None:
+        """A standing rule built from a fat-fingered type would mis-file that
+        subject forever, so the vocabulary is closed and the warning says
+        what was expected."""
+        self._note('---\ntype: Gruop\npeople:\ntags: []\n---\n')
+        learned, c = mp.load_learning(), Counter()
+        with caplog.at_level("WARNING"):
+            mp.harvest_type_corrections(self._state(), learned, c)
+        assert learned["types"] == {}
+        assert "Gruop" in caplog.text
+        assert "Individual, Group, Ad-hoc" in caplog.text
+
+    def test_a_typo_does_not_destroy_an_existing_rule(self, learning_env: Path) -> None:
+        key = mp.block_key("SPG - Service Center - Hold")
+        learned = mp.load_learning()
+        learned["types"][key] = {"type": "Group", "group": "Steering",
+                                 "subject": "SPG - Service Center - Hold"}
+        self._note('---\ntype: Gruop\npeople:\ntags: []\n---\n')
+        mp.harvest_type_corrections(self._state(), learned, Counter())
+        assert learned["types"][key]["type"] == "Group"
+
+    def test_a_deleted_note_teaches_no_type(self, learning_env: Path) -> None:
+        """Deletion is the suppression signal, handled elsewhere. An absent
+        note must not also be read as a type correction -- and it is what
+        stops a note renamed away from teaching under the wrong subject."""
+        learned, c = mp.load_learning(), Counter()
+        mp.harvest_type_corrections(self._state(), learned, c)
+        assert learned["types"] == {}
+
+    def test_an_entry_without_a_block_key_is_skipped(self, learning_env: Path) -> None:
+        """State written before subject-keyed learning cannot be attributed to
+        a subject, so it must be ignored rather than crash the run."""
+        self._note('---\ntype: Group\npeople:\ntags: []\n---\n')
+        state = self._state()
+        del state["uid-1"]["block_key"]
+        learned, c = mp.load_learning(), Counter()
+        mp.harvest_type_corrections(state, learned, c)
+        assert learned["types"] == {}
+
+    def test_a_correction_is_reversible(self, learning_env: Path) -> None:
+        """Correcting the note back must move the rule back, or a learned type
+        would be a one-way door the user cannot undo from the vault."""
+        key = mp.block_key("SPG - Service Center - Hold")
+        learned = mp.load_learning()
+        learned["types"][key] = {"type": "Group", "group": "Steering",
+                                 "subject": "SPG - Service Center - Hold"}
+        self._note('---\ntype: Ad-hoc\npeople:\ntags: []\n---\n')
+        mp.harvest_type_corrections(self._state(type="Group"), learned, Counter())
+        assert learned["types"][key]["type"] == "Ad-hoc"
+
+    def test_idempotent_across_polls(self, learning_env: Path) -> None:
+        """Runs every 30 minutes; re-reading an unchanged correction must not
+        re-log or churn the store."""
+        self._note('---\ntype: Group\npeople:\ntags: []\n---\n')
+        learned = mp.load_learning()
+        first, second = Counter(), Counter()
+        mp.harvest_type_corrections(self._state(), learned, first)
+        mp.harvest_type_corrections(self._state(), learned, second)
+        assert first["learned-type"] == 1 and second["learned-type"] == 0
+
+    def test_store_backfills_the_types_map(self, learning_env: Path) -> None:
+        """A store written before types existed must not KeyError the run."""
+        mp.LEARNING_FILE.write_text('{"suppress": {}, "participants": {}}',
+                                    encoding="utf-8")
+        assert mp.load_learning()["types"] == {}
+
+
 class TestFlaggedNoteRendering:
 
     def test_flag_emits_the_tag(self) -> None:
