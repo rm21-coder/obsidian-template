@@ -27,6 +27,7 @@ import logging.handlers
 import os
 import re
 import shutil
+import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
@@ -608,6 +609,7 @@ class PeopleIndex:
         candidate_paths = list(PEOPLE_DIR.glob('*.md'))
         if PEOPLE_UNRESOLVED_DIR.is_dir():
             candidate_paths.extend(PEOPLE_UNRESOLVED_DIR.glob('*.md'))
+        n_aliases = 0
         for p in candidate_paths:
             try:
                 text = p.read_text(encoding='utf-8', errors='replace')
@@ -635,17 +637,32 @@ class PeopleIndex:
 
             # Name indices: filename + aliases + preferred_name
             self.name_to_stem[normalize_name_for_match(stem)] = stem
-            for alias in self._parse_aliases(fm):
-                self.name_to_stem[normalize_name_for_match(alias)] = stem
+            # Aliases are name synonyms for this person. The first alias to
+            # claim a normalized key keeps it -- silently remapping an
+            # already-indexed name would move attendees between People notes
+            # on the next run (same rule as GroupsIndex.load()).
+            for alias in parse_fm_aliases(fm):
+                key = normalize_name_for_match(alias)
+                if not key:
+                    continue
+                owner = self.name_to_stem.get(key)
+                if owner and owner != stem:
+                    log.warning(
+                        'PeopleIndex: alias %r on [[%s]] already maps to '
+                        '[[%s]] -- ignored', alias, stem, owner)
+                    continue
+                self.name_to_stem[key] = stem
+                n_aliases += 1
             pref = self._parse_preferred_name(fm)
             if pref:
                 self.name_to_stem[normalize_name_for_match(pref)] = stem
 
-        log.info('PeopleIndex: %d files, %d email keys, %d name keys, '
-                 '%d files with empty email fields',
+        log.info('PeopleIndex: %d files, %d email keys, %d name keys '
+                 '(%d from aliases), %d files with empty email fields',
                  len(candidate_paths),
                  len(self.email_to_stem),
                  len(self.name_to_stem),
+                 n_aliases,
                  len(self.stem_to_emptyfields))
         self._loaded = True
 
@@ -658,27 +675,6 @@ class PeopleIndex:
             if lines[i].rstrip() == '---':
                 return lines[1:i]
         return None
-
-    @staticmethod
-    def _parse_aliases(fm: str) -> list[str]:
-        out: list[str] = []
-        m = re.search(r'(?ms)^aliases\s*:\s*\n((?:^- .*\n?)+)', fm)
-        if m:
-            for line in m.group(1).splitlines():
-                ln = line.strip()
-                if ln.startswith('- '):
-                    v = ln[2:].strip().strip("'").strip('"')
-                    if v:
-                        out.append(v)
-            return out
-        m = re.search(r'(?m)^aliases\s*:\s*(.+)$', fm)
-        if m:
-            raw = m.group(1).strip()
-            if raw.startswith('[') and raw.endswith(']'):
-                return [v.strip().strip("'").strip('"')
-                        for v in raw[1:-1].split(',') if v.strip()]
-            return [raw.strip().strip("'").strip('"')]
-        return []
 
     @staticmethod
     def _parse_preferred_name(fm: str) -> str | None:
@@ -726,23 +722,81 @@ def normalize_for_group_match(s: str) -> str:
     return s
 
 
+def parse_fm_aliases(fm: str) -> list[str]:
+    r"""Read an `aliases:` value out of a frontmatter block.
+
+    Tolerant of the three shapes Obsidian and hand-editing produce:
+    an indented block list (what the Properties editor writes), an
+    unindented block list, and an inline flow list (`aliases: [a, b]`)
+    or bare scalar. Shared by PeopleIndex and GroupsIndex -- both index
+    notes the Properties editor is free to rewrite.
+
+    Whitespace between the colon and the value is matched with
+    [^\S\n]* rather than \s*: a plain \s* crosses the newline, so an
+    empty `aliases:` followed by another key would report that key's
+    line as the alias (e.g. 'classification: confidential').
+    """
+    # `-(?:[ \t].*)?` and not `-[ \t].*`: a blank list item is a bare '-',
+    # and requiring the space there would fail the whole block match and
+    # drop every sibling alias with it.
+    m = re.search(r'(?m)^aliases[^\S\n]*:[^\S\n]*\n((?:^[ \t]*-(?:[ \t].*)?\n?)+)',
+                  fm)
+    if m:
+        out: list[str] = []
+        for line in m.group(1).splitlines():
+            ln = line.strip()
+            if ln.startswith('-'):
+                v = ln[1:].strip().strip("'").strip('"')
+                if v:
+                    out.append(v)
+        return out
+    m = re.search(r'(?m)^aliases[^\S\n]*:[^\S\n]*(.*)$', fm)
+    if m:
+        raw = m.group(1).strip()
+        if raw.startswith('[') and raw.endswith(']'):
+            return [v.strip().strip("'").strip('"')
+                    for v in raw[1:-1].split(',') if v.strip()]
+        v = raw.strip("'").strip('"')
+        return [v] if v else []
+    return []
+
+
+def split_frontmatter(text: str) -> tuple[str, str]:
+    """Return (frontmatter_body, note_body). Both '' when there is no block."""
+    if not text.startswith('---'):
+        return '', text
+    end = text.find('\n---', 3)
+    if end < 0:
+        return '', text
+    return text[3:end], text[end + 4:]
+
+
 class GroupsIndex:
     """Index of Groups/*.md files: normalized title → stem, plus member-email
     sets for each group (built by resolving body wikilinks against the
     PeopleIndex). Used for fuzzy subject match and attendee-overlap fallback
-    when classifying meetings."""
+    when classifying meetings.
+
+    A group's `aliases:` are indexed exactly like its filename, so an
+    Outlook subject that does not resemble the group's name ("Compute
+    Infrastructure Executive Oversight Committee" for Groups/Compute
+    Infrastructure Exec.md) can be taught to the matcher without renaming
+    the group note.
+    """
 
     def __init__(self, people_idx: 'PeopleIndex') -> None:
         self._people = people_idx
         self.stems: list[str] = []
         self.norm_to_stem: dict[str, str] = {}
         self.stem_to_members: dict[str, set[str]] = {}  # emails
+        self.stem_to_aliases: dict[str, list[str]] = {}
 
     def load(self) -> None:
         if not GROUPS_DIR.is_dir():
             log.warning('Groups dir does not exist: %s', GROUPS_DIR)
             return
         wikilink_re = re.compile(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]')
+        n_aliases = 0
         for p in GROUPS_DIR.glob('*.md'):
             stem = p.stem
             self.stems.append(stem)
@@ -752,6 +806,26 @@ class GroupsIndex:
                 text = p.read_text(encoding='utf-8', errors='replace')
             except OSError:
                 continue
+
+            # Aliases are calendar-subject synonyms for this group. A stem
+            # always wins over an alias, and the first alias to claim a
+            # normalized key keeps it -- silently remapping an already-indexed
+            # subject would move meetings between groups on the next run.
+            aliases = parse_fm_aliases(split_frontmatter(text)[0])
+            self.stem_to_aliases[stem] = aliases
+            for alias in aliases:
+                key = normalize_for_group_match(alias)
+                if not key:
+                    continue
+                owner = self.norm_to_stem.get(key)
+                if owner and owner != stem:
+                    log.warning(
+                        'GroupsIndex: alias %r on [[%s]] already maps to '
+                        '[[%s]] -- ignored', alias, stem, owner)
+                    continue
+                self.norm_to_stem[key] = stem
+                n_aliases += 1
+
             # Strip frontmatter for member-link parsing
             if text.startswith('---'):
                 end = text.find('\n---', 4)
@@ -779,12 +853,17 @@ class GroupsIndex:
                         if s == stem_match:
                             members.add(email)
             self.stem_to_members[stem] = members
-        log.info('GroupsIndex: %d groups, %d with at least one resolved member',
+        log.info('GroupsIndex: %d groups, %d with at least one resolved '
+                 'member, %d alias key(s)',
                  len(self.stems),
-                 sum(1 for v in self.stem_to_members.values() if v))
+                 sum(1 for v in self.stem_to_members.values() if v),
+                 n_aliases)
 
     def match(self, subject: str, attendee_emails: set[str]) -> str | None:
         """Match a meeting to a Groups/ entry. Three-tier:
+
+        Tiers 1 and 2 run over group filenames *and* their `aliases:`, so
+        an alias behaves as a first-class name for matching purposes.
 
         1. Exact normalized-title match.
         2. All title-tokens ⊆ subject-tokens (most specific match wins —
@@ -1180,15 +1259,16 @@ def load_learning() -> dict:
     once per occurrence.
     """
     if not LEARNING_FILE.exists():
-        return {'version': 1, 'suppress': {}, 'participants': {}}
+        return {'version': 1, 'suppress': {}, 'participants': {}, 'types': {}}
     try:
         d = json.loads(LEARNING_FILE.read_text(encoding='utf-8'))
     except (OSError, json.JSONDecodeError):
         log.warning('learning store unreadable; starting empty: %s', LEARNING_FILE)
-        return {'version': 1, 'suppress': {}, 'participants': {}}
+        return {'version': 1, 'suppress': {}, 'participants': {}, 'types': {}}
     d.setdefault('version', 1)
     d.setdefault('suppress', {})
     d.setdefault('participants', {})
+    d.setdefault('types', {})
     return d
 
 
@@ -1228,6 +1308,89 @@ def read_note_people(path: 'Path') -> list[str] | None:
             if re.match(r'^\S', line):    # next frontmatter key
                 break
     return out
+
+
+MEETING_TYPES = ('Individual', 'Group', 'Ad-hoc')
+
+
+def read_note_type(path: 'Path') -> tuple[str | None, str | None]:
+    """Return (type, group_stem) from a note's frontmatter.
+
+    (None, None) when the note is unreadable or has no frontmatter. The group
+    link is read alongside the type because they are one decision: correcting
+    a note to `type: Group` without its `group:` roster produces a Group note
+    that belongs to no group.
+    """
+    try:
+        text = path.read_text(encoding='utf-8')
+    except OSError:
+        return None, None
+    fm = re.match(r'^---\n(.*?)\n---', text, re.S)
+    if not fm:
+        return None, None
+    body = fm.group(1)
+    m = re.search(r'(?m)^type\s*:\s*(.+)$', body)
+    mtype = m.group(1).strip().strip('"\'') if m else None
+    group = None
+    in_group = False
+    for line in body.splitlines():
+        if re.match(r'^group\s*:', line):
+            in_group = True
+            continue
+        if in_group:
+            item = re.match(r'^\s*-\s*"?\[\[(.+?)\]\]"?\s*$', line)
+            if item:
+                group = item.group(1)
+                break
+            if re.match(r'^\S', line):
+                break
+    return mtype, group
+
+
+def harvest_type_corrections(seen_state: dict, learned: dict,
+                             counters: 'Counter') -> None:
+    """Adopt a hand-corrected `type:` for the subject that carries it.
+
+    Separate from harvest_learning() because it applies to EVERY note this
+    pipeline wrote, not only the flagged ones. The case it exists for has a
+    person on it and so was never flagged: a recurring slot where the only
+    invitees are the two people presenting. The attendee data is
+    indistinguishable from a genuine 1:1 -- two required humans, one of them
+    the user -- so classify() calls it Individual and no inference on the
+    event could do better. The user knows it is a presentation; this is how
+    they get to say so once instead of every week.
+
+    Only a change AWAY from what was written counts, and only into the known
+    vocabulary, so a typo in the frontmatter cannot become a standing rule.
+    """
+    for entry in seen_state.values():
+        key = entry.get('block_key')
+        written = entry.get('type')
+        fname = entry.get('filename')
+        # Entries from before subject-keyed learning have no block_key; they
+        # cannot be attributed to a subject, so they teach nothing.
+        if not key or not written or not fname:
+            continue
+        current, group = read_note_type(MEETINGS_DIR / fname)
+        if current is None or current == written:
+            continue
+        if current not in MEETING_TYPES:
+            log.warning('  ignoring unknown type %r in %s (expected one of %s)',
+                        current, fname, ', '.join(MEETING_TYPES))
+            continue
+        prior = learned['types'].get(key) or {}
+        if prior.get('type') == current and prior.get('group') == group:
+            continue
+        learned['types'][key] = {
+            'subject': entry.get('subject') or key,
+            'type': current,
+            'group': group,
+            'learned_at': entry.get('generated_at'),
+        }
+        log.info('  LEARNED type for %r: %s -> %s%s',
+                 entry.get('subject') or key, written, current,
+                 f' [[{group}]]' if group else '')
+        counters['learned-type'] += 1
 
 
 def harvest_learning(seen_state: dict, learned: dict, dry_run: bool,
@@ -1273,6 +1436,7 @@ def harvest_learning(seen_state: dict, learned: dict, dry_run: bool,
                 }
                 log.info('  LEARNED participants for %r: %s', subject, ', '.join(people))
                 counters['learned-participants'] += 1
+    harvest_type_corrections(seen_state, learned, counters)
     save_learning(learned, dry_run)
 
 
@@ -1621,9 +1785,11 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
     # before deciding anything about this run's events.
     learned = load_learning()
     harvest_learning(seen_state, learned, dry_run, counters)
-    if learned['suppress'] or learned['participants']:
-        log.info('Learned rules: %d suppressed subject(s), %d with participants',
-                 len(learned['suppress']), len(learned['participants']))
+    if learned['suppress'] or learned['participants'] or learned['types']:
+        log.info('Learned rules: %d suppressed subject(s), %d with '
+                 'participants, %d with a corrected type',
+                 len(learned['suppress']), len(learned['participants']),
+                 len(learned['types']))
 
     for m in payload.get('meetings', []):
         uid = m.get('uid') or ''
@@ -1721,7 +1887,15 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                 # neither people nor a title says nothing about what it is.
                 mtype, group_stem = 'Ad-hoc', None
 
-            counters[f'class-{mtype}'] += 1
+            # A type the user corrected by hand outranks everything computed
+            # above, including the zero-participant override: they have seen
+            # the meeting and the classifier has only seen the invite.
+            taught = learned['types'].get(bkey)
+            if taught and taught.get('type') in MEETING_TYPES:
+                if taught['type'] != mtype:
+                    counters['type-from-learned'] += 1
+                mtype = taught['type']
+                group_stem = taught.get('group') or None
             if mtype == 'Group' and group_stem:
                 counters['group-matched'] += 1
 
@@ -1811,6 +1985,42 @@ def select_handoff_source() -> 'hs.HandoffSource':
     raise hs.HandoffError(f'unknown MEETING_PREPOP_SOURCE={mode!r}')
 
 
+def refresh_unmatched_digest(dry_run: bool) -> None:
+    """Regenerate the unmatched-subject digest after a run.
+
+    A subject that no Groups/ entry claims produces an Ad-hoc note, and an
+    Ad-hoc note that recurs weekly is a group nobody has declared yet. Left
+    alone that just accumulates silently -- which is how a year of
+    "AI bootcamp for Leadership Planning Meeting" ended up unattached. The
+    digest surfaces those so the fix is a one-line `aliases:` edit.
+
+    Run out-of-process on purpose: the digest is a reporting nicety and must
+    never be able to fail, hang, or raise its way into the ingestion path
+    that writes the meeting notes.
+    """
+    if dry_run:
+        log.info('Digest refresh skipped (dry run).')
+        return
+    script = SCRIPTS_DIR / 'meeting_group_backfill.py'
+    if not script.is_file():
+        log.debug('Digest script not present: %s', script)
+        return
+    try:
+        proc = subprocess.run(
+            ['/usr/bin/python3', str(script), '--digest', '--apply'],
+            capture_output=True, text=True, timeout=120)
+        if proc.returncode == 0:
+            log.info('Digest refreshed: %s',
+                     (proc.stdout or '').strip().splitlines()[-1:] or '')
+        else:
+            log.warning('Digest refresh rc=%d: %s', proc.returncode,
+                        (proc.stderr or '').strip()[:400])
+    except subprocess.TimeoutExpired:
+        log.warning('Digest refresh timed out; skipped.')
+    except Exception as e:  # noqa: BLE001
+        log.warning('Digest refresh failed: %s', e)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true',
@@ -1858,6 +2068,8 @@ def main() -> int:
             continue
         ec = process_handoff(record, source, args.dry_run, args.no_move)
         rc = max(rc, ec)
+
+    refresh_unmatched_digest(args.dry_run)
 
     log.info('---- run end (rc=%d) ----', rc)
     return rc
