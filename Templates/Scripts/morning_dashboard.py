@@ -707,7 +707,11 @@ def _launchctl_status(label: str) -> dict:
     can emit non-UTF-8, and text=True would raise on it (a lesson learned the
     hard way on ioreg/pmset output elsewhere in this vault)."""
     try:
-        p = subprocess.run([LAUNCHCTL_BIN, "list", label], capture_output=True)
+        # Bounded because this runs once per monitored job: one blocked
+        # launchctl would stall the whole health report, which is the one
+        # thing that has to survive to tell you anything is wrong.
+        p = subprocess.run([LAUNCHCTL_BIN, "list", label],
+                           capture_output=True, timeout=15)
     except Exception:
         return {"loaded": None, "exit": None, "running": False}
     if p.returncode != 0:
@@ -2113,12 +2117,13 @@ def main() -> int:
                 url = f"file://{urllib.parse.quote(str(dated_path))}?_={cache_bust}"
                 subprocess.run(
                     ["/usr/bin/open", "-a", "Google Chrome", url],
-                    check=False,
+                    check=False, timeout=30,
                 )
             elif sys.platform == "win32":
                 os.startfile(str(dated_path))  # type: ignore[attr-defined]
             else:
-                subprocess.run(["xdg-open", str(dated_path)], check=False)
+                subprocess.run(["xdg-open", str(dated_path)],
+                               check=False, timeout=30)
         except Exception as e:
             print(f"warn: could not open dashboard: {e}", file=sys.stderr)
 
