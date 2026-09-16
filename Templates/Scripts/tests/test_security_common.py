@@ -491,3 +491,83 @@ class TestAppendAlert:
         monkeypatch.setattr(sc, "state_dir",
                             lambda: tmp_path / "missing" / "\0bad")
         sc.append_alert({"summary": "s"})  # must not raise
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Keychain path is macOS-only")
+class TestKeychainCallsAreBounded:
+    """The Keychain helper eight scheduled scripts import.
+
+    Two rules from this vault's own operating notes were being broken here, and
+    both have the same consequence. A `/usr/bin/security` call that raises an
+    ACL consent dialog blocks until a human dismisses it; under launchd there
+    is no human and no visible dialog, so the call never returns. One wedge is
+    one wedged job per importer, and the queued dialogs then block every later
+    Keychain operation including git-over-HTTPS through the osxkeychain helper.
+
+    Nothing here touches the real Keychain -- subprocess is replaced.
+    """
+
+    def _spy(self, monkeypatch, find_rc=1):
+        calls = []
+
+        def fake_run(args, **kw):
+            calls.append((args, kw.get("timeout")))
+            rc = find_rc if args[1] == "find-generic-password" else 0
+            return subprocess.CompletedProcess(args, rc, stdout="", stderr="")
+
+        monkeypatch.setattr(sc.subprocess, "run", fake_run)
+        return calls
+
+    def test_every_security_call_has_a_timeout(self, monkeypatch) -> None:
+        calls = self._spy(monkeypatch)
+        sc._keychain_get_or_create("svc", "acct")
+        assert calls, "no security call was made"
+        for args, timeout in calls:
+            assert timeout == sc.KEYCHAIN_TIMEOUT_SEC, f"{args[1]} unbounded"
+
+    def test_update_in_place_is_never_used(self, monkeypatch) -> None:
+        """`-U` on an existing item is what raises the unanswerable dialog."""
+        calls = self._spy(monkeypatch)
+        sc._keychain_get_or_create("svc", "acct")
+        for args, _ in calls:
+            assert "-U" not in args, f"-U passed to {args[1]}"
+
+    def test_it_deletes_before_adding(self, monkeypatch) -> None:
+        """Deleting first guarantees the add creates a fresh item with a fresh
+        ACL, so the consent dialog never arises in the first place."""
+        calls = self._spy(monkeypatch)
+        sc._keychain_get_or_create("svc", "acct")
+        subs = [a[1] for a, _ in calls]
+        assert "delete-generic-password" in subs
+        assert subs.index("delete-generic-password") < subs.index("add-generic-password")
+
+    def test_the_new_item_trusts_the_security_binary(self, monkeypatch) -> None:
+        """`-T /usr/bin/security` so later reads by this helper do not prompt.
+        Apple-signed, so unlike a Homebrew interpreter it survives upgrades."""
+        calls = self._spy(monkeypatch)
+        sc._keychain_get_or_create("svc", "acct")
+        add = next(a for a, _ in calls if a[1] == "add-generic-password")
+        assert "-T" in add and add[add.index("-T") + 1] == "/usr/bin/security"
+
+    def test_a_hung_read_degrades_and_does_not_write(self, monkeypatch) -> None:
+        """A write queued behind whatever is blocking the read would make it
+        worse, so a timed-out read stops rather than continuing."""
+        calls = []
+
+        def hang(args, **kw):
+            calls.append(args)
+            raise subprocess.TimeoutExpired(cmd=args, timeout=kw.get("timeout"))
+
+        monkeypatch.setattr(sc.subprocess, "run", hang)
+        assert sc._keychain_get_or_create("svc", "acct") is None
+        assert len(calls) == 1, "it kept calling security after a timeout"
+
+    def test_an_existing_key_is_returned_without_writing(self, monkeypatch) -> None:
+        key = "ab" * 32
+
+        def fake_run(args, **kw):
+            assert args[1] == "find-generic-password", "wrote when a key existed"
+            return subprocess.CompletedProcess(args, 0, stdout=key, stderr="")
+
+        monkeypatch.setattr(sc.subprocess, "run", fake_run)
+        assert sc._keychain_get_or_create("svc", "acct") == bytes.fromhex(key)

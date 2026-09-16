@@ -255,25 +255,76 @@ def get_or_create_hmac_key(service: str, account: str) -> bytes | None:
     return _file_get_or_create(service)
 
 
+# Hard ceiling on any /usr/bin/security call. These are local Keychain
+# operations that return in milliseconds when they return at all; the reason
+# they need a timeout is the case where they do not. A `security` call that
+# raises an ACL consent dialog blocks until a human dismisses it, and under
+# launchd there is no human and no visible dialog -- the call simply never
+# comes back. This helper is imported by eight scheduled scripts, so one wedge
+# here is one wedged job per importer, and the queued dialogs go on to block
+# every later Keychain operation including git-over-HTTPS via the osxkeychain
+# helper. Ten seconds is orders of magnitude above a healthy call.
+KEYCHAIN_TIMEOUT_SEC = 10
+
+
+def _security(args: list[str]) -> subprocess.CompletedProcess | None:
+    """Run /usr/bin/security with a hard timeout. None means it did not finish.
+
+    Returning None rather than raising keeps the caller's degrade path intact:
+    a key that cannot be read is already a handled outcome, and a timeout is
+    just another way of not reading it.
+    """
+    try:
+        return subprocess.run(args, check=False, capture_output=True,
+                              text=True, timeout=KEYCHAIN_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        print("security_common: /usr/bin/security did not return within %ds "
+              "(%s) -- treating the key as unavailable. A pending Keychain "
+              "consent dialog is the usual cause; dismiss it before retrying."
+              % (KEYCHAIN_TIMEOUT_SEC, args[1] if len(args) > 1 else "?"),
+              file=sys.stderr)
+        return None
+    except OSError as e:
+        print("security_common: could not run /usr/bin/security: %s" % e,
+              file=sys.stderr)
+        return None
+
+
 def _keychain_get_or_create(service: str, account: str) -> bytes | None:
     import secrets
-    p = subprocess.run(
-        ["/usr/bin/security", "find-generic-password",
-         "-a", account, "-s", service, "-w"],
-        check=False, capture_output=True, text=True)
-    if p.returncode == 0:
+    p = _security(["/usr/bin/security", "find-generic-password",
+                   "-a", account, "-s", service, "-w"])
+    if p is not None and p.returncode == 0:
         try:
             k = bytes.fromhex(p.stdout.strip())
             if len(k) >= 16:
                 return k
         except ValueError:
             pass
+    if p is None:
+        # The read never came back. Writing now would queue a second call
+        # behind whatever is blocking the first, so stop.
+        return None
+
     new = secrets.token_bytes(32)
-    w = subprocess.run(
-        ["/usr/bin/security", "add-generic-password",
-         "-a", account, "-s", service, "-w", new.hex(), "-U"],
-        check=False, capture_output=True, text=True)
-    return new if w.returncode == 0 else None
+    # delete-then-add, never -U.
+    #
+    # `add-generic-password -U` updates in place, and on an item whose ACL no
+    # longer matches the caller that raises a consent dialog -- which under
+    # launchd nothing can answer. Deleting first means the add always creates a
+    # fresh item with a fresh ACL, so the dialog never arises. The delete is
+    # expected to fail the first time (nothing to remove) and its status is
+    # deliberately ignored.
+    #
+    # `-T /usr/bin/security` puts that binary on the new item's trusted list,
+    # so later reads by this same helper do not prompt either. It is Apple-
+    # signed, so unlike a Homebrew interpreter the trust survives upgrades.
+    _security(["/usr/bin/security", "delete-generic-password",
+               "-a", account, "-s", service])
+    w = _security(["/usr/bin/security", "add-generic-password",
+                   "-a", account, "-s", service, "-w", new.hex(),
+                   "-T", "/usr/bin/security"])
+    return new if (w is not None and w.returncode == 0) else None
 
 
 def _dpapi_get_or_create(service: str) -> bytes | None:

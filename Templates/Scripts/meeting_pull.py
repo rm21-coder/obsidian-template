@@ -68,6 +68,14 @@ EXIT_AUTH = 3
 # Distinct again: nothing was attempted, so nothing is wrong with the job.
 EXIT_NO_NETWORK = 5
 
+# Hard ceiling on one producer attempt. A healthy run is about 60 seconds, so
+# ten minutes is failure, not slowness -- and an attempt that never returns
+# holds the whole job, which is how a fourteen-hour outage started elsewhere in
+# this pipeline. A timeout is a retryable outcome here: a wedged CLI session
+# often succeeds on the next attempt, which is exactly what the retry loop is
+# for. subprocess.run kills the child when the timeout fires.
+PRODUCER_TIMEOUT_SEC = int(os.environ.get("MEETING_PULL_TIMEOUT", "600"))
+
 
 def network_ready():
     """True if the API host resolves and accepts a connection.
@@ -510,7 +518,22 @@ def main():
         # Captured rather than inherited so the auth signature can be read
         # out of it; re-emitted verbatim straight afterwards so the log keeps
         # the producer's own words, which are what the dashboard reads.
-        completed = subprocess.run(command, capture_output=True, text=True)
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True,
+                                       timeout=PRODUCER_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired as exc:
+            for chunk in (exc.stdout, exc.stderr):
+                if not chunk:
+                    continue
+                text = chunk.decode(errors="replace") if isinstance(chunk, bytes) else chunk
+                if text.strip():
+                    print(text.rstrip(), flush=True)
+            log("producer exceeded %ds and was killed - treating as a failed "
+                "attempt" % PRODUCER_TIMEOUT_SEC)
+            if attempt < attempts:
+                log("retrying in %ds" % args.retry_delay)
+                time.sleep(args.retry_delay)
+            continue
         transcript = (completed.stdout or "") + (completed.stderr or "")
         if transcript.strip():
             print(transcript.rstrip(), flush=True)
