@@ -364,8 +364,15 @@ class _FakeIMAP:
     def __init__(self, raw_messages: list[bytes]):
         self._raw = raw_messages
         self.stored: list[tuple[bytes, str]] = []
+        self.timeout = None
 
-    def __call__(self, host, port):  # stands in for the IMAP4_SSL class
+    def __call__(self, host, port, timeout=None):
+        # `timeout` is required, not merely tolerated: a double that silently
+        # accepted **kwargs would keep passing if the production call ever
+        # lost the argument again, and losing it is what cost fourteen hours
+        # of runs on 2026-09-15. Asserted rather than defaulted.
+        assert timeout, "IMAP4_SSL must be constructed with a socket timeout"
+        self.timeout = timeout
         return self
 
     def login(self, user, password): return "OK", []
@@ -393,6 +400,91 @@ def _raw_drop(fields: dict[str, str], sender: str = "phone@example.com") -> byte
     msg["Subject"] = "voice drop"
     msg.set_content("\n".join(f"{k}: {v}" for k, v in fields.items()))
     return msg.as_bytes()
+
+
+class TestHangGuards:
+    """The 2026-09-15 stall: one stuck socket suppressed fourteen hours of runs.
+
+    A run reached "No new messages", returned into its own finally, and blocked
+    in conn.close()/conn.logout() on a connection the server had silently
+    stopped answering. The teardown was already wrapped in
+    `except Exception: pass`, which cannot help -- a hang is not an exception.
+    Because launchd will not start a second instance of a StartInterval job
+    while the first is alive, the 5-minute cadence stopped dead and the process
+    sat in that read for 14h36m.
+
+    Two guards, tested separately because they cover different things: the
+    socket timeout fixes the cause that was observed, and the run deadline
+    bounds every cause that was not.
+    """
+
+    def test_the_connection_is_opened_with_a_timeout(self, monkeypatch) -> None:
+        """The actual regression. Without `timeout=`, imaplib blocks forever on
+        every operation including teardown, so this asserts the argument is
+        passed rather than that some timeout exists somewhere."""
+        seen = {}
+
+        class _Probe:
+            def __init__(self, host, port, timeout=None):
+                seen["host"], seen["port"], seen["timeout"] = host, port, timeout
+                raise RuntimeError("stop here; only the constructor matters")
+
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", _Probe)
+        with pytest.raises(RuntimeError):
+            smp.process_mailbox(user="u", password="p", key="k", allowed=[],
+                                root=Path("/tmp"), dry_run=True)
+        assert seen["timeout"] == smp.IMAP_TIMEOUT
+        assert seen["timeout"] is not None and seen["timeout"] > 0
+
+    def test_the_timeout_is_shorter_than_the_run_deadline(self) -> None:
+        """Ordering matters: a socket that times out should surface as an IMAP
+        error with a useful message, not get cut off mid-read by the alarm."""
+        assert smp.IMAP_TIMEOUT < smp.RUN_DEADLINE_SEC
+
+    def test_the_run_deadline_is_shorter_than_the_schedule(self) -> None:
+        """The invariant the outage violated: a run must never outlive its own
+        interval, or it owns the slot its successor needed. StartInterval for
+        this job is 300s."""
+        assert smp.RUN_DEADLINE_SEC < 300
+
+    def test_the_deadline_fires_and_names_the_consequence(self) -> None:
+        import time
+        assert smp._arm_deadline(1) is True
+        try:
+            with pytest.raises(smp.RunDeadlineExceeded) as exc:
+                time.sleep(5)
+        finally:
+            smp._disarm_deadline()
+        # The message has to say why exiting is the right move, or the next
+        # person reads it as the job giving up on its own work.
+        assert "suppressed" in str(exc.value)
+
+    def test_disarming_stops_it_firing_later(self) -> None:
+        """A disarmed alarm going off mid-teardown would turn a clean run into
+        a spurious failure."""
+        import time
+        smp._arm_deadline(1)
+        smp._disarm_deadline()
+        time.sleep(1.5)          # would raise if still armed
+
+    def test_a_socket_timeout_is_reported_not_raised(self, monkeypatch,
+                                                     tmp_path) -> None:
+        """TimeoutError is an OSError, and main() has to catch it: before the
+        timeout existed there was nothing to catch, so the handler did not
+        cover it and a raise would surface as a traceback instead of a line."""
+        def _boom(*_a, **_k):
+            raise TimeoutError("timed out")
+
+        monkeypatch.setattr(smp, "process_mailbox", _boom)
+        monkeypatch.setattr(smp, "_secret", lambda name: (
+            "tok" if name == "SOURCE_MAIL_TOKEN" else
+            "a@example.com" if name == "SOURCE_MAIL_ALLOWED_SENDERS" else "x"))
+
+        class _Lock:
+            def close(self): pass
+
+        monkeypatch.setattr(smp, "acquire_lock", lambda: _Lock())
+        assert smp.main(["--once", "--root", str(tmp_path)]) == 1
 
 
 class TestReplaySeenCache:

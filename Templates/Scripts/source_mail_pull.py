@@ -92,6 +92,7 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import time
 from email.message import Message
@@ -128,6 +129,29 @@ REPLAY_WINDOW_DAYS = 7
 
 IMAP_HOST = os.environ.get("SOURCE_MAIL_IMAP_HOST", "imap.gmail.com")
 IMAP_PORT = 993
+
+# Socket timeout for every IMAP operation, teardown included.
+#
+# Without it imaplib blocks forever. On 2026-09-15 a run reached "No new
+# messages", returned into its own finally, and stalled in conn.close() or
+# conn.logout() on a connection the server had silently stopped answering.
+# The teardown was already wrapped in `except Exception: pass`, which cannot
+# help: a hang is not an exception. The process sat in that read for 14h36m,
+# and because launchd will not start a second instance of a StartInterval job
+# while the first is alive, every firing for fourteen hours was suppressed by
+# one stuck socket. A timeout turns that into a TimeoutError, which the
+# existing handlers already swallow correctly.
+IMAP_TIMEOUT = int(os.environ.get("SOURCE_MAIL_IMAP_TIMEOUT", "60"))
+
+# Hard ceiling on a single --once run, belt and braces to the timeout above.
+#
+# The socket timeout fixes the cause that was observed; this bounds every
+# cause that was not. The invariant worth protecting is that a run can never
+# outlive its own schedule: StartInterval is 300s, so anything still alive at
+# 240s has already failed and is now blocking its own successor. Exiting
+# loudly restores the cadence on the next tick, which is strictly better than
+# staying up and silently owning the slot.
+RUN_DEADLINE_SEC = int(os.environ.get("SOURCE_MAIL_RUN_DEADLINE", "240"))
 
 # Opt-in, off by default -- see the security model note (item 6) at the top
 # of this file before setting it. Read once at import time like the other
@@ -465,7 +489,7 @@ def process_mailbox(*, user: str, password: str, key: str,
     accepted = rejected = 0
     seen = load_seen(root)
     seen_dirty = False
-    conn = imaplib.IMAP4_SSL(host, IMAP_PORT)
+    conn = imaplib.IMAP4_SSL(host, IMAP_PORT, timeout=IMAP_TIMEOUT)
     try:
         conn.login(user, password)
         conn.select("INBOX")
@@ -545,6 +569,36 @@ def process_mailbox(*, user: str, password: str, key: str,
 # Main
 # ---------------------------------------------------------------------------
 
+class RunDeadlineExceeded(Exception):
+    """The run outlived RUN_DEADLINE_SEC and is blocking its own successor."""
+
+
+def _arm_deadline(seconds: int = RUN_DEADLINE_SEC) -> bool:
+    """Raise RunDeadlineExceeded after `seconds`. Returns False if unavailable.
+
+    signal.alarm is main-thread, Unix-only; both hold here, but a failure to
+    arm must not stop the drain, so it degrades to the socket timeout alone.
+    """
+    def _fire(_signum, _frame):
+        raise RunDeadlineExceeded(
+            f"still running after {seconds}s; exiting so the next "
+            f"scheduled firing is not suppressed")
+
+    try:
+        signal.signal(signal.SIGALRM, _fire)
+        signal.alarm(seconds)
+        return True
+    except (AttributeError, ValueError, OSError):
+        return False
+
+
+def _disarm_deadline() -> None:
+    try:
+        signal.alarm(0)
+    except (AttributeError, OSError):
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(
         description="Pull authenticated source-media drops from a mailbox.")
@@ -597,16 +651,26 @@ def main(argv: list[str] | None = None) -> int:
     if lock is None:
         log.info("Another source_mail_pull run is in progress; exiting.")
         return 0
+    _arm_deadline()
     try:
         accepted, rejected = process_mailbox(
             user=user, password=password, key=key, allowed=allowed,
             root=root, dry_run=args.dry_run)
         log.info("Done — %d accepted, %d rejected.", accepted, rejected)
         return 0
-    except imaplib.IMAP4.error as e:
+    except RunDeadlineExceeded as e:
+        # Distinct from an IMAP error on purpose: this says the run was killed
+        # for holding its slot, which is the symptom the dashboard reported as
+        # "no run in 14h". Naming it makes the next occurrence self-evident.
+        log.error("run deadline exceeded: %s", e)
+        return 1
+    except (imaplib.IMAP4.error, OSError) as e:
+        # OSError covers TimeoutError from the socket timeout above, which
+        # previously could not happen because there was no timeout to hit.
         log.error("IMAP error: %s", e)
         return 1
     finally:
+        _disarm_deadline()
         try:
             lock.close()
         except Exception:
