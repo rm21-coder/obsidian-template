@@ -150,6 +150,29 @@ def check_reachable(url: str | None) -> None:
         raise GatewayUnreachable(host) from exc
 
 
+# Bounded wait for every LLM call in the vault, set here because every
+# LLM-backed scheduled job builds its client through this one function.
+#
+# The Anthropic Python SDK defaults to timeout=600s and max_retries=2, and a
+# timeout is itself retried -- so the default worst case per call is
+# 600 x 3 = 30 MINUTES of wall clock. That is longer than several of the jobs'
+# own schedules, and a scheduled run that outlives its cadence is the failure
+# that took source-mail-pull off the air for fourteen hours on 2026-09-15: a
+# StartInterval job still alive when its successor is due suppresses that
+# successor, and a KeepAlive watcher stuck in a call is "running" as far as
+# launchd is concerned, so nothing restarts it.
+#
+# 120s is generous for what these callers actually ask for -- the tagger and
+# classifier cap max_tokens at 200-300, voice-cleanup and the summarizer at
+# 4096 -- so a call that has not returned in two minutes has failed rather
+# than being slow. Ceiling is therefore 120 x 3 = 6 minutes, and it is stated
+# in one place instead of being an emergent property of two SDK defaults.
+#
+# Both are setdefault, so a caller that genuinely needs longer still can.
+LLM_TIMEOUT_SEC = float(os.environ.get("LLM_REQUEST_TIMEOUT", "120"))
+LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "2"))
+
+
 def client(**kwargs):
     """An anthropic.Anthropic pointed at the configured endpoint.
 
@@ -178,6 +201,9 @@ def client(**kwargs):
     # consent dialog. When both would fail, failing on the cheap one first is
     # strictly better, so this does not belong below the credential lookup.
     check_reachable(kwargs.get("base_url"))
+
+    kwargs.setdefault("timeout", LLM_TIMEOUT_SEC)
+    kwargs.setdefault("max_retries", LLM_MAX_RETRIES)
 
     name = key_name()
     key = get_secret(name)
