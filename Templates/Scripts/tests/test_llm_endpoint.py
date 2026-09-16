@@ -146,7 +146,9 @@ def test_client_routes_through_the_gateway(monkeypatch, fake_anthropic,
     llm_endpoint.client()
 
     assert fake_anthropic == [{"api_key": "sk-gateway",
-                              "base_url": "https://api.ai.example.edu"}]
+                              "base_url": "https://api.ai.example.edu",
+                              "timeout": llm_endpoint.LLM_TIMEOUT_SEC,
+                              "max_retries": llm_endpoint.LLM_MAX_RETRIES}]
 
 
 def test_client_without_gateway_passes_no_base_url(fake_anthropic,
@@ -155,7 +157,9 @@ def test_client_without_gateway_passes_no_base_url(fake_anthropic,
 
     llm_endpoint.client()
 
-    assert fake_anthropic == [{"api_key": "sk-stock"}]
+    assert fake_anthropic == [{"api_key": "sk-stock",
+                              "timeout": llm_endpoint.LLM_TIMEOUT_SEC,
+                              "max_retries": llm_endpoint.LLM_MAX_RETRIES}]
 
 
 def test_explicit_base_url_kwarg_wins(monkeypatch, fake_anthropic,
@@ -244,7 +248,9 @@ def test_stock_anthropic_is_not_preflighted(fake_anthropic, vault_secrets,
 
     llm_endpoint.client()
 
-    assert fake_anthropic == [{"api_key": "sk-stock"}]
+    assert fake_anthropic == [{"api_key": "sk-stock",
+                              "timeout": llm_endpoint.LLM_TIMEOUT_SEC,
+                              "max_retries": llm_endpoint.LLM_MAX_RETRIES}]
 
 
 def test_preflight_checks_the_base_url_actually_used(monkeypatch,
@@ -386,3 +392,44 @@ def test_the_two_failure_modes_stay_distinguishable():
     assert issubclass(llm_endpoint.MissingCredential, llm_endpoint.EndpointError)
     assert not issubclass(llm_endpoint.GatewayUnreachable,
                           llm_endpoint.MissingCredential)
+
+
+class TestBoundedWait:
+    """Every LLM-backed scheduled job builds its client here, so this is the
+    one place a bounded wait can be guaranteed for all of them.
+
+    The Anthropic Python SDK defaults to timeout=600s with max_retries=2, and
+    a timeout is itself retried -- 30 minutes of wall clock per call. Several
+    of these jobs are scheduled more often than that, and a scheduled run that
+    outlives its own cadence is what took source-mail-pull off the air for
+    fourteen hours on 2026-09-15.
+    """
+
+    def test_a_timeout_is_passed_to_the_sdk(self, fake_anthropic,
+                                            vault_secrets) -> None:
+        vault_secrets["ANTHROPIC_API_KEY"] = "sk-stock"
+        llm_endpoint.client()
+        assert fake_anthropic[0]["timeout"] == llm_endpoint.LLM_TIMEOUT_SEC
+
+    def test_retries_are_explicit_not_inherited(self, fake_anthropic,
+                                                vault_secrets) -> None:
+        """Stated rather than left to the SDK default, because the ceiling is
+        timeout x (retries+1) and a reader cannot compute it from one half."""
+        vault_secrets["ANTHROPIC_API_KEY"] = "sk-stock"
+        llm_endpoint.client()
+        assert fake_anthropic[0]["max_retries"] == llm_endpoint.LLM_MAX_RETRIES
+
+    def test_the_worst_case_is_bounded(self) -> None:
+        """The number that actually matters. The SDK's own defaults work out to
+        30 minutes, longer than several of these jobs' schedules."""
+        ceiling = llm_endpoint.LLM_TIMEOUT_SEC * (llm_endpoint.LLM_MAX_RETRIES + 1)
+        assert ceiling <= 600, f"worst-case wall clock is {ceiling}s"
+
+    def test_a_caller_can_still_ask_for_longer(self, fake_anthropic,
+                                               vault_secrets) -> None:
+        """setdefault, not assignment: a genuinely long call must stay
+        expressible, or this is a ceiling nobody can lift."""
+        vault_secrets["ANTHROPIC_API_KEY"] = "sk-stock"
+        llm_endpoint.client(timeout=5.0, max_retries=0)
+        assert fake_anthropic[0]["timeout"] == 5.0
+        assert fake_anthropic[0]["max_retries"] == 0
