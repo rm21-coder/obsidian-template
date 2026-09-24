@@ -384,6 +384,12 @@ class _FakeIMAP:
 
     def fetch(self, num, spec):
         idx = int(num) - 1
+        if spec == "(RFC822.SIZE)":
+            # Report the real length, as a server would, so the size gate is
+            # exercised against the same bytes the RFC822 fetch would return.
+            self.size_probes = getattr(self, "size_probes", 0) + 1
+            return "OK", [b"%d (RFC822.SIZE %d)" % (idx + 1, len(self._raw[idx]))]
+        self.full_fetches = getattr(self, "full_fetches", 0) + 1
         return "OK", [(b"header", self._raw[idx])]
 
     def store(self, num, op, flags):
@@ -550,3 +556,63 @@ class TestReplaySeenCache:
                         "restrict_file's icacls path is covered separately")
         mode = (tmp_path / smp.SEEN_CACHE_NAME).stat().st_mode & 0o777
         assert mode == 0o600
+
+
+class TestMessageSizeGate:
+    """A message is sized before it is downloaded (M-DASH, CWE-770).
+
+    The raw RFC822 fetch used to happen before the sender allowlist or the
+    HMAC were checked, so anyone who learned the intake address could push
+    provider-maximum messages through the parser every run. These assert the
+    oversized message is never downloaded at all, not merely rejected after.
+    """
+
+    def _pull(self, fake, root, monkeypatch):
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", fake)
+        return smp.process_mailbox(
+            user="u", password="p", key=KEY,
+            allowed=["phone@example.com"], root=root, dry_run=False)
+
+    def test_oversized_message_is_never_downloaded(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        huge = _raw_drop(_signed()) + b"X" * (smp.MAX_RAW_MESSAGE_BYTES + 1)
+        fake = _FakeIMAP([huge])
+        accepted, rejected = self._pull(fake, tmp_path, monkeypatch)
+        assert (accepted, rejected) == (0, 1)
+        assert getattr(fake, "full_fetches", 0) == 0, (
+            "the oversized message body was downloaded before being rejected")
+        assert fake.stored == [(b"1", "\\Seen")], (
+            "a rejected oversized drop should be marked Seen so it is not "
+            "re-probed every run")
+
+    def test_normal_drop_still_goes_through(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        fake = _FakeIMAP([_raw_drop(_signed())])
+        accepted, rejected = self._pull(fake, tmp_path, monkeypatch)
+        assert (accepted, rejected) == (1, 0)
+        assert fake.size_probes == 1 and fake.full_fetches == 1
+
+    def test_unsizeable_message_fails_closed(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        fake = _FakeIMAP([_raw_drop(_signed())])
+        real = fake.fetch
+
+        def no_size(num, spec):
+            if spec == "(RFC822.SIZE)":
+                return "OK", [b"1 (FLAGS ())"]
+            return real(num, spec)
+
+        fake.fetch = no_size
+        accepted, rejected = self._pull(fake, tmp_path, monkeypatch)
+        assert (accepted, rejected) == (0, 1)
+        assert getattr(fake, "full_fetches", 0) == 0
+
+    @pytest.mark.parametrize("data,expected", [
+        ([b"7 (RFC822.SIZE 4321)"], 4321),
+        ([(b"7 (RFC822.SIZE 99 FLAGS (\\Seen))", b"")], 99),
+        ([b"7 (FLAGS ())"], None),
+        ([], None),
+        (None, None),
+    ])
+    def test_size_parser(self, data, expected) -> None:
+        assert smp._rfc822_size(data) == expected

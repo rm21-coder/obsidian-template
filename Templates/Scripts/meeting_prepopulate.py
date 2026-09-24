@@ -448,6 +448,29 @@ def _strip_clean(s: str) -> str:
     return s
 
 
+# Characters that cannot appear in a People-note filename stem. The stem comes
+# from an attendee's display name or email local part -- text any outsider can
+# author, because anyone can send a meeting invite. Unsanitized, a display name
+# like "../../Somewhere/evil" made `target_dir / f"{stem}.md"` resolve outside
+# People/ and write a stub there. Path separators, drive colons, the
+# Windows-reserved set and control characters are all refused; with no
+# separators left, ".." can no longer be a path segment.
+#
+# Found by Microsoft M-DASH, 2026-09-23 (five findings, CWE-22). Applied at the
+# one place a stem becomes a filename rather than at each of the canonical_name
+# branches that produce one, so a future branch cannot reintroduce it.
+_UNSAFE_STEM_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _safe_stem(s: str) -> str:
+    """Reduce an attendee-derived name to one safe filename component."""
+    s = _UNSAFE_STEM_RE.sub(' ', s or '')
+    # Drop tokens made only of dots: the remains of "../" once the separator
+    # is gone. "A." in "Jane A. Doe" is not dot-only and is kept.
+    s = ' '.join(t for t in s.split() if t.strip('.'))
+    return s.strip('.').strip() or 'Unknown'
+
+
 def _is_credential_token(s: str) -> bool:
     return bool(re.fullmatch(
         r'(MD|PhD|Ph\.D\.|MBA|RN|MPH|DO|DDS|JD|EdD|MS|MA)', s, re.I))
@@ -1071,6 +1094,7 @@ def resolve_or_create_person(attendee: dict, contact_by_email: dict,
         return stem, 'name-match'
 
     # Step 3: create new stub (§8.1 step 3)
+    canonical = _safe_stem(canonical)
     stem = canonical
     # Handle filename collision (different person with same canonical name).
     # Check both the target dir AND the alternate dir, since the same person
@@ -1084,6 +1108,12 @@ def resolve_or_create_person(attendee: dict, contact_by_email: dict,
         stem = f'{canonical} {suffix}'
         suffix += 1
     path = target_dir / f'{stem}.md'
+    # Defence in depth behind _safe_stem: refuse any stub whose resolved path
+    # is not inside the directory it was meant for.
+    if not path.resolve().is_relative_to(target_dir.resolve()):
+        log.warning('  REFUSED stub outside %s: %r', target_dir, stem)
+        counters['stub-refused-unsafe-path'] += 1
+        return None, 'refused-unsafe-path'
 
     content = render_people_stub(
         canonical, contact, display or '', name_source, now_iso)
@@ -1477,6 +1507,8 @@ def build_people_wikilinks(attendees: list[dict],
 
         stem, _status = resolve_or_create_person(
             a, contact_by_email, people_idx, now_iso, dry_run, counters)
+        if stem is None:          # refused: unsafe path, already logged
+            continue
         link = f'[[{stem}]]'
         if link not in seen:
             required.append(link)
