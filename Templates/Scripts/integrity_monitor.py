@@ -184,7 +184,8 @@ def scan_scheduled_tasks() -> dict[str, dict]:
     )
     try:
         p = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            [security_common.POWERSHELL_EXE, "-NoProfile", "-NonInteractive",
+             "-Command", ps],
             capture_output=True, timeout=30)
     except Exception:
         return {}

@@ -396,10 +396,13 @@ def main():
     apply = args.apply and not args.dry_run
 
     if args.rollback:
-        manifest = json.loads(Path(args.rollback).read_text())
-        for rec in manifest["changes"]:
-            Path(rec["path"]).write_text(rec["original"], encoding="utf-8")
-        print(f"Rolled back {len(manifest['changes'])} files from {args.rollback}")
+        from manifest_rollback import UnsafeManifest, apply_rollback
+        try:
+            n = apply_rollback(args.rollback, VAULT_ROOT)
+        except UnsafeManifest as exc:
+            print(f"Refusing rollback, nothing written: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Rolled back {n} files from {args.rollback}")
         return
 
     import llm_endpoint

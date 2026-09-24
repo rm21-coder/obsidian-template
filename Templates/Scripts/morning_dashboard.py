@@ -514,6 +514,12 @@ def collect_rag_sync_status() -> dict | None:
 LAUNCHAGENTS_DIR = Path(os.environ.get(
     "MD_LAUNCHAGENTS_DIR", str(HOME / "Library" / "LaunchAgents")))
 LAUNCHCTL_BIN = os.environ.get("MD_LAUNCHCTL", "/bin/launchctl")
+# By absolute path for the same reason as LAUNCHCTL_BIN, and as
+# security_common.POWERSHELL_EXE: a bare name is resolved through the search
+# order, which is how an impostor gets run (M-DASH 2026-09-23, CWE-426).
+POWERSHELL_EXE = str(Path(os.environ.get("SystemRoot") or r"C:\Windows")
+                     / "System32" / "WindowsPowerShell" / "v1.0"
+                     / "powershell.exe")
 PLUTIL_BIN    = os.environ.get("MD_PLUTIL", "/usr/bin/plutil")
 
 # Only agents whose program runs a script from here are treated as ours.
@@ -1157,7 +1163,7 @@ def _collect_pipeline_health_windows() -> list[dict]:
     )
     try:
         p = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            [POWERSHELL_EXE, "-NoProfile", "-NonInteractive", "-Command", ps],
             capture_output=True, timeout=30)
     except Exception:
         return []
