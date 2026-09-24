@@ -60,6 +60,7 @@ DEFAULT_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 DEFAULT_AUTH_TENANT = "organizations"
 SCOPE = "offline_access Calendars.Read"
 TOKEN_SECRET = "GRAPH_REFRESH_TOKEN"
+MAX_PAGES = 50                  # calendarView pages per fetch; see fetch_events
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 SELECT_FIELDS = ",".join([
@@ -213,10 +214,24 @@ def fetch_events(access_token, day_start_iso, day_end_iso, tz_name=None):
         "$top": "100"})
     url = GRAPH + "/me/calendarView?" + params
     events = []
-    while url:
+    # Bounded pagination. The loop used to follow @odata.nextLink for as long
+    # as the server kept sending one, so a repeated or cyclic link -- from a
+    # misbehaving service or anything able to influence the response -- kept
+    # issuing authenticated requests forever. A day's window at $top=100 is a
+    # page or two; MAX_PAGES is generous. Found by Microsoft M-DASH 2026-09-23
+    # (CWE-835).
+    seen = set()
+    for _ in range(MAX_PAGES):
+        if not url:
+            return events
+        if url in seen:
+            die("Graph pagination repeated a page link; stopping")
+        seen.add(url)
         page = _graph_get(url, access_token, prefer_tz=tz_name)
         events.extend(page.get("value") or [])
         url = page.get("@odata.nextLink")
+    if url:
+        die("Graph pagination exceeded %d pages; stopping" % MAX_PAGES)
     return events
 
 
