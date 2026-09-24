@@ -195,9 +195,8 @@ def scan_plugins(plugins_dir: Path) -> dict[str, dict]:
 def load_allowlist() -> dict[str, dict]:
     """Read and HMAC-verify the allowlist. Returns the inner state dict
     (mapping plugin_id → record). On verification failure, fires an
-    ALLOWLIST_TAMPER alert and exits non-zero. On a legacy flat-format
-    file (pre-HMAC-envelope), accepts it once as a one-time migration
-    — the next save_allowlist call will rewrap it."""
+    ALLOWLIST_TAMPER alert and exits non-zero. A file that is not in the
+    signed envelope is tamper too -- see below."""
     if not ALLOWLIST_PATH.exists():
         return {}
     try:
@@ -207,14 +206,20 @@ def load_allowlist() -> dict[str, dict]:
                             f"FATAL: allowlist corrupt: {e}")
         sys.exit(2)
 
-    # Legacy flat format — pre-envelope. Accept once; the next --update
-    # will rewrap. We log this so the user can see migration happening.
+    # An unsigned file is refused, not "migrated". This branch used to
+    # accept any file lacking the envelope keys as a trusted pre-v1.4
+    # allowlist, with no verification -- so the HMAC could be bypassed
+    # entirely by writing the old flat format instead of forging a
+    # signature: a format downgrade. "Accept once" was not enforced either;
+    # every run trusted it. Found by Microsoft M-DASH 2026-09-23 (CWE-347).
+    #
+    # Nothing is stranded by refusing it. --update never reads the old file
+    # -- it re-scans the plugins on disk and writes a fresh signed envelope
+    # -- so a genuine pre-envelope install recovers with one --update, and
+    # a missing file already fails closed as "no baseline" above.
     if not (isinstance(raw, dict) and "state" in raw and "hmac" in raw):
-        security_common.log(
-            "plugin-check",
-            "migrating allowlist to HMAC envelope on next --update "
-            "(loading as legacy flat format).")
-        return raw if isinstance(raw, dict) else {}
+        _fire_tamper("allowlist is not in the signed envelope — refusing an "
+                     "unsigned allowlist (vet, then run --update to re-sign)")
 
     state = raw.get("state")
     stored_hmac = raw.get("hmac")

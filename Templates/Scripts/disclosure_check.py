@@ -114,21 +114,31 @@ def resolve_link(target: str, index: dict[str, Path]) -> Path | None:
     return index.get(key) or index.get(Path(key).name)
 
 
-def embed_closure(path: Path, index: dict[str, Path]) -> tuple[list[Path], list[str]]:
-    """Every note reachable from `path` by embeds, plus unresolved embed targets.
+def embed_closure(path: Path, index: dict[str, Path]
+                  ) -> tuple[list[Path], list[str], list[str]]:
+    """Every note reachable from `path` by embeds, plus unresolved embed
+    targets, plus dependencies that exist but could NOT be evaluated.
 
     Recursive because an embed of an embed still lands in the exported bytes.
+
+    The third list is what makes this fail closed. Two cases used to be
+    dropped silently: a note past MAX_EMBED_DEPTH, and a note that could not
+    be read. Both exist and both would render, so a restricted note could sit
+    behind either while the root reported clear. Unresolved targets (nothing
+    exists to leak) and attachments (cannot be classified; blocking them would
+    block every note with an image) stay advisory. Microsoft M-DASH 2026-09-23,
+    CWE-863, nine findings.
     """
     seen: set[Path] = set()
     unresolved: list[str] = []
+    incomplete: list[str] = []
     frontier = [(path, 0)]
     while frontier:
         current, depth = frontier.pop()
-        if depth >= MAX_EMBED_DEPTH:
-            continue
         try:
             text = current.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError) as exc:
+            incomplete.append(f"{current.name} (unreadable: {type(exc).__name__})")
             continue
         for target in _EMBED_RE.findall(text):
             if _ATTACHMENT_EXT.search(target):
@@ -138,9 +148,13 @@ def embed_closure(path: Path, index: dict[str, Path]) -> tuple[list[Path], list[
             if resolved is None:
                 unresolved.append(f"{target} (unresolved)")
             elif resolved not in seen and resolved != path:
+                if depth + 1 > MAX_EMBED_DEPTH:
+                    incomplete.append(
+                        f"{target} (beyond embed depth {MAX_EMBED_DEPTH})")
+                    continue
                 seen.add(resolved)
                 frontier.append((resolved, depth + 1))
-    return sorted(seen), unresolved
+    return sorted(seen), unresolved, incomplete
 
 
 def evaluate(paths: list[Path], ceiling: str,
@@ -152,7 +166,7 @@ def evaluate(paths: list[Path], ceiling: str,
 
     for path in paths:
         tier = note_tier(path) or unclassified_as
-        embedded, unresolved = embed_closure(path, index)
+        embedded, unresolved, incomplete = embed_closure(path, index)
 
         reasons: list[str] = []
         worst = tier
@@ -172,6 +186,9 @@ def evaluate(paths: list[Path], ceiling: str,
                 if worst is not None and TIER_RANK[dep_tier] > TIER_RANK[worst]:
                     worst = dep_tier
 
+        for gap in incomplete:
+            reasons.append(f"could not evaluate an embedded dependency: {gap}")
+
         results.append({
             "path": path,
             "tier": tier,
@@ -182,8 +199,13 @@ def evaluate(paths: list[Path], ceiling: str,
                 path.read_text(encoding="utf-8", errors="replace"))}),
             "reasons": reasons,
             "blocked": bool(reasons),
+            # An incomplete closure cannot be overridden: override is for
+            # "I know this is fine to share", and the gate cannot know what
+            # it could not read -- a restricted note may be behind the gap.
             "restricted": (tier == NEVER_EXPORTABLE
+                           or bool(incomplete)
                            or any(note_tier(d) == NEVER_EXPORTABLE for d in embedded)),
+            "incomplete": incomplete,
         })
     return results
 

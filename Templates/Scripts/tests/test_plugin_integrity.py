@@ -8,7 +8,7 @@ Coverage
 - TestEnvelopeRoundTrip save_allowlist → load_allowlist returns the same dict
 - TestTamperDetection   mutating state, hmac, or envelope shape fires
                         ALLOWLIST_TAMPER + non-zero exit + alert log entry
-- TestLegacyMigration   pre-v1.4 flat-format files load once, then re-save
+- TestUnsignedAllowlistIsTamper  a file without the HMAC envelope is refused
                         wraps them
 - TestScanPlugins       complete / missing-manifest / missing-main /
                         malformed-manifest cases
@@ -201,33 +201,45 @@ class TestTamperDetection:
 
 
 # ---------------------------------------------------------------------------
-# Legacy migration
+# No unsigned allowlist is ever trusted (was: "legacy migration")
+#
+# Until 2026-09-24 a file without the HMAC envelope was accepted as a trusted
+# pre-v1.4 allowlist with no verification, which let anyone who could write
+# the file bypass the signature by downgrading its format. M-DASH, CWE-347.
 # ---------------------------------------------------------------------------
 
-class TestLegacyMigration:
+class TestUnsignedAllowlistIsTamper:
 
-    def test_flat_format_loads_as_legacy(
-            self, fake_keychain, tmp_state_dir,
-            capsys: pytest.CaptureFixture) -> None:
-        """A pre-v1.4 file with no envelope must load successfully once,
-        so the patch deployment doesn't break before the first --update."""
-        pic.ALLOWLIST_PATH.write_text(json.dumps({
-            "templater-obsidian": {"version": "2.0.0"},
-        }))
-        loaded = pic.load_allowlist()
-        assert "templater-obsidian" in loaded
-        # And we surfaced a clear stderr note about it.
-        captured = capsys.readouterr()
-        assert "migrating" in captured.err.lower()
+    @pytest.mark.parametrize("flat", [
+        {"templater-obsidian": {"version": "2.0.0"}},
+        {"evil-plugin": {"main.js": "0" * 64}},
+        {"state": {"x": {}}},          # envelope keys incomplete: no hmac
+        {"hmac": "abc"},               # ... and no state
+    ])
+    def test_flat_or_partial_file_is_refused(
+            self, fake_keychain, tmp_state_dir, flat) -> None:
+        pic.ALLOWLIST_PATH.write_text(json.dumps(flat))
+        with pytest.raises(SystemExit) as exc:
+            pic.load_allowlist()
+        assert exc.value.code == 1, "an unsigned allowlist must be tamper"
 
-    def test_save_after_legacy_load_wraps(
+    def test_refusal_is_recorded_as_tamper(
             self, fake_keychain, tmp_state_dir) -> None:
         pic.ALLOWLIST_PATH.write_text(json.dumps({"x": {"version": "1"}}))
-        legacy = pic.load_allowlist()
-        pic.save_allowlist(legacy)  # next --update path
+        with pytest.raises(SystemExit):
+            pic.load_allowlist()
+        alerts = (tmp_state_dir / "alerts.log").read_text()
+        assert "ALLOWLIST_TAMPER" in alerts and "signed envelope" in alerts
+
+    def test_update_recovers_without_reading_the_old_file(
+            self, fake_keychain, tmp_state_dir) -> None:
+        """A genuine pre-envelope install is not stranded: save_allowlist
+        (the --update path) writes a fresh signed envelope from scratch."""
+        pic.ALLOWLIST_PATH.write_text(json.dumps({"x": {"version": "1"}}))
+        pic.save_allowlist({"x": {"version": "1"}})
         raw = json.loads(pic.ALLOWLIST_PATH.read_text())
-        assert "hmac" in raw
-        assert "state" in raw
+        assert "hmac" in raw and "state" in raw
+        assert pic.load_allowlist() == {"x": {"version": "1"}}
 
 
 # ---------------------------------------------------------------------------
