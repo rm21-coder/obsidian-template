@@ -27,7 +27,9 @@ import argparse
 import logging
 import logging.handlers
 import os
+import re
 import sys
+import urllib.parse
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
@@ -67,6 +69,18 @@ SET_SUFFIXES = ('.json.sha256', '.ready', '.sig', '.json')
 
 REQUEST_TIMEOUT = 30
 
+# Remote blob names are not trusted. A handoff id is derived from each one and
+# becomes a local filename (LOCAL_DIR / f"{id}{suffix}"), so a blob named with
+# "../" or an absolute path wrote outside LOCAL_DIR, and one containing "?" or
+# "#" rewrote the SAS request URL it was spliced into. Legitimate ids look like
+# "schedule-handoff-2026-08-05.v1"; anything else is dropped before it reaches
+# a path or a URL. Responses are also read under a ceiling, streamed, instead
+# of buffered whole. Microsoft M-DASH 2026-09-23: five findings (CWE-22 x2,
+# CWE-116, CWE-770 x2).
+_HANDOFF_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$')
+MAX_BLOB_BYTES = 16 * 1024 * 1024       # a handoff trio is JSON + sidecars
+MAX_LISTING_BYTES = 4 * 1024 * 1024     # a container listing, not a data dump
+
 log = logging.getLogger('handoff_blob_pull')
 
 
@@ -100,22 +114,37 @@ def acquire_lock() -> object:
 # ============================================================
 
 def _blob_url(name: str) -> str:
-    return f'{ACCOUNT_URL}/{CONTAINER}/{name}?{SAS}'
+    # Quoted even though ids are whitelisted: the URL carries the SAS token,
+    # and a name must never be able to end the path and start a query.
+    return f'{ACCOUNT_URL}/{CONTAINER}/{urllib.parse.quote(name, safe="")}?{SAS}'
+
+
+def _bounded_get(session: requests.Session, url: str, limit: int) -> bytes:
+    """GET url, streamed, refusing anything larger than `limit` bytes."""
+    with session.get(url, timeout=REQUEST_TIMEOUT, stream=True) as resp:
+        resp.raise_for_status()
+        buf = bytearray()
+        for chunk in resp.iter_content(64 * 1024):
+            buf += chunk
+            if len(buf) > limit:
+                raise ValueError(f'response exceeds {limit} bytes; refused')
+        return bytes(buf)
 
 
 def list_blob_names(session: requests.Session) -> list[str]:
     url = f'{ACCOUNT_URL}/{CONTAINER}?restype=container&comp=list&{SAS}'
-    resp = session.get(url, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    root = ET.fromstring(resp.content)
+    root = ET.fromstring(_bounded_get(session, url, MAX_LISTING_BYTES))
     return [el.text for el in root.iter('Name') if el.text]
 
 
 def download_blob(session: requests.Session, name: str, dest: Path) -> None:
-    resp = session.get(_blob_url(name), timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    # Containment behind the id whitelist: the destination must be a direct
+    # child of LOCAL_DIR, whatever the name turned out to be.
+    if dest.resolve().parent != LOCAL_DIR.resolve():
+        raise ValueError(f'refusing to write outside {LOCAL_DIR}: {dest}')
+    body = _bounded_get(session, _blob_url(name), MAX_BLOB_BYTES)
     tmp = dest.with_suffix(dest.suffix + '.part')
-    tmp.write_bytes(resp.content)
+    tmp.write_bytes(body)
     os.replace(tmp, dest)
 
 
@@ -140,6 +169,9 @@ def group_by_handoff_id(blob_names: list[str]) -> dict[str, set[str]]:
         for suffix in SET_SUFFIXES:
             if name.endswith(suffix):
                 handoff_id = name[: -len(suffix)]
+                if not _HANDOFF_ID_RE.fullmatch(handoff_id):
+                    log.warning('ignoring blob with unsafe name: %r', name)
+                    break
                 groups.setdefault(handoff_id, set()).add(suffix)
                 break
     return groups

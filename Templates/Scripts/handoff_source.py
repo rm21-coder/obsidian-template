@@ -117,6 +117,15 @@ def verify_signature(data: bytes, signature_hex: str | None,
                 "signature required but no HMAC key configured "
                 "(set HANDOFF_HMAC_KEY or HANDOFF_HMAC_KEY_FILE)")
         return
+    # An empty key is not "no key". An empty or whitespace-only key file
+    # loaded as b"" -- not None -- so verification went ahead under a key
+    # anyone can compute, and every forged handoff verified. Fail closed
+    # rather than downgrade to "unsigned": whoever configured a key file
+    # meant to enforce authenticity. Microsoft M-DASH 2026-09-23 (CWE-347).
+    if not key.strip():
+        raise HandoffError(
+            "HMAC key is empty — refusing to verify with a key anyone can "
+            "compute (check HANDOFF_HMAC_KEY / HANDOFF_HMAC_KEY_FILE)")
     if not signature_hex:
         raise HandoffError("signature required but none supplied with handoff")
     expected = hmac.new(key, data, hashlib.sha256).hexdigest()

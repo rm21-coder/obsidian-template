@@ -125,6 +125,15 @@ from source_media import DIR_NAMES as TYPE_DIRS  # noqa: E402
 MAX_BODY_BYTES = 64 * 1024          # a drop is a URL or a dictation snippet
 MAX_PAYLOAD_CHARS = 8 * 1024
 MAX_MESSAGES_PER_RUN = 50
+# Ceiling on a whole raw message, checked BEFORE it is downloaded or parsed.
+# A drop is a URL or a dictation snippet (MAX_BODY_BYTES above), and the
+# transport carries no attachments, so 1 MiB is ~16x headroom. Without it the
+# full RFC822 message was fetched and parsed before the sender or the HMAC was
+# checked -- so anyone who learned the intake address could push up to
+# MAX_MESSAGES_PER_RUN messages at the provider's ~50 MB ceiling through the
+# parser every run. Found by Microsoft M-DASH 2026-09-23 (CWE-770).
+MAX_RAW_MESSAGE_BYTES = 1 * 1024 * 1024
+_RFC822_SIZE_RE = re.compile(rb"RFC822\.SIZE (\d+)")
 REPLAY_WINDOW_DAYS = 7
 
 IMAP_HOST = os.environ.get("SOURCE_MAIL_IMAP_HOST", "imap.gmail.com")
@@ -345,6 +354,17 @@ def _html_to_text(html_body: str) -> str:
     return parser.text()
 
 
+def _rfc822_size(data) -> int | None:
+    """Parse an IMAP `FETCH (RFC822.SIZE)` response. None when absent."""
+    for item in data or []:
+        for chunk in (item if isinstance(item, tuple) else (item,)):
+            if isinstance(chunk, bytes):
+                m = _RFC822_SIZE_RE.search(chunk)
+                if m:
+                    return int(m.group(1))
+    return None
+
+
 def _collect_parts(msg: Message, content_type: str) -> str:
     """Concatenate parts of the given MIME content type, size-capped."""
     chunks: list[str] = []
@@ -354,6 +374,12 @@ def _collect_parts(msg: Message, content_type: str) -> str:
             continue
         if part.get_filename():          # an attachment, not the body
             continue
+        # Check the encoded size before decoding. Base64 and quoted-printable
+        # are never smaller than what they decode to by more than ~25%, so an
+        # encoded part already past twice the cap cannot fit (M-DASH, CWE-770).
+        encoded = part.get_payload(decode=False)
+        if isinstance(encoded, str) and len(encoded) > 2 * MAX_BODY_BYTES:
+            break
         payload = part.get_payload(decode=True)
         if not payload:
             continue
@@ -507,6 +533,20 @@ def process_mailbox(*, user: str, password: str, key: str,
             ids = ids[:MAX_MESSAGES_PER_RUN]
 
         for num in ids:
+            # Size first. RFC822.SIZE does not set \\Seen and costs one line.
+            # An unparseable answer fails closed: a message we cannot size is
+            # a message we will not download.
+            status, sized = conn.fetch(num, "(RFC822.SIZE)")
+            size = _rfc822_size(sized) if status == "OK" else None
+            if size is None or size > MAX_RAW_MESSAGE_BYTES:
+                log.warning("REJECT message %s: size %s exceeds %d bytes "
+                            "(not downloaded)", num.decode(errors="replace")
+                            if isinstance(num, bytes) else num,
+                            size, MAX_RAW_MESSAGE_BYTES)
+                rejected += 1
+                if not dry_run:
+                    conn.store(num, "+FLAGS", "\\Seen")
+                continue
             status, raw = conn.fetch(num, "(RFC822)")
             if status != "OK" or not raw or not raw[0]:
                 log.error("fetch failed for message %s", num)
