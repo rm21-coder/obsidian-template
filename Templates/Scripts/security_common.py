@@ -221,6 +221,19 @@ def restrict_file(path: Path) -> bool:
 
 # ---------- notifications ----------------------------------------------------
 
+# System binaries by absolute path, never by bare name. A bare name is resolved
+# through PATH (and on Windows, the current directory first), so anything able
+# to put an executable called `powershell` or `osascript` earlier in the search
+# order is run in its place. For notify() in particular that is an attack on
+# detection itself: a stand-in that exits 0 silences every alert the controls
+# raise. Found by Microsoft M-DASH 2026-09-23 (CWE-426); notify() was not among
+# its findings but has the same shape and higher stakes.
+POWERSHELL_EXE = str(Path(os.environ.get("SystemRoot") or r"C:\Windows")
+                     / "System32" / "WindowsPowerShell" / "v1.0"
+                     / "powershell.exe")
+OSASCRIPT_BIN = "/usr/bin/osascript"
+
+
 def notify(title: str, message: str) -> None:
     """Best-effort desktop notification. Never raises."""
     try:
@@ -229,13 +242,13 @@ def notify(title: str, message: str) -> None:
                 f"display notification {json.dumps(message)} "
                 f"with title {json.dumps(title)} sound name \"Submarine\""
             )
-            subprocess.run(["osascript", "-e", script],
+            subprocess.run([OSASCRIPT_BIN, "-e", script],
                            check=False, capture_output=True, timeout=5)
         elif sys.platform == "win32":
             ps1 = Path(__file__).resolve().parent / "windows" / "Send-Notification.ps1"
             if ps1.exists():
                 subprocess.run(
-                    ["powershell", "-NoProfile", "-NonInteractive",
+                    [POWERSHELL_EXE, "-NoProfile", "-NonInteractive",
                      "-ExecutionPolicy", "Bypass", "-File", str(ps1),
                      "-Title", title, "-Message", message],
                     check=False, capture_output=True, timeout=15)

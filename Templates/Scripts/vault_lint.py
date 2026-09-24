@@ -1240,10 +1240,13 @@ def main():
     args = ap.parse_args()
 
     if args.rollback:
-        manifest = json.loads(Path(args.rollback).read_text(encoding="utf-8"))
-        for rec in manifest["changes"]:
-            Path(rec["path"]).write_text(rec["original"], encoding="utf-8")
-        print("Rolled back {} files from {}".format(len(manifest["changes"]), args.rollback))
+        from manifest_rollback import UnsafeManifest, apply_rollback
+        try:
+            n = apply_rollback(args.rollback, VAULT_ROOT)
+        except UnsafeManifest as exc:
+            print(f"Refusing rollback, nothing written: {exc}", file=sys.stderr)
+            return 1
+        print(f"Rolled back {n} files from {args.rollback}")
         return 0
 
     active = [c for c in (args.only or CHECKS) if c not in (args.skip or [])]
