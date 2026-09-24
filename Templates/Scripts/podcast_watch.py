@@ -51,6 +51,22 @@ from pathlib import Path
 
 import script_lock
 
+
+def _redact_url(url: str) -> str:
+    """Log-safe URL: no userinfo, no query. A stdlib twin of
+    url_safety.redact_url, kept here on purpose -- url_safety imports requests
+    at module scope, and this watcher runs for days, so importing it would add
+    a way for the watcher to fail at startup. M-DASH 2026-09-23 (CWE-532)."""
+    from urllib.parse import urlparse
+    try:
+        p = urlparse(url)
+    except ValueError:
+        return "<unparseable url>"
+    if not p.scheme:
+        return url            # a local path or bare name, not a URL
+    host = (p.hostname or "") + (f":{p.port}" if p.port else "")
+    return f"{p.scheme}://{host}{p.path}" + ("?…" if p.query else "")
+
 SCRIPTS_DIR = Path(__file__).resolve().parent
 VAULT_ROOT = SCRIPTS_DIR.parent.parent
 LOCK_NAME = "podcast_watch"
@@ -206,7 +222,7 @@ def process_item(item: Path, *, out_dir: Path, model: str | None,
             failed.with_suffix(failed.suffix + ".error.log").write_text(
                 "No http(s) URL found in this file.\n", encoding="utf-8")
             return False
-        log.info("%s -> %s", item.name, source)
+        log.info("%s -> %s", item.name, _redact_url(source))
     else:
         source = str(item)
         log.info("%s -> local audio", item.name)

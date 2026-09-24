@@ -58,6 +58,27 @@ SAFE_FETCH_CHUNK_SIZE = 64 * 1024
 # Streaming downloads are for media, so the ceiling is much higher; still
 # bounded, so a hostile or misconfigured endpoint can't fill the disk.
 MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024
+
+
+def redact_url(url: str) -> str:
+    """A URL made safe to log: userinfo dropped, query string elided.
+
+    Every refusal and error in this module used to log the full URL. A URL can
+    carry credentials in its userinfo (https://user:pass@host/) and bearer-like
+    material in its query (signed CDN links, SAS tokens), so a log written for
+    diagnosis became a place secrets accumulate. Scheme, host and path survive
+    because they are what diagnosis actually needs. Microsoft M-DASH 2026-09-23
+    (CWE-532) flagged two of these call sites; all of them had it.
+    """
+    try:
+        parts = urlparse(url)
+    except ValueError:
+        return "<unparseable url>"
+    host = parts.hostname or ""
+    if parts.port:
+        host = f"{host}:{parts.port}"
+    query = "?…" if parts.query else ""
+    return f"{parts.scheme}://{host}{parts.path}{query}"
 SAFE_DOWNLOAD_TIMEOUT_SECONDS = 120
 
 USER_AGENT = (
@@ -151,7 +172,7 @@ def _walk(url: str, *, log: Logger, timeout: int):
     for _ in range(MAX_REDIRECTS + 1):
         ok, reason = is_safe_url(current)
         if not ok:
-            log(f"refusing {current}: {reason}")
+            log(f"refusing {redact_url(current)}: {reason}")
             return
         try:
             resp = requests.get(
@@ -162,25 +183,25 @@ def _walk(url: str, *, log: Logger, timeout: int):
                 headers={"User-Agent": USER_AGENT},
             )
         except requests.RequestException as e:
-            log(f"transport error on {current}: {e}")
+            log(f"transport error on {redact_url(current)}: {e}")
             return
         status = resp.status_code
         if status in (301, 302, 303, 307, 308):
             location = resp.headers.get("Location")
             resp.close()
             if not location:
-                log(f"redirect with no Location header: {current}")
+                log(f"redirect with no Location header: {redact_url(current)}")
                 return
             # urljoin handles both absolute and relative redirects.
             current = urljoin(current, location)
             continue
         if not (200 <= status < 300):
-            log(f"non-2xx ({status}) for {current}")
+            log(f"non-2xx ({status}) for {redact_url(current)}")
             resp.close()
             return
         yield resp, current
         return
-    log(f"redirect chain longer than {MAX_REDIRECTS} hops from {url}")
+    log(f"redirect chain longer than {MAX_REDIRECTS} hops from {redact_url(url)}")
 
 
 def safe_fetch(url: str, *, log: Logger | None = None,
@@ -199,7 +220,7 @@ def safe_fetch(url: str, *, log: Logger | None = None,
                     continue
                 buf.extend(chunk)
                 if len(buf) > max_bytes:
-                    log(f"body exceeded {max_bytes} bytes on {current}")
+                    log(f"body exceeded {max_bytes} bytes on {redact_url(current)}")
                     return None
             return bytes(buf)
         finally:
@@ -229,7 +250,7 @@ def safe_download(url: str, dest: Path, *, log: Logger | None = None,
                         continue
                     total += len(chunk)
                     if total > max_bytes:
-                        log(f"download exceeded {max_bytes} bytes on {current}")
+                        log(f"download exceeded {max_bytes} bytes on {redact_url(current)}")
                         out.close()
                         tmp.unlink(missing_ok=True)
                         return False

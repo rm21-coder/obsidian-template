@@ -234,3 +234,37 @@ class TestTokenLifecycle:
         assert gcf._client_id({"graph_client_id": "abc"}) == "abc"
         assert "organizations" in gcf._authority({})
         assert "contoso.edu" in gcf._authority({"graph_auth_tenant": "contoso.edu"})
+
+
+# --- bounded pagination (M-DASH 2026-09-23, CWE-835) ------------------------
+
+def test_fetch_events_stops_on_a_repeated_page_link(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """A nextLink pointing back at a page already fetched must stop the loop,
+    not re-request it forever."""
+    calls = []
+
+    def fake_get(url, token, prefer_tz=None):
+        calls.append(url)
+        return {"value": [{"id": str(len(calls))}],
+                "@odata.nextLink": "https://graph.example/page-loop"}
+
+    monkeypatch.setattr(gcf, "_graph_get", fake_get)
+    with pytest.raises(SystemExit):
+        gcf.fetch_events("tok", "2026-08-19T00:00:00", "2026-08-20T00:00:00")
+    assert len(calls) == 2, f"expected to stop at the first repeat, made {len(calls)}"
+
+
+def test_fetch_events_stops_at_the_page_ceiling(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    """An endless stream of *distinct* links is bounded too."""
+    calls = []
+
+    def fake_get(url, token, prefer_tz=None):
+        calls.append(url)
+        return {"value": [], "@odata.nextLink": f"https://graph.example/p{len(calls)}"}
+
+    monkeypatch.setattr(gcf, "_graph_get", fake_get)
+    with pytest.raises(SystemExit):
+        gcf.fetch_events("tok", "2026-08-19T00:00:00", "2026-08-20T00:00:00")
+    assert len(calls) == gcf.MAX_PAGES
