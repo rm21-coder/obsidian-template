@@ -228,3 +228,58 @@ def test_export_without_override_still_blocks(
     assert rc == 1
     assert "BLOCKED" in out                             # the specific marker
     assert not (dest / "Knowledge" / "Hot.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# The gate fails closed on dependencies it could not evaluate.
+#
+# Before 2026-09-24 a note past MAX_EMBED_DEPTH, or one that could not be read,
+# was skipped silently -- so a restricted note could sit behind either while
+# the root reported clear. Microsoft M-DASH, CWE-863 (nine findings).
+# ---------------------------------------------------------------------------
+
+def _chain(vault: Path, length: int, tail_tier: str) -> Path:
+    """N0 embeds N1 embeds ... N{length}; only the tail carries tail_tier."""
+    note(vault, f"N{length}", tier=tail_tier)
+    for i in range(length - 1, -1, -1):
+        note(vault, f"N{i}", body=f"![[N{i + 1}]]", tier="public")
+    return vault / "Knowledge" / "N0.md"
+
+
+def test_restricted_note_beyond_the_depth_limit_blocks(vault: Path):
+    top = _chain(vault, D.MAX_EMBED_DEPTH + 1, "restricted")
+    res = D.evaluate([top], "confidential")[0]
+    assert res["blocked"], "a restricted note past the depth limit let the root clear"
+    assert any("beyond embed depth" in r for r in res["reasons"])
+
+
+def test_depth_gap_cannot_be_overridden(vault: Path):
+    """The gate cannot know what it did not read, so override must not
+    release it -- a restricted note may be behind the gap."""
+    top = _chain(vault, D.MAX_EMBED_DEPTH + 1, "public")
+    res = D.evaluate([top], "confidential")[0]
+    assert res["blocked"] and res["restricted"]
+
+
+def test_chain_within_the_limit_is_judged_normally(vault: Path):
+    top = _chain(vault, D.MAX_EMBED_DEPTH, "public")
+    res = D.evaluate([top], "confidential")[0]
+    assert not res["blocked"], res["reasons"]
+    assert res["incomplete"] == []
+
+
+def test_unreadable_dependency_blocks(vault: Path):
+    note(vault, "Bad", tier="public")
+    (vault / "Knowledge" / "Bad.md").write_bytes(b"\xff\xfe\x00 not utf-8 \xc3\x28")
+    top = note(vault, "Top", body="![[Bad]]", tier="public")
+    res = D.evaluate([top], "public")[0]
+    assert res["blocked"] and res["restricted"]
+    assert any("unreadable" in r for r in res["reasons"])
+
+
+def test_unresolved_and_attachment_embeds_stay_advisory(vault: Path):
+    """Nothing exists behind an unresolved embed, and blocking attachments
+    would block every note with an image: both remain advisory."""
+    host = note(vault, "Host", body="![[diagram.png]] and ![[Nope]]", tier="public")
+    res = D.evaluate([host], "public")[0]
+    assert not res["blocked"] and res["incomplete"] == []
