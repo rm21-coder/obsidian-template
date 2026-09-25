@@ -269,10 +269,34 @@ body into the exporting file, so exporting A discloses everything A embeds
 regardless of A's own tier. The gate resolves embeds recursively (depth 6) and
 judges the whole closure: a `public` note embedding a `public` note embedding a
 `restricted` one is blocked. Plain `[[links]]` carry no content and are
-reported for information only. Attachments and unresolved embeds are reported
-rather than silently passed, since neither can be classified.
+reported for information only.
 
-**Fail closed.** A note with a missing or unrecognised value blocks.
+What counts as "renders into the note" is deliberately broad: `![[wiki]]`
+embeds (including the `\|` alias form tables need), Markdown `![](Note.md)`
+embeds, the file and text nodes of a `.canvas`, and every link inside an
+Excalidraw drawing. A reference that could mean several notes — a duplicate
+name, a relative or partial path — brings **all** of them into the closure,
+so the gate never has to guess which one Obsidian would pick.
+
+**Fail closed on what it cannot see** (since 2026-09-25). The gate used to
+treat an unresolved embed as advisory, on the premise that nothing exists
+behind it. That premise held only if its link resolution matched Obsidian's
+exactly, and an adversarial review found several forms where it did not —
+each one a restricted note exported as "clear". So now:
+
+| Situation | Result |
+|---|---|
+| Embed resolves to nothing in the vault | **Blocks**; `--override` allowed (you can see the target does not exist) |
+| Query block (`dataview`, `dataviewjs`, `tasks`, `base`, inline `` `= …` ``), a `.base`, an unparseable canvas, an unreadable dependency, a closure deeper than 6 | **Blocks; cannot be overridden** — a restricted note may be behind it |
+| A declared tier the gate does not recognise | **Blocks; cannot be overridden**, and `--treat-unclassified` does not apply |
+| Images, audio, video, PDF | Reported, advisory — media carries no tier |
+
+**Reading the tier.** Every gate reads `classification:` through one reader
+(`classification_tier.py`): YAML comment and quoting rules apply
+(`restricted  # PHI` is `restricted`), and if the key appears more than once
+the **most restrictive** value wins.
+
+**Unlabelled notes.** A note with no `classification` value blocks.
 `--treat-unclassified TIER` relaxes that only where something *other than the
 label* already establishes the tier — repo documentation in an already-public
 checkout, for instance. Never point it at a live vault.

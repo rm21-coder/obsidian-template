@@ -7,6 +7,8 @@ an "assert not exported" test and is useless.
 """
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -116,10 +118,9 @@ def test_an_embed_cycle_terminates(vault: Path):
 
 def test_attachments_and_unresolved_embeds_are_reported_not_silently_passed(vault: Path):
     host = note(vault, "Host", body="![[diagram.png]] and ![[Nope]]", tier="public")
-    res = D.evaluate([host], "public")
-    joined = " ".join(res[0]["unresolved"])
-    assert "diagram.png" in joined and "cannot be classified" in joined
-    assert "Nope" in joined and "unresolved" in joined
+    res = D.evaluate([host], "public")[0]
+    assert any("diagram.png" in m and "cannot be classified" in m for m in res["media"])
+    assert res["unresolved"] == ["Nope"]
 
 
 def test_embed_targets_resolve_by_stem_and_by_path(vault: Path):
@@ -277,9 +278,205 @@ def test_unreadable_dependency_blocks(vault: Path):
     assert any("unreadable" in r for r in res["reasons"])
 
 
-def test_unresolved_and_attachment_embeds_stay_advisory(vault: Path):
-    """Nothing exists behind an unresolved embed, and blocking attachments
-    would block every note with an image: both remain advisory."""
+def test_media_stays_advisory_but_an_unresolved_embed_blocks(vault: Path):
+    """Decided 2026-09-25: fail closed. "Nothing exists behind an unresolved
+    embed" held only if resolution matched Obsidian's, and it never fully did.
+    An unresolved note embed now BLOCKS -- overridable, since the operator can
+    see the target does not exist. Media stays advisory: it carries no tier,
+    and blocking it would block every note with a picture."""
+    pic = note(vault, "Pic", body="![[diagram.png]]", tier="public")
+    assert not D.evaluate([pic], "public")[0]["blocked"]
     host = note(vault, "Host", body="![[diagram.png]] and ![[Nope]]", tier="public")
     res = D.evaluate([host], "public")[0]
-    assert not res["blocked"] and res["incomplete"] == []
+    assert res["blocked"] and not res["restricted"], res
+    assert any("`Nope` does not resolve" in r for r in res["reasons"]), res["reasons"]
+
+
+@pytest.mark.parametrize("form", [
+    "Secret Note.md",            # explicit extension -- Obsidian renders it
+    "Knowledge/Secret Note.md",  # vault path with extension
+    "SECRET NOTE.MD",            # case of both stem and extension
+    "Secret Note",
+    "knowledge/secret note",
+    "Secret Note#Heading",
+    "Secret Note|alias",
+])
+def test_every_embed_form_obsidian_renders_is_resolved(vault: Path, form: str):
+    """An unresolved embed is advisory, so resolution must never be stricter
+    than Obsidian's. `![[Secret Note.md]]` used to come back unresolved, and a
+    restricted note embedded that way exported as clear."""
+    note(vault, "Secret Note", body="TOP SECRET BODY", tier="restricted")
+    top = note(vault, "Top", body=f"![[{form}]]", tier="public")
+    res = D.evaluate([top], "public")[0]
+    assert res["blocked"] and res["restricted"], f"![[{form}]] let a restricted note clear"
+    assert res["unresolved"] == [], res["unresolved"]
+    assert any("Secret Note" in r and "restricted" in r for r in res["reasons"]), res["reasons"]
+
+
+def test_unicode_normalization_does_not_hide_an_embed(vault: Path):
+    """Same name, different Unicode normalization: NFD on disk (as some macOS
+    tools write it), NFC in the typed link."""
+    import unicodedata
+    nfd = unicodedata.normalize("NFD", "Café Plan")
+    note(vault, nfd, body="TOP SECRET BODY", tier="restricted")
+    top = note(vault, "Top", body="![[" + unicodedata.normalize("NFC", "Café Plan") + "]]",
+               tier="public")
+    res = D.evaluate([top], "public")[0]
+    assert res["blocked"] and res["restricted"], res
+    assert res["unresolved"] == []
+
+
+
+# ---------------------------------------------------------------------------
+# Adversarial review of the M-DASH fixes, 2026-09-25. Each case below is a
+# restricted note that the previous gate reported CLEAR (or let --override
+# release). They are the reason the gate now fails closed.
+
+def _restricted(vault: Path, name: str = "Secret", folder: str = "Knowledge") -> Path:
+    return note(vault, name, body="TOP SECRET BODY", tier="restricted", folder=folder)
+
+
+def _assert_restricted_blocks(res: dict) -> None:
+    assert res["blocked"], f"cleared: {res}"
+    assert res["restricted"], f"overridable: {res['reasons']}"
+
+
+@pytest.mark.parametrize("form", [
+    "![](Secret.md)", "![x](Secret%20Note.md)", "![](<Secret Note.md>)",
+    "![](Knowledge/Secret%20Note.md 'title')",
+])
+def test_markdown_style_embeds_are_judged(vault: Path, form: str):
+    _restricted(vault, "Secret"); _restricted(vault, "Secret Note")
+    host = note(vault, "Host", body=form, tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_remote_markdown_images_are_not_vault_content(vault: Path):
+    host = note(vault, "Host", body="![logo](https://example.com/x.md)", tier="public")
+    assert not D.evaluate([host], "public")[0]["blocked"]
+
+
+@pytest.mark.parametrize("form", ["![[./Data]]", "![[../Proj/Data]]", "![[Proj/Data]]"])
+def test_relative_and_partial_paths_reach_every_candidate(vault: Path, form: str):
+    note(vault, "Data", tier="public", folder="A")
+    note(vault, "Data", body="TOP SECRET", tier="restricted", folder="Z/Proj")
+    host = note(vault, "Host", body=form, tier="public", folder="Z/Other")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_duplicate_stem_judges_every_candidate(vault: Path):
+    note(vault, "Data", body="TOP SECRET", tier="restricted", folder="A")
+    note(vault, "Data", tier="public", folder="Z")
+    host = note(vault, "Host", body="![[Data]]", tier="public", folder="A")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_escaped_pipe_in_a_table_is_an_alias_separator(vault: Path):
+    _restricted(vault)
+    host = note(vault, "Host", body="| a | ![[Secret\\|alias]] |", tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_symlinked_folder_is_indexed(vault: Path, tmp_path: Path):
+    ext = tmp_path / "ext"; ext.mkdir()
+    (ext / "Secret.md").write_text("---\nclassification: restricted\n---\nX\n")
+    (vault / "Linked").symlink_to(ext)
+    host = note(vault, "Host", body="![[Secret]]", tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_canvas_file_and_text_nodes_are_judged(vault: Path):
+    _restricted(vault)
+    note(vault, "Other", body="x", tier="restricted")
+    (vault / "Knowledge" / "Board.canvas").write_text(json.dumps({"nodes": [
+        {"id": "1", "type": "file", "file": "Knowledge/Secret.md"},
+        {"id": "2", "type": "text", "text": "see ![[Other]]"}]}))
+    host = note(vault, "Host", body="![[Board.canvas]]", tier="public")
+    res = D.evaluate([host], "public")[0]
+    _assert_restricted_blocks(res)
+    names = {p.name for p in res["embedded"]}
+    assert {"Secret.md", "Other.md"} <= names, names
+
+
+def test_unparseable_canvas_cannot_be_overridden(vault: Path):
+    (vault / "Knowledge" / "Board.canvas").write_text("{not json")
+    host = note(vault, "Host", body="![[Board.canvas]]", tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_excalidraw_drawing_links_are_embeds(vault: Path):
+    _restricted(vault)
+    d = vault / "Knowledge" / "Drawing.excalidraw.md"
+    d.write_text("---\nexcalidraw-plugin: parsed\nclassification: public\n---\n"
+                 "## Embedded files\nabc123: [[Secret]]\n")
+    host = note(vault, "Host", body="![[Drawing.excalidraw]]", tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+@pytest.mark.parametrize("body", [
+    "```dataview\nTABLE file.name FROM #secret\n```",
+    "```dataviewjs\ndv.list()\n```", "```tasks\nnot done\n```",
+    "```base\nfilters: x\n```", "Total: `= this.file.name`", "`$= dv.current()`",
+])
+def test_query_blocks_cannot_be_overridden(vault: Path, body: str):
+    host = note(vault, "Host", body=body, tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_base_file_cannot_be_overridden(vault: Path):
+    (vault / "Knowledge" / "All.base").write_text("filters: x\n")
+    host = note(vault, "Host", body="![[All.base]]", tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+@pytest.mark.parametrize("line", [
+    "classification: restricted   # PHI",
+    "classification: 'restricted' # PHI",
+    "classification: public\nclassification: restricted",
+    "classification: restricted\nclassification: public",
+    "Classification: restricted",
+])
+def test_restricted_tier_survives_comments_duplicates_and_case(vault: Path, line: str):
+    p = vault / "Knowledge" / "R.md"
+    p.write_text(f"---\n{line}\n---\nbody\n")
+    assert D.note_tier(p) == "restricted"
+    _assert_restricted_blocks(D.evaluate([p], "confidential")[0])
+
+
+def test_bom_prefixed_restricted_note_is_restricted(vault: Path):
+    p = vault / "Knowledge" / "R.md"
+    p.write_text("\ufeff---\nclassification: restricted\n---\nbody\n", encoding="utf-8")
+    _assert_restricted_blocks(D.evaluate([p], "confidential")[0])
+
+
+def test_unrecognised_declared_tier_cannot_be_overridden_or_defaulted(vault: Path):
+    """--treat-unclassified is for notes with NO label; a label the gate cannot
+    read is a claim it cannot check."""
+    p = note(vault, "Typo", tier="restircted")
+    res = D.evaluate([p], "confidential", unclassified_as="public")[0]
+    _assert_restricted_blocks(res)
+
+
+def test_override_cannot_export_restricted_with_a_comment(vault: Path, tmp_path: Path,
+                                                           monkeypatch: pytest.MonkeyPatch):
+    """The reviewer's exact CLI reproduction: this exported with rc=0."""
+    p = vault / "Knowledge" / "R.md"
+    p.write_text("---\nclassification: restricted   # PHI\n---\nbody\n")
+    out = tmp_path / "out"
+    monkeypatch.setattr(D, "audit", lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv", ["dc", "export", str(p), "--to", str(out),
+                                      "--audience", "cleared", "--override", "fine",
+                                      "--vault", str(vault)])
+    assert D.main() == 1
+    assert not (out / "Knowledge" / "R.md").exists()
+
+
+def test_note_outside_the_vault_is_refused_before_anything_happens(
+        vault: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    outside = tmp_path / "Outside.md"
+    outside.write_text("---\nclassification: public\n---\nx\n")
+    monkeypatch.setattr(sys, "argv", ["dc", "check", str(outside), "--audience", "public",
+                                      "--vault", str(vault)])
+    with pytest.raises(SystemExit) as e:
+        D.main()
+    assert e.value.code == 2
