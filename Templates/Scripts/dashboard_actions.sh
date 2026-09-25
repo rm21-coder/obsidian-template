@@ -41,33 +41,20 @@ case "$action" in
     nohup "$PY" meeting_pull.py >> "$LOG" 2>&1 &
     ;;
 
-  rebaseline-security)
-    # Adopts the current state of Scripts/, LaunchAgents, and the plugin
-    # allowlist as the new trusted baseline. Deliberately runs both checks
-    # even if the first fails, and fails overall if either did.
-    #
-    # Order matters: plugin_integrity_check.py --update stamps a fresh
-    # vetted_at timestamp into plugin_allowlist.json on every run, changing
-    # its hash even when no plugin actually changed. integrity_monitor.py
-    # treats that file as a state-dir trust anchor and baselines whatever
-    # hash it sees — so if it ran first, its baseline would be stale the
-    # instant plugin_integrity_check.py rewrote the file, and the very next
-    # check would report bogus drift on plugin_allowlist.json forever after.
-    rc=0
-    "$PY" plugin_integrity_check.py --update >> "$LOG" 2>&1 || rc=1
-    "$PY" integrity_monitor.py --update >> "$LOG" 2>&1 || rc=1
-
-    # The dashboard's pipeline-health section reads each job's
-    # LastExitStatus from launchd itself — a value launchd only updates
-    # when IT invokes the job, not when the underlying script is run
-    # manually like above. Kickstart both so launchd records a fresh,
-    # clean status immediately. Labels must match what's actually loaded
-    # (verify with: launchctl list | grep obsidian.security).
-    uid=$(id -u)
-    /bin/launchctl kickstart -k "gui/$uid/com.obsidian.security.integrity" || rc=1
-    /bin/launchctl kickstart -k "gui/$uid/com.obsidian.security.plugin-check" || rc=1
-    exit $rc
-    ;;
+  # rebaseline-security was removed 2026-09-25 and must not come back.
+  #
+  # obsidian-dashboard:// is a registered URL scheme, so ANY web page can fire
+  # it, not just this dashboard. Rebaselining adopts the current state of the
+  # scripts, LaunchAgents and plugins as trusted -- so a page that fired it
+  # would complete a tamper for the attacker: change a plugin or a script,
+  # which the integrity controls detect, then trigger a rebaseline and the
+  # detection is erased. The browser's "open this app?" prompt was the only
+  # thing in the way, and "always allow" removes it.
+  #
+  # Adopting a baseline is a deliberate act; do it in a terminal, in order:
+  #   /usr/bin/python3 plugin_integrity_check.py --update
+  #   /usr/bin/python3 integrity_monitor.py --update
+  # A request for it now falls through to *) below and is refused.
 
   refresh-dashboard)
     # Fast (a render plus a browser open) — stays synchronous so the

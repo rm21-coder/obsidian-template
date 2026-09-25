@@ -1836,12 +1836,16 @@ def render(today: _dt.date,
     # Action buttons only render when the obsidian-dashboard:// handler is
     # installed — otherwise they'd be dead clicks (see
     # dashboard_actions_available for what installs the handler).
+    #
+    # There is deliberately no "rebaseline security" button. The scheme is
+    # callable by any web page, and rebaselining adopts the current state as
+    # trusted, so a link here is a way for a page to erase a tamper the
+    # controls have just detected. See dashboard_actions.sh.
     if show_actions is None:
         show_actions = dashboard_actions_available()
     if show_actions:
         parts.append("""<div class="actions">
   <a href="obsidian-dashboard://run/pull-meetings">Pull meetings</a>
-  <a href="obsidian-dashboard://run/rebaseline-security">Rebaseline security harness</a>
   <a href="obsidian-dashboard://run/refresh-dashboard">Refresh dashboard</a>
   <a href="obsidian-dashboard://run/refresh-rag">Refresh RAG index</a>
 </div>

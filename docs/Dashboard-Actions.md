@@ -43,12 +43,33 @@ identical minus the button bar, so nothing else depends on this component.
 | Button | What it runs | Sync or background |
 |---|---|---|
 | Pull meetings | `meeting_pull.py` | background |
-| Rebaseline security harness | plugin check `--update`, then integrity monitor `--update`, then kickstarts both agents | synchronous |
 | Refresh dashboard | `morning_dashboard.py` | synchronous |
 | Refresh RAG index | `obsidian-rag-sync.py` | background |
 
 Every dispatch appends to `~/Library/Logs/dashboard-actions.log`, and the
 app posts a notification when an action starts and finishes.
+
+### Why there is no "rebaseline security" button
+
+There used to be one, and it was removed on 2026-09-25. `obsidian-dashboard://`
+is a registered URL scheme, so any web page can open it — not just this
+dashboard. Rebaselining adopts the current scripts, LaunchAgents and plugins as
+trusted, so a page that fired it could finish a tamper for an attacker: change
+a plugin or script, which the integrity controls detect, then trigger a
+rebaseline and the detection disappears. The browser's "open this app?" prompt
+was the only obstacle, and "always allow" removes it.
+
+Adopting a baseline is a deliberate act. Run it in a terminal, in this order
+(the plugin check first, because it restamps the file the integrity monitor
+hashes):
+
+```bash
+/usr/bin/python3 ~/Obsidian/Templates/Scripts/plugin_integrity_check.py --update
+/usr/bin/python3 ~/Obsidian/Templates/Scripts/integrity_monitor.py --update
+```
+
+The dispatcher now refuses the action, so an old bookmark or a hostile page
+gets `unknown action` and exit 2.
 
 **Why long actions run in the background:** the URL-scheme applet is
 single-instance. If it sat inside a multi-minute RAG re-index, every later

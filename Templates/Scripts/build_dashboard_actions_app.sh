@@ -53,7 +53,6 @@ echo
 echo 'DONE. Test each action from Terminal:'
 echo "  open 'obsidian-dashboard://run/refresh-dashboard'"
 echo "  open 'obsidian-dashboard://run/refresh-rag'"
-echo "  open 'obsidian-dashboard://run/rebaseline-security'"
 echo "  open 'obsidian-dashboard://run/pull-meetings'"
 echo
 echo "Watch results in:  tail -f ~/Library/Logs/dashboard-actions.log"
