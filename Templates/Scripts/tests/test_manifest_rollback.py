@@ -29,8 +29,16 @@ def vault(tmp_path: Path) -> Path:
     return v
 
 
+@pytest.fixture(autouse=True)
+def rollback_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    d = tmp_path / "rollback"
+    monkeypatch.setenv("OBSIDIAN_ROLLBACK_DIR", str(d))
+    return d
+
+
 def _manifest(tmp_path: Path, changes) -> Path:
-    m = tmp_path / "manifest.json"
+    """Written where the tools write manifests: only those are trusted."""
+    m = mr.new_manifest_path("test", "20260925_000000")
     m.write_text(json.dumps({"changes": changes}))
     return m
 
@@ -204,7 +212,7 @@ def test_new_manifests_are_written_outside_the_vault(tmp_path: Path,
 @pytest.mark.parametrize("body", ["{not json", "[" * 100000])
 def test_a_malformed_manifest_is_a_refusal_not_a_traceback(tmp_path: Path, vault: Path,
                                                            body: str) -> None:
-    m = tmp_path / "m.json"; m.write_text(body)
+    m = mr.new_manifest_path("test", "x"); m.write_text(body)
     with pytest.raises(mr.UnsafeManifest):
         mr.apply_rollback(m, vault)
 
@@ -239,3 +247,46 @@ def test_a_failed_swap_after_one_restore_is_reported_as_partial(
     err = capsys.readouterr().err
     assert "ROLLBACK INCOMPLETE" in err and "nothing written" not in err
     assert str(a) in err
+
+
+
+# ---------------------------------------------------------------------------
+# Round 3 of the adversarial review.
+
+def test_a_manifest_outside_the_rollback_dir_is_refused(vault: Path, tmp_path: Path) -> None:
+    """Downloads, another synced folder: not a manifest this machine wrote."""
+    m = tmp_path / "Downloads" / "m.json"; m.parent.mkdir()
+    m.write_text(json.dumps({"changes": [{"path": str(vault / "Notes" / "a.md"),
+                                          "original": "pwned"}]}))
+    with pytest.raises(mr.UnsafeManifest, match="not in the rollback directory"):
+        mr.apply_rollback(m, vault)
+    assert (vault / "Notes" / "a.md").read_text() == "changed\n"
+
+
+def test_in_vault_manifest_is_refused_however_the_path_is_spelled(vault: Path) -> None:
+    """Compared by filesystem identity: a case-variant spelling of the vault
+    path passed a string comparison on a case-insensitive volume."""
+    m = vault / "Notes" / "planted.json"
+    m.write_text(json.dumps({"changes": []}))
+    variant = Path(str(m).replace("/vault/", "/VAULT/"))
+    if not variant.exists():
+        pytest.skip("case-sensitive volume")
+    with pytest.raises(mr.UnsafeManifest, match="inside the vault"):
+        mr.apply_rollback(variant, vault)
+
+
+def test_rollback_dir_inside_the_vault_is_refused(vault: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OBSIDIAN_ROLLBACK_DIR", str(vault / "Notes" / "rb"))
+    m = mr.new_manifest_path("t", "x"); m.write_text(json.dumps({"changes": []}))
+    with pytest.raises(mr.UnsafeManifest, match="rollback directory .* is inside the vault"):
+        mr.apply_rollback(m, vault)
+
+
+def test_new_manifest_does_not_follow_a_planted_symlink(rollback_dir: Path, tmp_path: Path) -> None:
+    victim = tmp_path / "victim.txt"; victim.write_text("keep")
+    rollback_dir.mkdir(parents=True, exist_ok=True)
+    (rollback_dir / "tool_manifest_S.json").symlink_to(victim)
+    p = mr.new_manifest_path("tool", "S")
+    assert p.name != "tool_manifest_S.json" and not p.is_symlink()
+    p.write_text("{}")
+    assert victim.read_text() == "keep"

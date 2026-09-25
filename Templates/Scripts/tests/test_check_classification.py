@@ -107,7 +107,9 @@ class TestAuditRespectsTheFilter:
     ("classification: confidential\nclassification: public", "confidential"),
     ("classification: public   # reviewed", "public"),
     ("classification: 'public' # reviewed", "public"),
-    ("Classification: restricted\nclassification: public", "restricted"),
+    # Another spelling of the key is unreadable (round 3): still never public.
+    ("Classification: restricted\nclassification: public",
+     "(frontmatter the gate cannot read reliably)"),
 ])
 def test_every_declared_value_counts_not_the_first(audit, block: str, expected: str) -> None:
     """A `public` line above a real tier used to pass this audit, and the note
