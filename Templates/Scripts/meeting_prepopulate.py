@@ -462,13 +462,36 @@ def _strip_clean(s: str) -> str:
 _UNSAFE_STEM_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
+# Windows device names, refused as a whole stem whatever the extension:
+# "CON.md" opens the console, not a file. Characters alone do not catch these.
+_RESERVED_STEMS = frozenset(
+    ['CON', 'PRN', 'AUX', 'NUL'] + [f'COM{i}' for i in range(1, 10)]
+    + [f'LPT{i}' for i in range(1, 10)])
+
+# A filename component is limited to 255 BYTES on APFS, ext4 and NTFS. A
+# longer display name raised "File name too long" mid-handoff, the handoff
+# was never acked, and every later run failed on the same invite -- one
+# outsider-authored name stalled all meeting pre-population. Leave room for
+# a " 12" collision suffix and ".md". Adversarial review, 2026-09-25.
+_MAX_STEM_BYTES = 200
+
+
 def _safe_stem(s: str) -> str:
     """Reduce an attendee-derived name to one safe filename component."""
     s = _UNSAFE_STEM_RE.sub(' ', s or '')
     # Drop tokens made only of dots: the remains of "../" once the separator
     # is gone. "A." in "Jane A. Doe" is not dot-only and is kept.
     s = ' '.join(t for t in s.split() if t.strip('.'))
-    return s.strip('.').strip() or 'Unknown'
+    s = s.strip('.').strip() or 'Unknown'
+    if len(s.encode('utf-8')) > _MAX_STEM_BYTES:
+        s = s.encode('utf-8')[:_MAX_STEM_BYTES].decode('utf-8', 'ignore')
+        s = s.rstrip('. ') or 'Unknown'
+    head, dot, tail = s.partition('.')
+    if head.strip().upper() in _RESERVED_STEMS:
+        # Windows matches the name before the FIRST dot: "aux.md (name)" is
+        # still the AUX device, so the marker goes on that part.
+        s = f'{head.strip()} (name){dot}{tail}'
+    return s
 
 
 def _is_credential_token(s: str) -> bool:
@@ -962,6 +985,9 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
     current = fm_match.group(1).strip()
     if current:
         return False  # already populated, never overwrite
+    email = _yaml_email(email)
+    if not email:
+        return False
     new_line = f'{target_field}: {email}'
     new_text = (text[:fm_match.start()] + new_line +
                 text[fm_match.end():])
@@ -993,16 +1019,16 @@ def render_people_stub(canonical: str, contact: dict, attendee_display: str,
         aliases_set.append(disp)
     aliases_set = [a for a in aliases_set if a and a != canonical]
 
-    aliases_yaml = '\n'.join(f'  - "{a}"' for a in aliases_set)
+    aliases_yaml = '\n'.join(f'  - {_yaml_quoted(a)}' for a in aliases_set)
 
     fm = f'''---
 categories:
   - "[[Categories/People]]"
 Title: {_yaml_scalar(title)}
 Organization: {_yaml_scalar(org)}
-Email-Personal: {pers_email}
-Email-Work: {work_email}
-Mobile Phone: {phone}
+Email-Personal: {_yaml_email(pers_email)}
+Email-Work: {_yaml_email(work_email)}
+Mobile Phone: {_yaml_scalar(phone)}
 preferred_name:
 aliases:
 {aliases_yaml if aliases_set else ''}
@@ -1012,7 +1038,7 @@ created: {now_iso}
 updated: {now_iso}
 status: stub
 source: meeting-prepopulate
-source_subsource: {source_subsource}
+source_subsource: {_yaml_scalar(source_subsource)}
 ---
 
 
@@ -1026,7 +1052,7 @@ source_subsource: {source_subsource}
 
 ## Bio
 
-> Stub created automatically by meeting-prepopulate ({source_subsource}). Bio pending — next People-bio pass will enrich.
+> Stub created automatically by meeting-prepopulate ({_yaml_text(source_subsource)}). Bio pending — next People-bio pass will enrich.
 
 ## Meetings
 
@@ -1039,12 +1065,49 @@ source_subsource: {source_subsource}
     return fm
 
 
-def _yaml_scalar(s: str) -> str:
+# Frontmatter is written from handoff text: meeting subjects, attendee names,
+# directory titles. All of it is authored by whoever sent the invite. The old
+# writer quoted only on a few YAML metacharacters and escaped nothing, so a
+# subject or display name containing `"` and a newline could close its string
+# and add lines of its own -- `classification: public` among them, ABOVE the
+# note's real `classification: confidential`. The export gate and RAG sync
+# read the first classification line, so an outsider could relabel the
+# confidential notes Rich later writes in that meeting. Adversarial review of
+# the M-DASH fixes, 2026-09-25.
+#
+# One rule now: control characters (every line break included) collapse to a
+# space, and anything that is not plainly safe is emitted as a JSON string,
+# which is a valid YAML double-quoted scalar with every escape correct.
+_YAML_CTRL_RE = re.compile(r'[\x00-\x1f\x7f\x85\u2028\u2029]+')
+_YAML_PLAIN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .,()'/+-]*[A-Za-z0-9.)]|[A-Za-z0-9]")
+_YAML_WORDS = frozenset({'true', 'false', 'yes', 'no', 'on', 'off', 'null', 'y', 'n', '~'})
+
+
+def _yaml_text(s) -> str:
+    """Untrusted text reduced to one line."""
+    return _YAML_CTRL_RE.sub(' ', str(s or '')).strip()
+
+
+def _yaml_quoted(s) -> str:
+    """Always a double-quoted YAML scalar (for list items and links)."""
+    return json.dumps(_yaml_text(s), ensure_ascii=False)
+
+
+def _yaml_scalar(s) -> str:
+    """A YAML value: plain when that is unambiguous, quoted otherwise."""
+    s = _yaml_text(s)
     if not s:
         return ''
-    if any(ch in s for ch in ':#&*!|>%@`{}[]'):
-        return f'"{s}"'
-    return s
+    if _YAML_PLAIN_RE.fullmatch(s) and s.lower() not in _YAML_WORDS \
+            and not re.fullmatch(r'[-+.\d ]+', s):
+        return s
+    return json.dumps(s, ensure_ascii=False)
+
+
+def _yaml_email(s) -> str:
+    """An address, or nothing: never free text in an email field."""
+    s = _yaml_text(s)
+    return s if EMAIL_RE.fullmatch(s) else ''
 
 
 def resolve_or_create_person(attendee: dict, contact_by_email: dict,
@@ -1545,10 +1608,10 @@ def render_meeting_file(m: dict, mtype: str, group_stem: str | None,
             fm_lines.append(f'title: {_yaml_scalar(subject)}')
     if mtype == 'Group' and group_stem:
         fm_lines.append('group:')
-        fm_lines.append(f'  - "[[{group_stem}]]"')
+        fm_lines.append(f'  - {_yaml_quoted(f"[[{group_stem}]]")}')
     fm_lines.append('people:')
     for p in required_people:
-        fm_lines.append(f'  - "{p}"')
+        fm_lines.append(f'  - {_yaml_quoted(p)}')
     if needs_attendees:
         # The one thing the pipeline could not work out, surfaced in the vault
         # so it is reviewable at a glance. Filling in `people:` here is what
@@ -1586,7 +1649,7 @@ def ensure_series_root(m: dict, slug_path: str, required_people: list[str],
     series_uid = m.get('series_uid') or ''
     recur_human = m.get('recurrence_human') or ''
     rrule = m.get('rrule_raw') or ''
-    people_yaml = '\n'.join(f"  - '{p}'" for p in required_people)
+    people_yaml = '\n'.join(f"  - {_yaml_quoted(p)}" for p in required_people)
     content = f'''---
 categories:
   - '[[Meetings]]'
@@ -1601,9 +1664,9 @@ created_by: meeting-prepopulate
 generated: {now_iso}
 ---
 
-# {subject}
+# {_yaml_text(subject)}
 
-Recurrence: **{recur_human}**
+Recurrence: **{_yaml_text(recur_human)}**
 
 ## Standing Agenda
 
@@ -1697,14 +1760,43 @@ def _redirect_stub(new_slot: str, now_iso: str) -> str:
     )
 
 
+# Seen-state names every meeting note this pipeline owns, and a reschedule or
+# a cancellation then reads, rewrites or DELETES the file it names. The state
+# file lives inside the vault (Templates/Scripts/.state/), so it is exactly as
+# trustworthy as a synced vault file, and a name like "../../anything" in it
+# deleted or overwrote a file anywhere the user can write. The pipeline only
+# ever writes names of one shape -- meeting_filename() below -- so that shape
+# is the whole whitelist. Outsiders cannot reach this (the name is built from
+# the start time, never the subject); M-DASH filed it low, CWE-22 x7.
+_OWNED_NOTE_RE = re.compile(r'\d{4}-\d{2}-\d{2} \d{4}(?:-\d+)?')
+
+
+def _owned_note_path(stem_or_name: str) -> Path | None:
+    """MEETINGS_DIR/<name>.md if `name` is one this pipeline could have
+    written, else None (and a warning)."""
+    stem = (stem_or_name or '')
+    if stem.endswith('.md'):
+        stem = stem[:-3]
+    if not _OWNED_NOTE_RE.fullmatch(stem):
+        if stem:
+            log.warning('  seen-state names %r, not a pipeline-owned meeting '
+                        'note; leaving it alone', stem_or_name)
+        return None
+    path = MEETINGS_DIR / f'{stem}.md'
+    if path.is_symlink() or path.resolve().parent != MEETINGS_DIR.resolve():
+        log.warning('  refusing %s: not a regular note inside Meetings/', path)
+        return None
+    return path
+
+
 def apply_reschedule(prev: dict, start: dt.datetime, now_iso: str,
                      dry_run: bool, changes: list[str]) -> Path | None:
     """Move an owned meeting note to its new time slot, preserving the body and
     leaving a redirect stub at the old name. Returns the new path, or None if
     the old note is missing (caller should recreate it fresh)."""
     old_fname = prev.get('filename') or ''
-    old_slot = prev.get('slot') or (old_fname[:-3] if old_fname else '')
-    old_path = MEETINGS_DIR / old_fname if old_fname else None
+    old_path = _owned_note_path(old_fname)
+    old_slot = old_path.name[:-3] if old_path else ''
     if not old_path or not old_path.exists():
         return None
     try:
@@ -1737,16 +1829,16 @@ def delete_cancelled(prev: dict, reason: str, dry_run: bool,
     """Delete an owned meeting note that has been cancelled/declined, plus any
     redirect stub left over from a prior reschedule."""
     fname = prev.get('filename') or ''
-    if fname:
-        p = MEETINGS_DIR / fname
-        log.info('  CANCELLED (%s) -> DELETE %s', reason, fname)
-        changes.append(f'CANCELLED ({reason}) -> deleted `{fname}`')
+    p = _owned_note_path(fname)
+    if p:
+        log.info('  CANCELLED (%s) -> DELETE %s', reason, p.name)
+        changes.append(f'CANCELLED ({reason}) -> deleted `{p.name}`')
         if not dry_run and p.exists():
             p.unlink()
     orig = prev.get('rescheduled_from')
     if orig:
-        stub = MEETINGS_DIR / f'{orig}.md'
-        if stub.exists():
+        stub = _owned_note_path(orig)
+        if stub and stub.exists():
             try:
                 if 'type: redirect' in stub.read_text(encoding='utf-8'):
                     log.info('  CANCELLED -> remove redirect stub %s.md', orig)
