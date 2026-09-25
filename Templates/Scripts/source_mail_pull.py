@@ -551,10 +551,31 @@ def process_mailbox(*, user: str, password: str, key: str,
             if status != "OK" or not raw or not raw[0]:
                 log.error("fetch failed for message %s", num)
                 continue
-            msg = email.message_from_bytes(raw[0][1])
-            subject = (msg.get("Subject") or "")[:80]
+            # Everything from here to verify() runs on bytes anyone who knows
+            # the intake address can send, BEFORE the sender or the HMAC is
+            # known to be good. A 2 KB "From:" header of nested groups makes
+            # parseaddr raise RecursionError; a deeply nested multipart does
+            # the same inside the parser. Uncaught, that crashed the run
+            # without marking the message Seen, so every later run crashed on
+            # it too and the signed drops queued behind it never landed. Any
+            # failure to parse an unauthenticated message is a rejection.
+            try:
+                msg = email.message_from_bytes(raw[0][1])
+                subject = str(msg.get("Subject") or "")[:80]
+                ok, who = sender_allowed(msg, allowed)
+                fields = parse_body(plain_text_body(msg)) if ok else {}
+            except RunDeadlineExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001 -- see above
+                log.warning("REJECT message %s: unparseable (%s)",
+                            num.decode(errors="replace")
+                            if isinstance(num, bytes) else num,
+                            type(exc).__name__)
+                rejected += 1
+                if not dry_run:
+                    conn.store(num, "+FLAGS", "\\Seen")
+                continue
 
-            ok, who = sender_allowed(msg, allowed)
             if not ok:
                 log.warning("REJECT [%s]: %s", subject, who)
                 rejected += 1
@@ -562,7 +583,6 @@ def process_mailbox(*, user: str, password: str, key: str,
                     conn.store(num, "+FLAGS", "\\Seen")
                 continue
 
-            fields = parse_body(plain_text_body(msg))
             ok, reason = verify(fields, key=key)
             if not ok:
                 # Deliberately terse: do not echo payload content from an

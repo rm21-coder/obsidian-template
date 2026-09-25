@@ -616,3 +616,25 @@ class TestMessageSizeGate:
     ])
     def test_size_parser(self, data, expected) -> None:
         assert smp._rfc822_size(data) == expected
+
+
+class TestHostileMessageCannotWedgeIntake:
+    """Adversarial review 2026-09-25: parsing ran before the sender check and
+    a parse crash was uncaught, so one 2 KB email from anyone crashed every
+    run and blocked every signed drop behind it."""
+
+    @pytest.mark.parametrize("raw", [
+        b"From: " + b"a:" * 1000 + b"\r\nSubject: x\r\n\r\nbody\r\n",
+        b"Content-Type: multipart/mixed; boundary=b0\r\n\r\n" + b"".join(
+            b"--b%d\r\nContent-Type: multipart/mixed; boundary=b%d\r\n\r\n" % (i, i + 1)
+            for i in range(3000)),
+    ], ids=["nested-address-groups", "deep-multipart"])
+    def test_unparseable_message_is_rejected_marked_seen_and_intake_continues(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw: bytes) -> None:
+        fake = _FakeIMAP([raw, _raw_drop(_signed())])
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", fake)
+        a, r = smp.process_mailbox(
+            user="u", password="p", key=KEY,
+            allowed=["phone@example.com"], root=tmp_path, dry_run=False)
+        assert (a, r) == (1, 1), "the signed drop behind the hostile message must land"
+        assert (b"1", "\\Seen") in fake.stored, "hostile message must be marked Seen"

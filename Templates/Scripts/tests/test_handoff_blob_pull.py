@@ -16,21 +16,28 @@ import pytest
 import handoff_blob_pull as hbp
 
 
-class _Resp:
-    def __init__(self, body: bytes): self._b = body; self.status_code = 200
-    def raise_for_status(self): pass
-    def iter_content(self, n):
+class _Raw:
+    def __init__(self, body: bytes): self._b = body
+    def stream(self, n, decode_content=True):
+        assert decode_content is False, "bytes must be counted on the wire, undecoded"
         for i in range(0, len(self._b), n):
             yield self._b[i:i + n]
+
+
+class _Resp:
+    def __init__(self, body: bytes, headers: dict | None = None):
+        self.raw = _Raw(body); self.status_code = 200; self.headers = headers or {}
+    def raise_for_status(self): pass
     def __enter__(self): return self
     def __exit__(self, *a): return False
 
 
 class _Session:
-    def __init__(self, body: bytes): self.body = body; self.urls = []
+    def __init__(self, body: bytes, headers: dict | None = None):
+        self.body = body; self.headers = headers; self.urls = []
     def get(self, url, timeout=None, stream=False):
         assert stream, "responses must be streamed, not buffered whole"
-        self.urls.append(url); return _Resp(self.body)
+        self.urls.append(url); return _Resp(self.body, self.headers)
 
 
 class TestBlobNamesCannotChooseAPath:
@@ -81,3 +88,52 @@ class TestResponsesAreBounded:
         monkeypatch.setattr(hbp, "LOCAL_DIR", tmp_path)
         hbp.download_blob(_Session(b'{"ok": 1}'), "n", tmp_path / "n.json")
         assert (tmp_path / "n.json").read_bytes() == b'{"ok": 1}'
+
+
+class TestAdversarialReviewRound2:
+    """Second, adversarial pass over the M-DASH fixes (2026-09-25)."""
+
+    def test_declared_content_encoding_is_refused(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        # requests would inflate this transparently; counting after that let
+        # a 26 KB double-gzip blob reach ~1 GiB in memory.
+        monkeypatch.setattr(hbp, "LOCAL_DIR", tmp_path)
+        s = _Session(b"\x1f\x8b tiny", headers={"Content-Encoding": "gzip, gzip"})
+        with pytest.raises(hbp.BlobRefused, match="Content-Encoding"):
+            hbp.download_blob(s, "n.json", tmp_path / "n.json")
+        assert list(tmp_path.iterdir()) == []
+
+    def test_one_refused_set_does_not_stop_the_sets_after_it(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(hbp, "LOCAL_DIR", tmp_path)
+        for k, v in (("ACCOUNT_URL", "https://a"), ("CONTAINER", "c"), ("SAS", "s")):
+            monkeypatch.setattr(hbp, k, v)
+        monkeypatch.setattr(hbp, "list_blob_names", lambda s: [
+            "0000.json", "0000.ready", "good.json", "good.ready"])
+        monkeypatch.setattr(hbp, "delete_blob", lambda *a, **k: None)
+        landed = []
+        def fake_download(session, name, dest):
+            if name.startswith("0000"):
+                raise hbp.BlobRefused("response exceeds 16777216 bytes; refused")
+            landed.append(name)
+        monkeypatch.setattr(hbp, "download_blob", fake_download)
+        monkeypatch.setattr(hbp.requests, "Session", lambda: object())
+        assert hbp.run(dry_run=False) == 1, "a refusal must surface as a failed run"
+        assert landed == ["good.json", "good.ready"]
+
+    def test_unparseable_listing_fails_the_run_instead_of_crashing(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for k, v in (("ACCOUNT_URL", "https://a"), ("CONTAINER", "c"), ("SAS", "s")):
+            monkeypatch.setattr(hbp, k, v)
+        monkeypatch.setattr(hbp.requests, "Session", lambda: _Session(b"<not xml"))
+        assert hbp.run(dry_run=False) == 1
+
+    def test_planted_part_symlink_is_not_followed(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        inbox = tmp_path / "in"; inbox.mkdir()
+        victim = tmp_path / "victim.txt"; victim.write_text("original")
+        monkeypatch.setattr(hbp, "LOCAL_DIR", inbox)
+        (inbox / "n.json.part").symlink_to(victim)
+        hbp.download_blob(_Session(b"PWN"), "n.json", inbox / "n.json")
+        assert victim.read_text() == "original"
+        assert (inbox / "n.json").read_bytes() == b"PWN"

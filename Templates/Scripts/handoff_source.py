@@ -101,6 +101,9 @@ def verify_sha256(data: bytes, expected_hex: str | None) -> None:
             f"actual={actual[:12]}…")
 
 
+MIN_HMAC_KEY_BYTES = 16
+
+
 def verify_signature(data: bytes, signature_hex: str | None,
                      key: bytes | None, *, required: bool) -> None:
     """Authenticity: bytes were signed by a producer that holds the shared key.
@@ -122,10 +125,19 @@ def verify_signature(data: bytes, signature_hex: str | None,
     # anyone can compute, and every forged handoff verified. Fail closed
     # rather than downgrade to "unsigned": whoever configured a key file
     # meant to enforce authenticity. Microsoft M-DASH 2026-09-23 (CWE-347).
-    if not key.strip():
+    #
+    # "Empty" has to be judged the way HMAC sees the key, not the way strip()
+    # does: HMAC zero-pads a short key, so a key of NUL bytes -- a file from
+    # /dev/zero, a preallocated or truncated file -- produces exactly the MAC
+    # of the empty key and survived the first version of this check. Trailing
+    # NULs therefore do not count, and what is left must be long enough that
+    # nobody can guess it.
+    effective = key.strip().rstrip(b"\x00")
+    if len(effective) < MIN_HMAC_KEY_BYTES:
         raise HandoffError(
-            "HMAC key is empty — refusing to verify with a key anyone can "
-            "compute (check HANDOFF_HMAC_KEY / HANDOFF_HMAC_KEY_FILE)")
+            f"HMAC key is shorter than {MIN_HMAC_KEY_BYTES} significant bytes — "
+            "refusing to verify with a key anyone can compute or guess "
+            "(check HANDOFF_HMAC_KEY / HANDOFF_HMAC_KEY_FILE)")
     if not signature_hex:
         raise HandoffError("signature required but none supplied with handoff")
     expected = hmac.new(key, data, hashlib.sha256).hexdigest()
@@ -142,7 +154,13 @@ def load_hmac_key() -> bytes | None:
         pth = Path(p).expanduser()
         if pth.is_file():
             return pth.read_bytes().strip()
-        log.warning("HANDOFF_HMAC_KEY_FILE set but not readable: %s", pth)
+        # Fail closed. This used to warn and fall through to "no key", and
+        # with HANDOFF_REQUIRE_SIGNATURE off (the default) that meant unsigned
+        # handoffs were accepted -- a moved, deleted or dangling key file
+        # silently switched authenticity off. Configuring a key file is a
+        # statement that handoffs must be signed.
+        raise HandoffError(
+            f"HANDOFF_HMAC_KEY_FILE is set but is not a readable file: {pth}")
     v = os.environ.get("HANDOFF_HMAC_KEY")
     return v.encode("utf-8") if v else None
 
