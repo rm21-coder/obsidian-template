@@ -418,14 +418,26 @@ def test_excalidraw_drawing_links_are_embeds(vault: Path):
     "```dataviewjs\ndv.list()\n```", "```tasks\nnot done\n```",
     "```base\nfilters: x\n```", "Total: `= this.file.name`", "`$= dv.current()`",
 ])
-def test_query_blocks_cannot_be_overridden(vault: Path, body: str):
+def test_query_blocks_block_with_override_allowed(vault: Path, body: str):
+    """Dynamic content: the operator can look at what it renders, the gate
+    cannot. Blocks; overridable with a logged reason."""
     host = note(vault, "Host", body=body, tier="public")
-    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+    res = D.evaluate([host], "public")[0]
+    assert res["blocked"] and not res["restricted"], res
+    assert any(r.startswith("dynamic content:") for r in res["reasons"]), res["reasons"]
 
 
-def test_base_file_cannot_be_overridden(vault: Path):
+def test_base_file_blocks_with_override_allowed(vault: Path):
     (vault / "Knowledge" / "All.base").write_text("filters: x\n")
     host = note(vault, "Host", body="![[All.base]]", tier="public")
+    res = D.evaluate([host], "public")[0]
+    assert res["blocked"] and not res["restricted"], res
+    assert any("All.base" in r for r in res["reasons"]), res["reasons"]
+
+
+def test_dynamic_content_does_not_make_a_restricted_embed_overridable(vault: Path):
+    _restricted(vault)
+    host = note(vault, "Host", body="![[Secret]]\n```dataview\nLIST\n```", tier="public")
     _assert_restricted_blocks(D.evaluate([host], "public")[0])
 
 

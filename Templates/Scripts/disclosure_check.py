@@ -95,10 +95,13 @@ MAX_EMBED_DEPTH = 6
 #     closure -- the gate need not guess which one Obsidian would pick;
 #   * a note reference that resolves to nothing BLOCKS (override allowed: the
 #     operator can see the target does not exist);
-#   * content the gate cannot evaluate at all -- query blocks, bases, an
-#     unreadable dependency, a closure past MAX_EMBED_DEPTH, a declared tier it
-#     does not recognise -- BLOCKS and cannot be overridden, because a
-#     restricted note may be behind it.
+#   * dynamic content -- query blocks and bases, which render other notes'
+#     content or properties by query -- BLOCKS, overridable with a logged
+#     reason: the operator can look at what it renders, the gate cannot;
+#   * content the gate tried to evaluate and could not -- an unreadable
+#     dependency, an unparseable canvas, a closure past MAX_EMBED_DEPTH, a
+#     declared tier it does not recognise -- BLOCKS and cannot be overridden,
+#     because a restricted note may be behind it.
 #
 # Binary media (images, audio, PDF) stay advisory: they carry no tier, and
 # blocking them would block every note with a picture.
@@ -231,8 +234,8 @@ def _is_drawing(path: Path, text: str) -> bool:
 
 
 def references(path: Path, text: str) -> tuple[list[str], list[str]]:
-    """(targets whose content renders into this note, reasons the note's
-    rendered content cannot be evaluated at all)."""
+    """(targets whose content renders into this note, dynamic constructs --
+    queries -- whose rendered content the gate cannot evaluate)."""
     targets = [_wiki_target(m) for m in _WIKI_EMBED_RE.findall(text)]
     for raw in _MD_EMBED_RE.findall(text):
         raw = raw[1:-1] if raw.startswith("<") else raw
@@ -272,16 +275,19 @@ def _canvas_references(path: Path) -> tuple[list[tuple[str, Path]], list[str]]:
 
 
 def embed_closure(path: Path, index: VaultIndex
-                  ) -> tuple[list[Path], list[str], list[str], list[str]]:
+                  ) -> tuple[list[Path], list[str], list[str], list[str], list[str]]:
     """Everything whose content renders into `path`, recursively.
 
     Returns (notes reached, unresolved references, media attachments,
-    incomplete: dependencies that exist or may exist but could not be judged).
-    Recursive because an embed of an embed still lands in what is shown.
+    dynamic: query blocks and bases -- overridable,
+    incomplete: dependencies that exist or may exist but could not be judged
+    -- not overridable). Recursive because an embed of an embed still lands
+    in what is shown.
     """
     seen: set[Path] = set()
     unresolved: list[str] = []
     media: list[str] = []
+    dynamic: list[str] = []
     incomplete: list[str] = []
     frontier: list[tuple[Path, int]] = [(path, 0)]
 
@@ -306,8 +312,8 @@ def embed_closure(path: Path, index: VaultIndex
         current, depth = frontier.pop()
         suffix = current.name.lower()
         if suffix.endswith(".base"):
-            incomplete.append(f"{current.name} (a base renders other notes' "
-                              "properties by query; cannot be evaluated)")
+            dynamic.append(f"{current.name} (a base renders other notes' "
+                           "properties by query; check what it shows)")
             continue
         if suffix.endswith(".canvas"):
             try:
@@ -319,7 +325,7 @@ def embed_closure(path: Path, index: VaultIndex
                 reach(f, index.root / "_", depth)       # canvas paths are vault-relative
             for t in texts:
                 refs, opaque = references(current, t)
-                incomplete += [f"{current.name}: {o}" for o in opaque]
+                dynamic += [f"{current.name}: {o}" for o in opaque]
                 for r in refs:
                     reach(r, current, depth)
             continue
@@ -334,11 +340,11 @@ def embed_closure(path: Path, index: VaultIndex
             incomplete.append(f"{current.name} (unreadable: {type(exc).__name__})")
             continue
         refs, opaque = references(current, text)
-        incomplete += [f"{current.name}: {o}" if current != path else o for o in opaque]
+        dynamic += [f"{current.name}: {o}" if current != path else o for o in opaque]
         for r in refs:
             reach(r, current, depth)
     notes = sorted(p for p in seen if p.name.lower().endswith(".md"))
-    return notes, sorted(set(unresolved)), media, incomplete
+    return notes, sorted(set(unresolved)), media, dynamic, incomplete
 
 
 def _rel(p: Path) -> str:
@@ -358,7 +364,7 @@ def evaluate(paths: list[Path], ceiling: str,
     for path in paths:
         declared, unknown, err = _tier_detail(path)
         tier = declared or (None if (unknown or err) else unclassified_as)
-        embedded, unresolved, media, incomplete = embed_closure(path, index)
+        embedded, unresolved, media, dynamic, incomplete = embed_closure(path, index)
         if err:
             incomplete.insert(0, f"note itself is unreadable ({err})")
         if unknown and not declared:
@@ -394,6 +400,8 @@ def evaluate(paths: list[Path], ceiling: str,
         for u in unresolved:
             reasons.append(f"embed `{u}` does not resolve to any note in the "
                            "vault — the gate cannot confirm what it shows")
+        for d in dict.fromkeys(dynamic):
+            reasons.append(f"dynamic content: {d}")
         for gap in incomplete:
             reasons.append(f"could not evaluate: {gap}")
 
@@ -416,6 +424,7 @@ def evaluate(paths: list[Path], ceiling: str,
             # it could not read -- a restricted note may be behind the gap.
             "restricted": (tier == NEVER_EXPORTABLE or bool(incomplete)
                            or dep_restricted),
+            "dynamic": list(dict.fromkeys(dynamic)),
             "incomplete": incomplete,
         })
     return results
