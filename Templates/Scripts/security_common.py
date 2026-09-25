@@ -125,7 +125,7 @@ def kickstart_agent(label: str, *, windows_task: str | None = None) -> bool:
                     or "operation already in progress" in blurb)
         if sys.platform == "win32" and windows_task:
             p = subprocess.run(
-                ["schtasks", "/Run", "/TN", windows_task],
+                [SCHTASKS_EXE, "/Run", "/TN", windows_task],
                 check=False, capture_output=True, text=True, timeout=15)
             return p.returncode == 0
     except (OSError, subprocess.SubprocessError):
@@ -207,7 +207,7 @@ def restrict_file(path: Path) -> bool:
     principal = f"{domain}\\{user}" if domain else user
     try:
         p = subprocess.run(
-            ["icacls", str(path), "/inheritance:r",
+            [ICACLS_EXE, str(path), "/inheritance:r",
              "/grant:r", f"{principal}:(F)",
              "/grant:r", f"{_SYSTEM_SID}:(F)"],
             check=False, capture_output=True, text=True, timeout=15)
@@ -228,9 +228,17 @@ def restrict_file(path: Path) -> bool:
 # detection itself: a stand-in that exits 0 silences every alert the controls
 # raise. Found by Microsoft M-DASH 2026-09-23 (CWE-426); notify() was not among
 # its findings but has the same shape and higher stakes.
-POWERSHELL_EXE = str(Path(os.environ.get("SystemRoot") or r"C:\Windows")
-                     / "System32" / "WindowsPowerShell" / "v1.0"
-                     / "powershell.exe")
+#
+# %SystemRoot% is read from the environment. Whoever controls this process's
+# environment can already choose what it runs (PATH, PYTHONPATH), so that is
+# not a new boundary; the point is that the current directory and a writable
+# PATH entry no longer are one. schtasks and icacls were missed by the first
+# pass and found by the adversarial review, 2026-09-25: a stand-in `icacls`
+# exiting 0 left the plugin allowlist with its inherited, readable ACL.
+_SYSTEM32 = Path(os.environ.get("SystemRoot") or r"C:\Windows") / "System32"
+POWERSHELL_EXE = str(_SYSTEM32 / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+SCHTASKS_EXE = str(_SYSTEM32 / "schtasks.exe")
+ICACLS_EXE = str(_SYSTEM32 / "icacls.exe")
 OSASCRIPT_BIN = "/usr/bin/osascript"
 
 

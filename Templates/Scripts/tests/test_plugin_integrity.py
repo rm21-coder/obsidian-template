@@ -242,6 +242,27 @@ class TestUnsignedAllowlistIsTamper:
         assert pic.load_allowlist() == {"x": {"version": "1"}}
 
 
+class TestEveryMalformedAllowlistIsTamper:
+    """Adversarial review 2026-09-25: these shapes exited quietly or crashed
+    with no alert -- the control stopped reporting instead of reporting."""
+
+    @pytest.mark.parametrize("make", ["not-json", "bad-utf8", "directory", "non-ascii-hmac"])
+    def test_raises_a_tamper_alert(self, fake_keychain, tmp_state_dir, make) -> None:
+        p = pic.ALLOWLIST_PATH
+        if make == "not-json":
+            p.write_text("{not json")
+        elif make == "bad-utf8":
+            p.write_bytes(b"\xff\xfe{}")
+        elif make == "directory":
+            p.mkdir()
+        else:
+            p.write_text(json.dumps({"state": {}, "hmac": "\u00e9" * 64}))
+        with pytest.raises(SystemExit) as exc:
+            pic.load_allowlist()
+        assert exc.value.code == 1
+        assert "ALLOWLIST_TAMPER" in (tmp_state_dir / "alerts.log").read_text()
+
+
 # ---------------------------------------------------------------------------
 # Plugin scanner
 # ---------------------------------------------------------------------------
