@@ -48,7 +48,11 @@ semgrep  Templates/Scripts/morning_dashboard.py     dangerous-subprocess-use-tai
 # installers/lib/pin_plugins.py: resolve each repo to a commit SHA, record it,
 # review the diff, commit. It is deliberately NOT done unattended, and no SHA
 # is invented here.
-bandit   Templates/Scripts/whisper_onnx.py          B615   # OPEN FINDING: HF snapshot_download without revision=. Fix = pin per repo, maintainer-reviewed. re-check 2026-09-25
+# B615 (whisper_onnx.py, HF download without revision=): CLOSED 2026-09-25.
+# Every backend now downloads through pinned_model.py at a pinned commit and
+# verifies each file against whisper_model_pins.py. One deliberate exception:
+bandit   Templates/Scripts/pinned_model.py          B615   # DELIBERATE: the --allow-unpinned-model operator override fetches revision="main" by design; it is never the default, is refused without the flag, and is logged as NOT pinned. re-check 2026-12-24
+bandit   Templates/Scripts/tests/test_pinned_model.py B324 # git blob ids ARE SHA-1 (git's object format); the pins use them only for small non-LFS files, alongside a size check; second-preimage resistance, which holds, is the property needed. re-check 2026-12-24
 
 # --- secret value reaching an output sink (local rule, new 2026-08-25) -------
 # Added after an external review asked whether secrets reach logs. Registry

@@ -455,7 +455,7 @@ def resolve_repo(model: str) -> str:
 
 
 def ensure_model(model: str, *, variant: str = "",
-                 cache_dir: Path | None = None) -> Path:
+                 cache_dir: Path | None = None, allow_unpinned: bool = False) -> Path:
     """Download (once) and return the local path to an ONNX Whisper export.
 
     Only the two files actually loaded are fetched. The onnx-community repos
@@ -463,23 +463,26 @@ def ensure_model(model: str, *, variant: str = "",
     int8 and more along for the ride -- for whisper-small that is 2.8 GB
     instead of the ~1 GB in use.
     """
-    try:
-        from huggingface_hub import snapshot_download
-    except ImportError as exc:
-        raise WhisperOnnxError(
-            "huggingface-hub is required to fetch the ONNX model") from exc
+    import pinned_model
 
     suffix = f"_{variant}" if variant else ""
     repo = resolve_repo(model)
-    path = snapshot_download(
-        repo,
-        allow_patterns=[
-            f"onnx/encoder_model{suffix}.onnx",
-            f"onnx/encoder_model{suffix}.onnx_data",      # externalised weights
-            f"onnx/decoder_model_merged{suffix}.onnx",
-            f"onnx/decoder_model_merged{suffix}.onnx_data",
-            "*.json",
-        ],
-        cache_dir=str(cache_dir) if cache_dir else None,
-    )
-    return Path(path)
+    # Downloaded at the pinned commit only and checked file by file against
+    # whisper_model_pins.py (bandit B615, open since CISO packet v2.3).
+    try:
+        return pinned_model.fetch(
+            repo,
+            allow_patterns=[
+                f"onnx/encoder_model{suffix}.onnx",
+                f"onnx/encoder_model{suffix}.onnx_data",      # externalised weights
+                f"onnx/decoder_model_merged{suffix}.onnx",
+                f"onnx/decoder_model_merged{suffix}.onnx_data",
+                "*.json",
+            ],
+            cache_dir=str(cache_dir) if cache_dir else None,
+            allow_unpinned=allow_unpinned,
+        )
+    except (pinned_model.UnpinnedModel, pinned_model.ModelIntegrityError) as exc:
+        raise WhisperOnnxError(str(exc)) from exc
+    except RuntimeError as exc:           # huggingface-hub missing
+        raise WhisperOnnxError(str(exc)) from exc
