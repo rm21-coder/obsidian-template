@@ -402,7 +402,20 @@ def _mlx_available() -> bool:
         return False
 
 
-def _transcribe_faster_whisper(audio_path: Path, *, model: str, verbose: bool) -> dict:
+def _pinned(model: str, patterns: list[str], *, allow_unpinned: bool, verbose: bool) -> str:
+    """Local path for `model`: downloaded at its pinned commit and verified
+    (pinned_model.py), or refused. Closes bandit B615 on every backend."""
+    import pinned_model
+    try:
+        return str(pinned_model.fetch(model, allow_patterns=patterns,
+                                      allow_unpinned=allow_unpinned,
+                                      log=lambda m: log(m, verbose=True)))
+    except (pinned_model.UnpinnedModel, pinned_model.ModelIntegrityError) as exc:
+        die(str(exc))
+
+
+def _transcribe_faster_whisper(audio_path: Path, *, model: str, verbose: bool,
+                               allow_unpinned: bool = False) -> dict:
     """Transcribe with faster-whisper (CPU). Returns an mlx-compatible dict."""
     try:
         from faster_whisper import WhisperModel
@@ -419,8 +432,11 @@ def _transcribe_faster_whisper(audio_path: Path, *, model: str, verbose: bool) -
         log(f"'{model}' isn't a faster-whisper model; using '{size}' (override with --model)",
             verbose=True)
 
-    log(f"loading faster-whisper model: {size} (CPU, int8)", verbose=verbose)
-    wm = WhisperModel(size, device="cpu", compute_type="int8")
+    repo = size if "/" in size else f"Systran/faster-whisper-{size}"
+    local = _pinned(repo, ["config.json", "model.bin", "tokenizer.json", "vocabulary.*"],
+                    allow_unpinned=allow_unpinned, verbose=verbose)
+    log(f"loading faster-whisper model: {repo} (CPU, int8)", verbose=verbose)
+    wm = WhisperModel(local, device="cpu", compute_type="int8")
     segments, info = wm.transcribe(str(audio_path), beam_size=5)
     segs: list[dict] = []
     parts: list[str] = []
@@ -446,7 +462,8 @@ def _faster_whisper_available() -> bool:
         return False
 
 
-def _transcribe_onnx(audio_path: Path, *, model: str, verbose: bool) -> dict:
+def _transcribe_onnx(audio_path: Path, *, model: str, verbose: bool,
+                     allow_unpinned: bool = False) -> dict:
     """Transcribe via ONNX Runtime (whisper_onnx.py). Torch-free, and the only
     local backend available on Windows ARM64."""
     try:
@@ -458,7 +475,7 @@ def _transcribe_onnx(audio_path: Path, *, model: str, verbose: bool) -> dict:
     try:
         audio = whisper_onnx.decode_audio(audio_path)
         log(f"resolving ONNX model for '{model}'", verbose=verbose)
-        model_dir = whisper_onnx.ensure_model(model)
+        model_dir = whisper_onnx.ensure_model(model, allow_unpinned=allow_unpinned)
         log(f"loading ONNX model from {model_dir}", verbose=verbose)
         engine = whisper_onnx.WhisperOnnx(model_dir)
 
@@ -471,7 +488,8 @@ def _transcribe_onnx(audio_path: Path, *, model: str, verbose: bool) -> dict:
     return {}  # unreachable
 
 
-def transcribe(audio_path: Path, *, model: str | None, verbose: bool) -> dict:
+def transcribe(audio_path: Path, *, model: str | None, verbose: bool,
+               allow_unpinned: bool = False) -> dict:
     """Transcribe locally, picking the best backend the platform can run:
     MLX on Apple Silicon, else faster-whisper, else ONNX Runtime.
 
@@ -488,15 +506,21 @@ def transcribe(audio_path: Path, *, model: str | None, verbose: bool) -> dict:
     if _mlx_available():
         import mlx_whisper  # type: ignore
         resolved = model or DEFAULT_MODEL
+        # mlx-whisper would download `resolved` by name at whatever main
+        # holds; hand it a pinned, verified local directory instead.
+        local = _pinned(resolved, ["config.json", "weights.safetensors"],
+                        allow_unpinned=allow_unpinned, verbose=verbose)
         log(f"loading MLX model: {resolved}", verbose=verbose)
         result = mlx_whisper.transcribe(  # type: ignore[name-defined]
-            str(audio_path), path_or_hf_repo=resolved, verbose=verbose)
+            str(audio_path), path_or_hf_repo=local, verbose=verbose)
     elif _faster_whisper_available():
         resolved = model or "base"
-        result = _transcribe_faster_whisper(audio_path, model=resolved, verbose=verbose)
+        result = _transcribe_faster_whisper(audio_path, model=resolved, verbose=verbose,
+                                            allow_unpinned=allow_unpinned)
     else:
         resolved = model or DEFAULT_ONNX_MODEL
-        result = _transcribe_onnx(audio_path, model=resolved, verbose=verbose)
+        result = _transcribe_onnx(audio_path, model=resolved, verbose=verbose,
+                                  allow_unpinned=allow_unpinned)
     result["_model"] = resolved
     result["_elapsed_seconds"] = time.time() - started
     log(f"transcription done in {result['_elapsed_seconds']:.1f}s", verbose=verbose)
@@ -648,6 +672,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("--no-keep-audio", action="store_true",
                    help="delete the downloaded audio after transcription")
     p.add_argument("--verbose", action="store_true", help="log progress to stderr")
+    p.add_argument("--allow-unpinned-model", action="store_true",
+                   help="run a model that is not in whisper_model_pins.py, "
+                        "unverified, at whatever its main branch holds (logged)")
     args = p.parse_args(argv)
 
     # Transcription backend is auto-selected in transcribe(): MLX Whisper on
@@ -731,7 +758,8 @@ def main(argv: list[str]) -> int:
             verbose=args.verbose)
 
     try:
-        result = transcribe(audio_path, model=args.model, verbose=args.verbose)
+        result = transcribe(audio_path, model=args.model, verbose=args.verbose,
+                            allow_unpinned=args.allow_unpinned_model)
     except Exception as e:
         die(f"transcription failed: {e}")
 
