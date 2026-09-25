@@ -446,13 +446,21 @@ def test_dynamic_content_does_not_make_a_restricted_embed_overridable(vault: Pat
     "classification: 'restricted' # PHI",
     "classification: public\nclassification: restricted",
     "classification: restricted\nclassification: public",
-    "Classification: restricted",
 ])
 def test_restricted_tier_survives_comments_duplicates_and_case(vault: Path, line: str):
     p = vault / "Knowledge" / "R.md"
     p.write_text(f"---\n{line}\n---\nbody\n")
     assert D.note_tier(p) == "restricted"
     _assert_restricted_blocks(D.evaluate([p], "confidential")[0])
+
+
+def test_other_spellings_of_the_key_are_unreadable_not_guessed(vault: Path):
+    """Round 3: the reader accepts one form. `Classification:` is another key
+    to YAML; it is neither ignored nor read as the tier -- it blocks."""
+    p = vault / "Knowledge" / "R.md"
+    p.write_text("---\nClassification: restricted\n---\nbody\n")
+    assert D.note_tier(p) is None
+    _assert_restricted_blocks(D.evaluate([p], "confidential", unclassified_as="public")[0])
 
 
 def test_bom_prefixed_restricted_note_is_restricted(vault: Path):
@@ -505,7 +513,16 @@ def test_note_outside_the_vault_is_refused_before_anything_happens(
     '"classific\\u0061tion": restricted',                                  # escaped key
     'classification: public\n  restricted',                                # continuation
     'classification: public\nclassification: !!str restricted',            # known + unknown
-    'meta:\n  classification: public',                                     # nested
+    # Round 3, each read as `restricted` by Obsidian's own frontmatter worker:
+    'Classification: public\nclassification:\n\n  restricted',
+    'classification:\n  - restricted\n--- end of properties\nclassification: public',
+    '  !!str classification: restricted\n----\nclassification: public',
+    'classification:\n  - restricted',                                    # Obsidian's list form
+    'classification: "public\n  restricted"',
+    "classification: 'public''restricted'",
+    'classification: public\n\n  restricted',
+    'claſſification: public',
+    'classification: public\x0c',
 ])
 def test_frontmatter_the_reader_cannot_read_blocks_without_override(
         vault: Path, frontmatter: str):
@@ -577,6 +594,32 @@ def test_excalidraw_key_deep_in_frontmatter_is_detected(vault: Path):
                  "## Embedded Files\nabc: [[Secret]]\n")
     host = note(vault, "Host", body="![[Drawing]]", tier="public")
     _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_nested_classification_key_is_not_the_tier(vault: Path):
+    """No parser reads meta.classification as the note's tier: unclassified."""
+    p = vault / "Knowledge" / "N.md"
+    p.write_text("---\nmeta:\n  classification: public\n---\nbody\n")
+    res = D.evaluate([p], "public")[0]
+    assert res["blocked"] and any("unclassified" in r for r in res["reasons"])
+
+
+@pytest.mark.parametrize("body", ["![[Pub|the summary ![[Secret]]",
+                                  "![" + "x" * 2100 + "](Secret.md)"])
+def test_round3_embed_forms_are_judged(vault: Path, body: str):
+    _restricted(vault); note(vault, "Pub", tier="public")
+    host = note(vault, "Host", body=body, tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+@pytest.mark.parametrize("body", ["![" * 20000, "![a](" + "(" * 50000,
+                                  ("![a](" + "x" * 10) * 5000, "![[" * 20000])
+def test_pathological_text_is_linear(vault: Path, body: str):
+    import time
+    host = note(vault, "Host", body=body, tier="public")
+    t0 = time.time()
+    D.evaluate([host], "public")
+    assert time.time() - t0 < 5
 
 
 def test_symlink_alias_of_a_folder_is_indexed_under_both_paths(vault: Path):

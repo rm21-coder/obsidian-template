@@ -110,8 +110,14 @@ MAX_EMBED_DEPTH = 6
 
 # Obsidian's own wiki-embed pattern is /^(!?)\[\[(.+?)]]/: a "]" inside is
 # allowed, so these are too ("![[Secret|a]b]]" slipped past [^\]]).
-_WIKI_EMBED_RE = re.compile(r"!\[\[(.+?)\]\]")
-_WIKI_LINK_RE = re.compile(r"(?<!!)\[\[(.+?)\]\]")
+#
+# Round 3: Obsidian's matcher refuses a target that contains "[[" and
+# restarts from there, so "![[Pub|the summary ![[Secret]]" embeds Secret. A
+# single left-to-right match swallowed the inner embed. Matches are now taken
+# at EVERY "![[" (a lookahead, so they overlap) and a target may not contain
+# "[[" -- every embed Obsidian could see is seen, and a few it would not.
+_WIKI_EMBED_RE = re.compile(r"(?=!\[\[((?:(?!\[\[)[^\n])+?)\]\])")
+_WIKI_LINK_RE = re.compile(r"(?=(?<!!)\[\[((?:(?!\[\[)[^\n])+?)\]\])")
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 _MEDIA_EXT = re.compile(
     r"\.(png|jpe?g|gif|svg|webp|bmp|avif|heic|tiff?|pdf|mp4|mov|webm|mkv|"
@@ -273,57 +279,74 @@ def _index_vault() -> VaultIndex:
 _MD_ESCAPABLE = re.compile(r"\\([!-/:-@\[-`{-~])")
 
 
+_MAX_DEST = 4096
+
+
+def _bracket_matches(text: str) -> dict[int, int]:
+    """Position of every "[" -> its matching "]", in one linear pass
+    (backslash escapes honoured). Scanning forward from each "![" instead was
+    quadratic: 20,000 unclosed "![" took 22 s."""
+    stack: list[int] = []
+    match: dict[int, int] = {}
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == "[":
+            stack.append(i)
+        elif c == "]" and stack:
+            match[stack.pop()] = i
+        i += 1
+    return match
+
+
 def _md_destinations(text: str) -> list[str]:
     """Destinations of markdown image embeds `![alt](dest "title")`.
 
     A small CommonMark-shaped scanner rather than one regex, because the
-    forms the regex missed all render: alt text across lines, balanced
-    parentheses in the destination ("Secret(1).md"), a parenthesised title,
-    backslash escapes and HTML entities. Each destination is returned both
-    decoded and raw; resolving both costs nothing and misses nothing.
+    forms the regex missed all render: alt text of any length and across
+    lines, balanced parentheses in the destination ("Secret(1).md"), a
+    parenthesised title, backslash escapes and HTML entities. Each
+    destination is returned both decoded and raw; resolving both costs
+    nothing and misses nothing.
     """
     out: list[str] = []
-    i = 0
-    while True:
-        i = text.find("![", i)
-        if i == -1:
-            return out
-        depth, j = 1, i + 2
-        while j < len(text) and depth and j - i < 2000:      # alt text
-            c = text[j]
-            if c == "\\":
-                j += 2
-                continue
-            depth += (c == "[") - (c == "]")
+    match = _bracket_matches(text)
+    i = text.find("![")
+    while i != -1:
+        close = match.get(i + 1)
+        j = (close + 1) if close is not None else -1
+        if j != -1 and text[j:j + 1] == "(":
             j += 1
-        if depth or text[j:j + 1] != "(":
-            i += 2
-            continue
-        j += 1
-        while j < len(text) and text[j] in " \t\n":
-            j += 1
-        if text[j:j + 1] == "<":
-            end = text.find(">", j)
-            if end == -1:
-                i = j
-                continue
-            raw = text[j + 1:end]
-        else:
-            k, par = j, 0
-            while k < len(text) and k - j < 2000:
-                c = text[k]
-                if c == "\\":
-                    k += 2
-                    continue
-                if c in " \t\n" or (c == ")" and par == 0):
-                    break
-                par += (c == "(") - (c == ")")
-                k += 1
-            raw = text[j:k]
-        if raw:
-            decoded = urllib.parse.unquote(html.unescape(_MD_ESCAPABLE.sub(r"\1", raw)))
-            out += [decoded, raw]
-        i = j
+            while j < len(text) and text[j] in " \t\n":
+                j += 1
+            raw = ""
+            # Destinations are capped: a real path is well under 1 KB even
+            # percent-encoded, and an unterminated one scanned to end-of-text
+            # from every image made the scanner quadratic.
+            lim = min(len(text), j + _MAX_DEST)
+            if text[j:j + 1] == "<":
+                end = text.find(">", j, lim)
+                raw = text[j + 1:end] if end != -1 else ""
+            else:
+                k, par = j, 0
+                while k < lim:
+                    c = text[k]
+                    if c == "\\":
+                        k += 2
+                        continue
+                    if c in " \t\n" or (c == ")" and par == 0):
+                        break
+                    par += (c == "(") - (c == ")")
+                    k += 1
+                raw = text[j:k]
+            if raw:
+                decoded = urllib.parse.unquote(html.unescape(_MD_ESCAPABLE.sub(r"\1", raw)))
+                out += [decoded, raw]
+        i = text.find("![", i + 2)
+    return out
 
 
 def _query_references(text: str) -> list[str]:

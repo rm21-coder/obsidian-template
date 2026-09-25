@@ -30,36 +30,38 @@ import unicodedata
 TIERS = ("public", "internal-use-only", "confidential", "restricted")
 TIER_RANK = {t: i for i, t in enumerate(TIERS)}
 
-# A leading BOM is tolerated: an editor that writes one should not turn a
-# classified note into an unclassified (and therefore overridable) one.
-_FM_RE = re.compile(r"\A﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.DOTALL)
-# Case-insensitive on purpose: YAML keys are case-sensitive, so `Classification`
-# is technically another key, but a gate should treat a near-miss as a claim
-# about the tier and fail toward the stricter reading, not ignore it.
-_KEY_RE = re.compile(r"(?mi)^classification[ \t]*:(.*)$")
+# Frontmatter is delimited exactly as Obsidian delimits it (read from its
+# metadata worker, round 3 of the adversarial review, 2026-09-25): the file
+# starts with a "---" line (a BOM is tolerated), and the block ends at the
+# first later line that STARTS with "---" -- "----" and "--- end" included.
+# A reader that ended only at a bare "---" kept reading into what Obsidian
+# shows as body text, where a decoy `classification: public` was waiting.
+_OPEN_RE = re.compile(r"\A\ufeff?---\n")
 
 
 def frontmatter(text: str) -> str | None:
     """The leading YAML block without its fences, or None."""
-    m = _FM_RE.match(text or "")
-    return m.group(1) if m else None
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not _OPEN_RE.match(text):
+        return None
+    body = text[_OPEN_RE.match(text).end():]
+    lines = body.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("---"):
+            return "\n".join(lines[:i])
+    return None
 
 
-def _value(raw: str) -> str:
-    v = raw.strip()
-    if v[:1] in ("'", '"'):
-        end = v.find(v[0], 1)
-        v = v[1:end] if end != -1 else v[1:]
-    else:
-        # A YAML comment starts at "#" preceded by whitespace.
-        v = re.split(r"[ \t]#", " " + v, maxsplit=1)[0]
-    return v.strip().lower()
-
-
-# A top-level line this reader fully understands: a plain key, a colon, then
-# a space or end of line. Plain YAML keys cannot contain escapes, quotes or
-# flow syntax, which is exactly what makes them readable without a parser.
-_PLAIN_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ .-]*[ \t]*:(?:[ \t]|$)")
+# The ONE form of declaration this reader accepts. Three rounds of review
+# showed that interpreting anything more -- comments beyond this, duplicate
+# spellings, nesting, multi-line and list values, other delimiters -- is a
+# YAML parser in regex form, and it lost to Obsidian's parser every round.
+_TIER_ALT = "|".join(re.escape(x) for x in TIERS)
+_STRICT_RE = re.compile(
+    rf"^classification:[ \t]+(?:({_TIER_ALT})|\"({_TIER_ALT})\"|'({_TIER_ALT})')"
+    r"[ \t]*(?:[ \t]#[^\n]*)?$", re.I)
+_PLAIN_KEY_RE = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_ .-]*?)[ \t]*:(?:[ \t]|$)")
+_SIBLING_KEY_RE = re.compile(r"classification_[a-z0-9_]+")   # the classifier's own keys
 UNREADABLE = "(frontmatter the gate cannot read reliably)"
 
 
@@ -68,53 +70,58 @@ def _fold(s: str) -> str:
 
 
 def declared(text: str) -> list[str]:
-    """Every value declared for `classification`, in order, plus UNREADABLE
-    wherever the frontmatter takes a shape this reader cannot interpret.
+    """Every tier declared, plus UNREADABLE for anything this reader will not
+    interpret. Rules, each from a bypass the review proved:
 
-    Round 2 of the adversarial review (2026-09-25) showed why a regex over
-    "column-0 key lines" is not enough on its own: frontmatter written as a
-    JSON/flow mapping -- `{"classification": "restricted", ...}` -- or with a
-    quoted key is valid YAML that Obsidian reads, and the regex saw either a
-    planted nested `classification: public` or nothing at all. Rather than
-    grow a YAML parser (stdlib only, and it would still disagree with
-    Obsidian's somewhere), anything at top level that is not a plain
-    `key: value` line or a block-list item is reported as UNREADABLE, which
-    every gate treats as an unrecognised tier: fail closed. Measured on the
-    maintainer's 2,836-note vault, no note uses such a line.
+      * `classification: <tier>` at column 0, optionally quoted, optionally
+        followed by a " # comment", is the only accepted declaration. Any
+        other line whose key is `classification` -- empty, list, folded,
+        flow, tagged, multi-line, different case, confusable spelling -- is
+        UNREADABLE. So is an accepted declaration followed by an indented
+        line, which YAML folds into the value.
+      * Any other key whose folded name contains "classif" is UNREADABLE,
+        except the classifier's own plain `classification_<word>` keys.
+      * A line at column 0 that is not a plain `key:` line, a list item or a
+        comment -- quoted, escaped, tagged, anchored, flow or complex keys --
+        is UNREADABLE, as is an indented line before any key (YAML then reads
+        the whole indented block as the top-level mapping).
+
+    Measured on the maintainer's 2,836-note vault before adoption: every note
+    that carries a tier uses the accepted form, and no note is UNREADABLE.
     """
     fm = frontmatter(text)
     if fm is None:
         return []
     out: list[str] = []
-    lines = fm.splitlines()
+    lines = fm.split("\n")
+    seen_key = False
     for idx, line in enumerate(lines):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        nxt = lines[idx + 1] if idx + 1 < len(lines) else ""
         if line[:1] in (" ", "\t"):
-            # Indented: a continuation, a nested mapping or a list item. A
-            # nested `classification` is not the note's tier, but it is a
-            # claim about it the gate cannot place -- fail closed.
-            if re.match(r"^[ \t]+[\"']?classification[\"']?[ \t]*:", _fold(line)):
+            if not seen_key:
                 out.append(UNREADABLE)
             continue
         if line.startswith("-"):
-            continue                    # block-list item of the key above
-        m = _KEY_RE.match(line)
-        if m:
-            v = _value(m.group(1))
-            quoted = m.group(1).strip()[:1] in ("'", '"')
-            if nxt[:1] in (" ", "\t") and not nxt.lstrip().startswith(("-", "#")):
-                # YAML folds an indented next line into this value
-                # ("public" + "restricted" -> "public restricted"); an
-                # empty value with an indented line is a nested/multi-line
-                # value. Either way, not something to read literally.
-                if not v or not quoted:
-                    v = "(multi-line value)"
-            out.append(v)
+            if not seen_key:
+                out.append(UNREADABLE)
             continue
-        if not _PLAIN_KEY_RE.match(line):
+        m = _PLAIN_KEY_RE.match(line)
+        if not m:
+            out.append(UNREADABLE)
+            continue
+        seen_key = True
+        key = m.group(1)
+        if key == "classification":
+            sm = _STRICT_RE.match(line)
+            nxt = next((ln for ln in lines[idx + 1:]
+                        if ln.strip() and not ln.strip().startswith("#")), "")
+            if not sm or nxt[:1] in (" ", "\t"):
+                out.append(UNREADABLE)
+            else:
+                out.append((sm.group(1) or sm.group(2) or sm.group(3)).lower())
+        elif "classif" in _fold(key) and not _SIBLING_KEY_RE.fullmatch(key):
             out.append(UNREADABLE)
     return out
 

@@ -158,15 +158,54 @@ def _validated(manifest: dict, vault_root: Path) -> list[tuple[Path, str]]:
     return out
 
 
+def _identity(p: Path) -> tuple[int, int] | None:
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    return st.st_dev, st.st_ino
+
+
+def _is_within(p: Path, ancestor: Path) -> bool:
+    """True if `p` is `ancestor` or below it, compared by FILESYSTEM IDENTITY.
+
+    Path strings are not enough on macOS: a case-insensitive volume, the
+    /System/Volumes/Data firmlink and NFD spellings all name the vault with
+    a different string, and a string comparison let a planted manifest
+    through each one (round 3 of the review)."""
+    target = _identity(ancestor)
+    if target is None:
+        return False
+    cur = p
+    while True:
+        if _identity(cur) == target:
+            return True
+        if cur.parent == cur:
+            return False
+        cur = cur.parent
+
+
 def _load_manifest(manifest_path: str | Path, root: Path) -> dict:
     mp = Path(manifest_path).expanduser()
     real = mp.resolve()
-    if real == root or real.is_relative_to(root):
+    rb = manifest_dir()
+    if _is_within(rb, root):
         raise UnsafeManifest(
-            f"{mp} is inside the vault. Manifests are written to {manifest_dir()} "
+            f"the rollback directory {rb} is inside the vault; set "
+            "OBSIDIAN_ROLLBACK_DIR to a private directory outside it")
+    if _is_within(real, root):
+        raise UnsafeManifest(
+            f"{mp} is inside the vault. Manifests are written to {rb} "
             "because anything inside a synced vault can be planted or edited from "
             "another device. If you are certain this one is yours, read its "
-            "entries, then move it out of the vault and run again.")
+            "entries, then move it into that directory and run again.")
+    if not _is_within(real.parent, rb):
+        # Only manifests where the tools write them are trusted. A manifest in
+        # Downloads or another synced folder is not one this machine made.
+        raise UnsafeManifest(
+            f"{mp} is not in the rollback directory {rb}. Only manifests the "
+            "tools wrote there are trusted; if this one is yours, read its "
+            "entries, then move it there and run again.")
     try:
         st = os.stat(real)
     except OSError as e:
@@ -254,5 +293,18 @@ def run_rollback_cli(manifest_path: str | Path, vault_root: Path) -> int:
 
 
 def new_manifest_path(tool: str, stamp: str) -> Path:
-    """A fresh manifest path for `tool`, outside the vault."""
-    return manifest_dir() / f"{tool}_manifest_{stamp}.json"
+    """A fresh manifest for `tool`, outside the vault, CREATED here: O_EXCL
+    and O_NOFOLLOW, mode 0600. The name is predictable (a timestamp), and a
+    plain write_text followed a symlink planted at it (round 3)."""
+    d = manifest_dir()
+    for n in range(100):
+        p = d / (f"{tool}_manifest_{stamp}.json" if n == 0
+                 else f"{tool}_manifest_{stamp}_{n}.json")
+        try:
+            fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        return p
+    raise OSError(f"could not create a manifest in {d}")
