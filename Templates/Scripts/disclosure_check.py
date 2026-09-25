@@ -47,6 +47,7 @@ Exit codes:  0 clear · 1 blocked · 2 usage/error
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
 import re
@@ -107,15 +108,23 @@ MAX_EMBED_DEPTH = 6
 # blocking them would block every note with a picture.
 # ---------------------------------------------------------------------------
 
-_WIKI_EMBED_RE = re.compile(r"!\[\[([^\]\n]+?)\]\]")
-_WIKI_LINK_RE = re.compile(r"(?<!!)\[\[([^\]\n]+?)\]\]")
-_MD_EMBED_RE = re.compile(r"!\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+[\"'][^\"'\n]*[\"'])?\s*\)")
+# Obsidian's own wiki-embed pattern is /^(!?)\[\[(.+?)]]/: a "]" inside is
+# allowed, so these are too ("![[Secret|a]b]]" slipped past [^\]]).
+_WIKI_EMBED_RE = re.compile(r"!\[\[(.+?)\]\]")
+_WIKI_LINK_RE = re.compile(r"(?<!!)\[\[(.+?)\]\]")
 _URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
 _MEDIA_EXT = re.compile(
     r"\.(png|jpe?g|gif|svg|webp|bmp|avif|heic|tiff?|pdf|mp4|mov|webm|mkv|"
     r"m4a|mp3|wav|ogg|flac|opus)$", re.I)
+# Not anchored to line start: a fence inside a callout ("> ```query"), a
+# blockquote or a list item still renders. Case-insensitive is stricter than
+# Obsidian, which is the safe side.
 _QUERY_FENCE_RE = re.compile(
-    r"(?m)^[ \t]*(`{3,}|~{3,})[ \t]*(dataview|dataviewjs|tasks|base|query|bases)\b")
+    r"(`{3,}|~{3,})[ \t]*(dataview|dataviewjs|tasks|base|query|bases)\b", re.I)
+_HTML_EMBED_RE = re.compile(
+    r"<[^>]*\binternal-embed\b[^>]*\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.I)
+_QUOTED_RE = re.compile(r"\"([^\"\n]{1,300})\"|'([^'\n]{1,300})'")
+_QUERY_TOKEN_RE = re.compile(r"\b(?:file|path)\s*:\s*(\"[^\"\n]+\"|\S+)", re.I)
 _INLINE_QUERY_RE = re.compile(r"`\$?=[^`\n]+`")
 
 
@@ -133,8 +142,21 @@ def note_tier(path: Path) -> str | None:
     return tier
 
 
+_TIER_CACHE: dict[Path, tuple[str | None, list[str], str | None]] = {}
+
+
 def _tier_detail(path: Path) -> tuple[str | None, list[str], str | None]:
-    """(tier, unrecognised declared values, read error or None)."""
+    """(tier, unrecognised declared values, read error or None). Cached for
+    the duration of one evaluate() call: a query naming a folder makes every
+    note in it a dependency of every note that embeds that query."""
+    hit = _TIER_CACHE.get(path)
+    if hit is not None:
+        return hit
+    _TIER_CACHE[path] = res = _tier_detail_uncached(path)
+    return res
+
+
+def _tier_detail_uncached(path: Path) -> tuple[str | None, list[str], str | None]:
     try:
         text = _read(path)
     except (OSError, UnicodeDecodeError) as exc:
@@ -160,33 +182,61 @@ def _strip_md(key: str) -> str:
 class VaultIndex:
     """Every file in the vault, reachable by the ways a link can name it.
 
-    Symlinked folders are followed (Obsidian indexes them), with a guard
-    against cycles. Dot-folders are skipped, as Obsidian does.
+    Symlinked folders are followed (Obsidian indexes them). The cycle guard
+    is per branch -- a folder is not re-entered below itself -- rather than
+    global, so two paths to one folder (an alias symlink) are both indexed:
+    a global guard left "Alias/Secret" unresolved, and so overridable.
+    Dot-folders are skipped, as Obsidian does.
     """
+
+    MAX_FILES = 500_000
 
     def __init__(self, root: Path):
         self.root = root
         self.by_rel: dict[str, Path] = {}          # "folder/note" (no .md) or "folder/file.ext"
         self.by_name: dict[str, list[Path]] = {}   # "note" (no .md) or "file.ext"
-        seen_real: set[str] = set()
-        for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
-            real = os.path.realpath(dirpath)
-            if real in seen_real:
-                dirnames[:] = []
+        self.by_dir: dict[str, list[Path]] = {}    # "folder" -> notes anywhere below it
+        self._count = 0
+        self._walk(root, frozenset())
+
+    def _walk(self, d: Path, ancestors: frozenset) -> None:
+        real = os.path.realpath(d)
+        if real in ancestors or self._count > self.MAX_FILES:
+            return
+        ancestors = ancestors | {real}
+        try:
+            entries = sorted(os.scandir(d), key=lambda e: e.name)
+        except OSError:
+            return
+        for e in entries:
+            if e.name.startswith("."):
                 continue
-            seen_real.add(real)
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            for fn in filenames:
-                if fn.startswith("."):
+            p = Path(e.path)
+            try:
+                if e.is_dir(follow_symlinks=True):
+                    self._walk(p, ancestors)
                     continue
-                p = Path(dirpath) / fn
-                rel = p.relative_to(root).as_posix()
-                rk = _link_key(rel)
-                nk = _link_key(fn)
-                if rk.endswith(".md"):
-                    rk, nk = rk[:-3], nk[:-3]
-                self.by_rel[rk] = p
-                self.by_name.setdefault(nk, []).append(p)
+            except OSError:
+                continue
+            self._count += 1
+            rel = p.relative_to(self.root).as_posix()
+            rk, nk = _link_key(rel), _link_key(e.name)
+            if rk.endswith(".md"):
+                rk, nk = rk[:-3], nk[:-3]
+                parts = rk.split("/")[:-1]
+                for n in range(1, len(parts) + 1):
+                    self.by_dir.setdefault("/".join(parts[:n]), []).append(p)
+            self.by_rel[rk] = p
+            self.by_name.setdefault(nk, []).append(p)
+
+    def folder_notes(self, name: str) -> list[Path]:
+        """Every note under a folder named by `name` (vault path or bare name)."""
+        key = _link_key(name).strip("/")
+        if not key:
+            return []
+        if key in self.by_dir:
+            return self.by_dir[key]
+        return [p for k, v in self.by_dir.items() if k.rsplit("/", 1)[-1] == key for p in v]
 
     def resolve(self, target: str, source: Path) -> list[Path]:
         """Every file `target` could mean, seen from `source`. Empty if none.
@@ -220,6 +270,84 @@ def _index_vault() -> VaultIndex:
     return VaultIndex(VAULT_ROOT)
 
 
+_MD_ESCAPABLE = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+
+def _md_destinations(text: str) -> list[str]:
+    """Destinations of markdown image embeds `![alt](dest "title")`.
+
+    A small CommonMark-shaped scanner rather than one regex, because the
+    forms the regex missed all render: alt text across lines, balanced
+    parentheses in the destination ("Secret(1).md"), a parenthesised title,
+    backslash escapes and HTML entities. Each destination is returned both
+    decoded and raw; resolving both costs nothing and misses nothing.
+    """
+    out: list[str] = []
+    i = 0
+    while True:
+        i = text.find("![", i)
+        if i == -1:
+            return out
+        depth, j = 1, i + 2
+        while j < len(text) and depth and j - i < 2000:      # alt text
+            c = text[j]
+            if c == "\\":
+                j += 2
+                continue
+            depth += (c == "[") - (c == "]")
+            j += 1
+        if depth or text[j:j + 1] != "(":
+            i += 2
+            continue
+        j += 1
+        while j < len(text) and text[j] in " \t\n":
+            j += 1
+        if text[j:j + 1] == "<":
+            end = text.find(">", j)
+            if end == -1:
+                i = j
+                continue
+            raw = text[j + 1:end]
+        else:
+            k, par = j, 0
+            while k < len(text) and k - j < 2000:
+                c = text[k]
+                if c == "\\":
+                    k += 2
+                    continue
+                if c in " \t\n" or (c == ")" and par == 0):
+                    break
+                par += (c == "(") - (c == ")")
+                k += 1
+            raw = text[j:k]
+        if raw:
+            decoded = urllib.parse.unquote(html.unescape(_MD_ESCAPABLE.sub(r"\1", raw)))
+            out += [decoded, raw]
+        i = j
+
+
+def _query_references(text: str) -> list[str]:
+    """Names a query or base mentions literally: quoted strings (Dataview
+    FROM "Folder", dv.io.load("Note.md"), base filters), [[links]], and
+    file:/path: search tokens. Resolved as notes AND folders, so a query that
+    names a restricted note, or a folder holding one, is judged by it."""
+    refs = [a or b for a, b in _QUOTED_RE.findall(text)]
+    refs += [_wiki_target(m) for m in _WIKI_LINK_RE.findall(text)]
+    refs += [tok.strip('"') for tok in _QUERY_TOKEN_RE.findall(text)]
+    return [r.strip().strip('"').strip("'") for r in refs if r.strip()]
+
+
+def _query_blocks(text: str) -> list[str]:
+    """The bodies of query fences and inline queries."""
+    blocks = []
+    for m in _QUERY_FENCE_RE.finditer(text):
+        fence = m.group(1)
+        end = text.find(fence[0] * 3, m.end())
+        blocks.append(text[m.end(): end if end != -1 else m.end() + 20000])
+    blocks += _INLINE_QUERY_RE.findall(text)
+    return blocks
+
+
 def _wiki_target(inner: str) -> str:
     # "\|" is the pipe Obsidian requires inside a table; it separates the
     # alias just like "|" does. It used to be read as part of the target,
@@ -229,23 +357,34 @@ def _wiki_target(inner: str) -> str:
 
 
 def _is_drawing(path: Path, text: str) -> bool:
-    return path.name.lower().endswith(".excalidraw.md") or \
-        re.search(r"(?m)^excalidraw-plugin\s*:", text[:2000]) is not None
+    # Anywhere in the frontmatter, not just its first 2000 characters, and
+    # by the plugin's own section markers, whichever is present.
+    fm = classification_tier.frontmatter(text) or ""
+    return (path.name.lower().endswith(".excalidraw.md")
+            or re.search(r"(?mi)^excalidraw-plugin\s*:", fm) is not None
+            or "# Excalidraw Data" in text or "```compressed-json" in text)
 
 
 def references(path: Path, text: str) -> tuple[list[str], list[str]]:
     """(targets whose content renders into this note, dynamic constructs --
     queries -- whose rendered content the gate cannot evaluate)."""
     targets = [_wiki_target(m) for m in _WIKI_EMBED_RE.findall(text)]
-    for raw in _MD_EMBED_RE.findall(text):
-        raw = raw[1:-1] if raw.startswith("<") else raw
-        if _URL_SCHEME_RE.match(raw):
+    # Raw HTML Obsidian's reading view turns into an embed. Uncertain whether
+    # the sanitiser keeps src on a span; treated as an embed regardless.
+    targets += [_wiki_target(m) for m in _HTML_EMBED_RE.findall(text)]
+    for dest in _md_destinations(text):
+        if _URL_SCHEME_RE.match(dest):
             continue                       # remote resource, not vault content
-        targets.append(urllib.parse.unquote(raw).split("#", 1)[0])
+        targets.append(dest.split("#", 1)[0])
     if _is_drawing(path, text):
+        if "```compressed-json" in text:
+            targets.append("\x00dynamic:a compressed Excalidraw drawing, whose "
+                           "embedded elements the gate cannot read")
         # A drawing renders the notes it references; Excalidraw records them
         # as plain `[[Note]]` links, so here every link is an embed.
         targets += [_wiki_target(m) for m in _WIKI_LINK_RE.findall(text)]
+    for block in _query_blocks(text):
+        targets += ["\x00query:" + r for r in _query_references(block)]
     opaque = []
     if _QUERY_FENCE_RE.search(text):
         opaque.append("contains a query block, which renders other notes' "
@@ -289,17 +428,35 @@ def embed_closure(path: Path, index: VaultIndex
     media: list[str] = []
     dynamic: list[str] = []
     incomplete: list[str] = []
+    leaves: set[Path] = set()
     frontier: list[tuple[Path, int]] = [(path, 0)]
 
     def reach(target: str, source: Path, depth: int) -> None:
-        if _MEDIA_EXT.search(target):
-            media.append(f"{target} (media attachment — cannot be classified)")
+        if target.startswith("\x00dynamic:"):
+            dynamic.append(target[len("\x00dynamic:"):])
             return
+        if target.startswith("\x00query:"):
+            # Named inside a query or base: judged as a leaf dependency (its
+            # tier counts; it is not walked for embeds). Nothing matching is
+            # normal -- query strings are mostly not note names.
+            ref = target[len("\x00query:"):]
+            for c in index.resolve(ref, source) + index.folder_notes(ref):
+                if c.name.lower().endswith(".md") and c != path:
+                    leaves.add(c)
+            return
+        # Resolve BEFORE deciding "media": "![[Diagram.png]]" renders the note
+        # Diagram.png.md when that is what exists.
         cands = index.resolve(target, source)
         if not cands:
-            unresolved.append(target)
+            if _MEDIA_EXT.search(target):
+                media.append(f"{target} (media attachment — cannot be classified; not found)")
+            else:
+                unresolved.append(target)
             return
         for c in cands:
+            if _MEDIA_EXT.search(c.name):
+                media.append(f"{target} (media attachment — cannot be classified)")
+                continue
             if c in seen or c == path:
                 continue
             if depth + 1 > MAX_EMBED_DEPTH:
@@ -314,6 +471,11 @@ def embed_closure(path: Path, index: VaultIndex
         if suffix.endswith(".base"):
             dynamic.append(f"{current.name} (a base renders other notes' "
                            "properties by query; check what it shows)")
+            try:
+                for r in _query_references(_read(current)):
+                    reach("\x00query:" + r, current, depth)
+            except (OSError, UnicodeDecodeError) as exc:
+                incomplete.append(f"{current.name} (unreadable: {type(exc).__name__})")
             continue
         if suffix.endswith(".canvas"):
             try:
@@ -343,7 +505,7 @@ def embed_closure(path: Path, index: VaultIndex
         dynamic += [f"{current.name}: {o}" if current != path else o for o in opaque]
         for r in refs:
             reach(r, current, depth)
-    notes = sorted(p for p in seen if p.name.lower().endswith(".md"))
+    notes = sorted(p for p in seen | leaves if p.name.lower().endswith(".md"))
     return notes, sorted(set(unresolved)), media, dynamic, incomplete
 
 
@@ -357,6 +519,7 @@ def _rel(p: Path) -> str:
 def evaluate(paths: list[Path], ceiling: str,
              unclassified_as: str | None = None) -> list[dict]:
     """Judge each note and everything it transcludes against the ceiling."""
+    _TIER_CACHE.clear()
     index = _index_vault()
     limit = TIER_RANK[ceiling]
     results: list[dict] = []
@@ -367,7 +530,9 @@ def evaluate(paths: list[Path], ceiling: str,
         embedded, unresolved, media, dynamic, incomplete = embed_closure(path, index)
         if err:
             incomplete.insert(0, f"note itself is unreadable ({err})")
-        if unknown and not declared:
+        if unknown:
+            # Even beside a recognised value: YAML, PyYAML and Obsidian may
+            # each read a different one (round 2 of the review).
             incomplete.insert(0, f"note declares an unrecognised tier `{unknown[0]}`")
 
         reasons: list[str] = []
@@ -384,7 +549,7 @@ def evaluate(paths: list[Path], ceiling: str,
             if de:
                 incomplete.append(f"{rel} (unreadable: {de})")
                 continue
-            if du and not dt_:
+            if du:
                 incomplete.append(f"{rel} declares an unrecognised tier `{du[0]}`")
                 continue
             dep_tier = dt_ or unclassified_as

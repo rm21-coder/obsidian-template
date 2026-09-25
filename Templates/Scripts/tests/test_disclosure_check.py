@@ -492,3 +492,96 @@ def test_note_outside_the_vault_is_refused_before_anything_happens(
     with pytest.raises(SystemExit) as e:
         D.main()
     assert e.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# Adversarial review ROUND 2, 2026-09-25: each was a restricted note that the
+# first fail-closed version still cleared, or let --override release.
+
+@pytest.mark.parametrize("frontmatter", [
+    '{"classification": "restricted", "x": {\nclassification: public\n}}',   # decoy
+    '{"classification": "restricted"}',                                    # flow mapping
+    '"classification": restricted',                                        # quoted key
+    '"classific\\u0061tion": restricted',                                  # escaped key
+    'classification: public\n  restricted',                                # continuation
+    'classification: public\nclassification: !!str restricted',            # known + unknown
+    'meta:\n  classification: public',                                     # nested
+])
+def test_frontmatter_the_reader_cannot_read_blocks_without_override(
+        vault: Path, frontmatter: str):
+    p = vault / "Knowledge" / "R.md"
+    p.write_text(f"---\n{frontmatter}\n---\nPHI\n", encoding="utf-8")
+    _assert_restricted_blocks(D.evaluate([p], "public", unclassified_as="public")[0])
+
+
+@pytest.mark.parametrize("body", [
+    "![](Secret.md (title))", "![multi\nline alt](Secret.md)", "![[Secret|a]b]]",
+    "![](Secret\\(1\\).md)".replace("\\(1\\)", "(1)").replace("Secret", "Secret"),
+    '<span class="internal-embed" src="Secret"></span>',
+])
+def test_round2_embed_forms_are_judged(vault: Path, body: str):
+    _restricted(vault, "Secret"); _restricted(vault, "Secret(1)")
+    host = note(vault, "Host", body=body, tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+@pytest.mark.parametrize("body", ["![](Sec\\_ret.md)", "![](S&#101;cret.md)"])
+def test_commonmark_escapes_and_entities_are_decoded(vault: Path, body: str):
+    _restricted(vault, "Secret"); _restricted(vault, "Sec_ret")
+    host = note(vault, "Host", body=body, tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_media_named_target_that_is_a_note_is_judged(vault: Path):
+    _restricted(vault, "Diagram.png")               # the file Diagram.png.md
+    host = note(vault, "Host", body="![[Diagram.png]]", tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+@pytest.mark.parametrize("body", [
+    '> [!note]\n> ```query\n> "MRN"\n> ```',
+    '- ```dataview\n  TABLE x FROM "Knowledge"\n  ```',
+    '1. ```tasks\n   path includes Knowledge\n   ```',
+])
+def test_query_fence_inside_callout_or_list_is_seen(vault: Path, body: str):
+    host = note(vault, "Host", body=body, tier="public")
+    res = D.evaluate([host], "public")[0]
+    assert res["blocked"] and any(r.startswith("dynamic content:") for r in res["reasons"])
+
+
+@pytest.mark.parametrize("body", [
+    '```dataviewjs\ndv.paragraph(await dv.io.load("Knowledge/Secret.md"))\n```',
+    '```query\nfile:Secret\n```',
+    '```dataview\nLIST FROM "Knowledge"\n```',
+])
+def test_query_naming_a_restricted_note_or_its_folder_cannot_be_overridden(
+        vault: Path, body: str):
+    _restricted(vault)
+    host = note(vault, "Host", body=body, tier="public", folder="Other")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_base_filtering_a_restricted_folder_cannot_be_overridden(vault: Path):
+    _restricted(vault)
+    (vault / "Other").mkdir(exist_ok=True)
+    (vault / "Other" / "All.base").write_text('filters:\n  and:\n    - file.inFolder("Knowledge")\n')
+    host = note(vault, "Host", body="![[All.base]]", tier="public", folder="Other")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_excalidraw_key_deep_in_frontmatter_is_detected(vault: Path):
+    _restricted(vault)
+    d = vault / "Knowledge" / "Drawing.md"
+    d.write_text("---\ntags:\n" + "".join(f"  - t{i}\n" for i in range(400))
+                 + "excalidraw-plugin: parsed\nclassification: public\n---\n"
+                 "## Embedded Files\nabc: [[Secret]]\n")
+    host = note(vault, "Host", body="![[Drawing]]", tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+def test_symlink_alias_of_a_folder_is_indexed_under_both_paths(vault: Path):
+    real = vault / "Zreal"; real.mkdir()
+    (real / "Secret.md").write_text("---\nclassification: restricted\n---\nX\n")
+    (vault / "Aalias").symlink_to(real)
+    host = note(vault, "Host", body="![[Aalias/Secret]]", tier="public")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])

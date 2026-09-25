@@ -113,3 +113,10 @@ def test_every_declared_value_counts_not_the_first(audit, block: str, expected: 
     """A `public` line above a real tier used to pass this audit, and the note
     went into a public commit. Adversarial review, 2026-09-25."""
     assert audit.parse_classification(f"---\n{block}\n---\nbody\n") == expected
+
+
+@pytest.mark.parametrize("fm", ['{"classification": "public"}',
+                                '"classification": public',
+                                '{"classification": "restricted", "x": {\nclassification: public\n}}'])
+def test_frontmatter_the_reader_cannot_read_never_passes_as_public(audit, fm: str) -> None:
+    assert audit.parse_classification(f"---\n{fm}\n---\nbody\n") != "public"

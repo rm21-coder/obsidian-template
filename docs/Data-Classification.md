@@ -289,13 +289,16 @@ each one a restricted note exported as "clear". So now:
 | Embed resolves to nothing in the vault | **Blocks**; `--override` allowed (you can see the target does not exist) |
 | Query block (`dataview`, `dataviewjs`, `tasks`, `base`, inline `` `= …` ``) or an embedded `.base` | **Blocks**; `--override` allowed — look at what it renders first; the gate cannot |
 | An unparseable canvas, an unreadable dependency, a closure deeper than 6 | **Blocks; cannot be overridden** — a restricted note may be behind it |
-| A declared tier the gate does not recognise | **Blocks; cannot be overridden**, and `--treat-unclassified` does not apply |
+| A declared tier the gate does not recognise — including beside a recognised one — or frontmatter it cannot read reliably (a JSON/flow mapping, a quoted key, a nested or multi-line `classification`) | **Blocks; cannot be overridden**, and `--treat-unclassified` does not apply |
+| A query or base that names a restricted note, or a folder holding one | **Blocks; cannot be overridden** — quoted names, `[[links]]` and `file:`/`path:` tokens inside queries and bases are resolved and judged |
 | Images, audio, video, PDF | Reported, advisory — media carries no tier |
 
 **Reading the tier.** Every gate reads `classification:` through one reader
 (`classification_tier.py`): YAML comment and quoting rules apply
 (`restricted  # PHI` is `restricted`), and if the key appears more than once
-the **most restrictive** value wins.
+the **most restrictive** value wins. Anything at the top level of the
+frontmatter that is not a plain `key: value` line or a list item is treated as
+unreadable rather than guessed at.
 
 **Unlabelled notes.** A note with no `classification` value blocks.
 `--treat-unclassified TIER` relaxes that only where something *other than the
