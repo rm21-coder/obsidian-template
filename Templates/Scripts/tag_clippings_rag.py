@@ -28,7 +28,7 @@ Usage:
     # apply, only ever adding up to 3 tags per note:
     python3 Templates/Scripts/tag_clippings_rag.py --apply --additive 'Knowledge'
     # undo a prior apply:
-    python3 Templates/Scripts/tag_clippings_rag.py --rollback tag_rag_manifest_*.json
+    python3 Templates/Scripts/tag_clippings_rag.py --rollback ~/.local/state/obsidian-template/rollback/tag_rag_manifest_*.json
 
 Setup:
     1. pip install anthropic pyyaml python-dotenv requests
@@ -396,14 +396,8 @@ def main():
     apply = args.apply and not args.dry_run
 
     if args.rollback:
-        from manifest_rollback import UnsafeManifest, apply_rollback
-        try:
-            n = apply_rollback(args.rollback, VAULT_ROOT)
-        except UnsafeManifest as exc:
-            print(f"Refusing rollback, nothing written: {exc}", file=sys.stderr)
-            sys.exit(1)
-        print(f"Rolled back {n} files from {args.rollback}")
-        return
+        from manifest_rollback import run_rollback_cli
+        sys.exit(run_rollback_cli(args.rollback, VAULT_ROOT))
 
     import llm_endpoint
     try:
@@ -431,7 +425,8 @@ def main():
         files = files[:args.limit]
 
     from datetime import datetime
-    manifest = Path(f"tag_rag_manifest_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    from manifest_rollback import new_manifest_path
+    manifest = new_manifest_path("tag_rag", datetime.now().strftime('%Y%m%d_%H%M%S'))
     changes = []
 
     def flush():
