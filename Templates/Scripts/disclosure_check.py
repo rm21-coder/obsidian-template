@@ -47,17 +47,22 @@ Exit codes:  0 clear · 1 blocked · 2 usage/error
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import shutil
 import sys
+import unicodedata
+import urllib.parse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import classification_tier  # noqa: E402
 
 VAULT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
-TIERS = ["public", "internal-use-only", "confidential", "restricted"]
-TIER_RANK = {t: i for i, t in enumerate(TIERS)}
+TIERS = list(classification_tier.TIERS)
+TIER_RANK = dict(classification_tier.TIER_RANK)
 
 AUDIENCES = {
     "public":   "public",
@@ -71,90 +76,276 @@ NEVER_EXPORTABLE = "restricted"
 
 MAX_EMBED_DEPTH = 6
 
-_FM_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---[ \t]*\r?\n?", re.DOTALL)
-_CLASS_RE = re.compile(r"(?m)^classification\s*:[ \t]*(.+?)[ \t]*$")
-# Embeds carry content; plain links do not. The leading '!' is the whole
-# difference and is why they are matched separately.
-_EMBED_RE = re.compile(r"!\[\[([^\]\n|#]+)(?:[#|][^\]\n]*)?\]\]")
-_LINK_RE = re.compile(r"(?<!!)\[\[([^\]\n|#]+)(?:[#|][^\]\n]*)?\]\]")
-_ATTACHMENT_EXT = re.compile(
-    r"\.(png|jpe?g|gif|svg|webp|bmp|pdf|mp4|mov|m4a|mp3|wav|canvas|base)$", re.I)
+# ---------------------------------------------------------------------------
+# FAIL CLOSED ON WHAT THE GATE CANNOT SEE (decided 2026-09-25).
+#
+# The first versions tried to judge exactly what Obsidian renders and treated
+# anything they could not resolve as "advisory -- nothing exists to leak".
+# That premise only holds if resolution is never stricter than Obsidian's, and
+# the adversarial review of the M-DASH fixes showed it always was, in some
+# form: `![[Note.md]]`, NFD filenames, markdown `![](Note.md)` embeds,
+# relative paths, duplicate note names, `\|` in tables, symlinked folders,
+# canvases, Excalidraw drawings, query blocks. Each was a restricted note
+# exported under a "clear" verdict. Matching Obsidian form by form is a race
+# the gate loses to the next form, so the rule is now:
+#
+#   * every reference that could render note content is extracted, including
+#     markdown embeds, canvas nodes and every link inside a drawing;
+#   * a reference that matches several notes brings ALL of them into the
+#     closure -- the gate need not guess which one Obsidian would pick;
+#   * a note reference that resolves to nothing BLOCKS (override allowed: the
+#     operator can see the target does not exist);
+#   * content the gate cannot evaluate at all -- query blocks, bases, an
+#     unreadable dependency, a closure past MAX_EMBED_DEPTH, a declared tier it
+#     does not recognise -- BLOCKS and cannot be overridden, because a
+#     restricted note may be behind it.
+#
+# Binary media (images, audio, PDF) stay advisory: they carry no tier, and
+# blocking them would block every note with a picture.
+# ---------------------------------------------------------------------------
+
+_WIKI_EMBED_RE = re.compile(r"!\[\[([^\]\n]+?)\]\]")
+_WIKI_LINK_RE = re.compile(r"(?<!!)\[\[([^\]\n]+?)\]\]")
+_MD_EMBED_RE = re.compile(r"!\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+[\"'][^\"'\n]*[\"'])?\s*\)")
+_URL_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.I)
+_MEDIA_EXT = re.compile(
+    r"\.(png|jpe?g|gif|svg|webp|bmp|avif|heic|tiff?|pdf|mp4|mov|webm|mkv|"
+    r"m4a|mp3|wav|ogg|flac|opus)$", re.I)
+_QUERY_FENCE_RE = re.compile(
+    r"(?m)^[ \t]*(`{3,}|~{3,})[ \t]*(dataview|dataviewjs|tasks|base|query|bases)\b")
+_INLINE_QUERY_RE = re.compile(r"`\$?=[^`\n]+`")
+
+
+def _read(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
 
 
 def note_tier(path: Path) -> str | None:
-    """The note's declared tier, or None when absent or unrecognised."""
+    """The note's declared tier (most restrictive if several), or None when
+    absent, unrecognised or unreadable."""
     try:
-        text = path.read_text(encoding="utf-8")
+        tier, _unknown = classification_tier.effective(_read(path))
     except (OSError, UnicodeDecodeError):
         return None
-    m = _FM_RE.match(text)
-    if not m:
-        return None
-    c = _CLASS_RE.search(m.group(1))
-    if not c:
-        return None
-    val = c.group(1).strip().strip('"').strip("'").lower()
-    return val if val in TIER_RANK else None
+    return tier
 
 
-def _index_vault() -> dict[str, Path]:
-    """Map lowercase note stem AND vault-relative path -> file, for wikilinks."""
-    index: dict[str, Path] = {}
-    for md in VAULT_ROOT.rglob("*.md"):
-        rel = md.relative_to(VAULT_ROOT)
-        if any(p.startswith(".") for p in rel.parts):
+def _tier_detail(path: Path) -> tuple[str | None, list[str], str | None]:
+    """(tier, unrecognised declared values, read error or None)."""
+    try:
+        text = _read(path)
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, [], type(exc).__name__
+    tier, unknown = classification_tier.effective(text)
+    return tier, unknown, None
+
+
+def _link_key(text: str) -> str:
+    """One spelling per note, for index keys and link targets.
+
+    NFC because macOS filenames and typed link text can differ in Unicode
+    normalization while naming the same note. Lowercase because Obsidian
+    resolves links case-insensitively.
+    """
+    return unicodedata.normalize("NFC", text).strip().lower()
+
+
+def _strip_md(key: str) -> str:
+    return key[:-3] if key.endswith(".md") else key
+
+
+class VaultIndex:
+    """Every file in the vault, reachable by the ways a link can name it.
+
+    Symlinked folders are followed (Obsidian indexes them), with a guard
+    against cycles. Dot-folders are skipped, as Obsidian does.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.by_rel: dict[str, Path] = {}          # "folder/note" (no .md) or "folder/file.ext"
+        self.by_name: dict[str, list[Path]] = {}   # "note" (no .md) or "file.ext"
+        seen_real: set[str] = set()
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+            real = os.path.realpath(dirpath)
+            if real in seen_real:
+                dirnames[:] = []
+                continue
+            seen_real.add(real)
+            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            for fn in filenames:
+                if fn.startswith("."):
+                    continue
+                p = Path(dirpath) / fn
+                rel = p.relative_to(root).as_posix()
+                rk = _link_key(rel)
+                nk = _link_key(fn)
+                if rk.endswith(".md"):
+                    rk, nk = rk[:-3], nk[:-3]
+                self.by_rel[rk] = p
+                self.by_name.setdefault(nk, []).append(p)
+
+    def resolve(self, target: str, source: Path) -> list[Path]:
+        """Every file `target` could mean, seen from `source`. Empty if none.
+
+        Deliberately generous: returning a candidate Obsidian would not pick
+        costs a spurious block at worst; missing the one it would pick
+        exported restricted content.
+        """
+        key = _link_key(target)
+        if not key:
+            return []
+        found: list[Path] = []
+        for k in dict.fromkeys([key, _strip_md(key)]):
+            if "/" in k or k.startswith("."):
+                try:
+                    src_dir = source.parent.relative_to(self.root).as_posix()
+                except ValueError:
+                    src_dir = ""
+                rel_to_src = _link_key(os.path.normpath(os.path.join(src_dir, k)))
+                for cand in (rel_to_src, _strip_md(rel_to_src), k.lstrip("./"), _strip_md(k.lstrip("./"))):
+                    if cand in self.by_rel:
+                        found.append(self.by_rel[cand])
+                tail = "/" + _strip_md(k).lstrip("./")
+                found += [p for rk, p in self.by_rel.items() if ("/" + rk).endswith(tail)]
+            else:
+                found += self.by_name.get(k, [])
+        return list(dict.fromkeys(found))
+
+
+def _index_vault() -> VaultIndex:
+    return VaultIndex(VAULT_ROOT)
+
+
+def _wiki_target(inner: str) -> str:
+    # "\|" is the pipe Obsidian requires inside a table; it separates the
+    # alias just like "|" does. It used to be read as part of the target,
+    # which then resolved to nothing and was waved through as advisory.
+    inner = inner.replace("\\|", "|")
+    return re.split(r"[|#^]", inner, maxsplit=1)[0].strip()
+
+
+def _is_drawing(path: Path, text: str) -> bool:
+    return path.name.lower().endswith(".excalidraw.md") or \
+        re.search(r"(?m)^excalidraw-plugin\s*:", text[:2000]) is not None
+
+
+def references(path: Path, text: str) -> tuple[list[str], list[str]]:
+    """(targets whose content renders into this note, reasons the note's
+    rendered content cannot be evaluated at all)."""
+    targets = [_wiki_target(m) for m in _WIKI_EMBED_RE.findall(text)]
+    for raw in _MD_EMBED_RE.findall(text):
+        raw = raw[1:-1] if raw.startswith("<") else raw
+        if _URL_SCHEME_RE.match(raw):
+            continue                       # remote resource, not vault content
+        targets.append(urllib.parse.unquote(raw).split("#", 1)[0])
+    if _is_drawing(path, text):
+        # A drawing renders the notes it references; Excalidraw records them
+        # as plain `[[Note]]` links, so here every link is an embed.
+        targets += [_wiki_target(m) for m in _WIKI_LINK_RE.findall(text)]
+    opaque = []
+    if _QUERY_FENCE_RE.search(text):
+        opaque.append("contains a query block, which renders other notes' "
+                      "content the gate cannot evaluate")
+    if _INLINE_QUERY_RE.search(text):
+        opaque.append("contains an inline query, which renders content the "
+                      "gate cannot evaluate")
+    return [t for t in targets if t], opaque
+
+
+def _canvas_references(path: Path) -> tuple[list[tuple[str, Path]], list[str]]:
+    """(file nodes as (target, source-for-resolution), embedded text refs)."""
+    try:
+        data = json.loads(_read(path))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError(f"canvas could not be parsed: {type(exc).__name__}") from exc
+    files: list[str] = []
+    texts: list[str] = []
+    for node in data.get("nodes", []) if isinstance(data, dict) else []:
+        if not isinstance(node, dict):
             continue
-        index.setdefault(md.stem.lower(), md)
-        index[rel.with_suffix("").as_posix().lower()] = md
-    return index
+        if node.get("type") == "file" and isinstance(node.get("file"), str):
+            files.append(node["file"])
+        elif node.get("type") == "text" and isinstance(node.get("text"), str):
+            texts.append(node["text"])
+    return files, texts
 
 
-def resolve_link(target: str, index: dict[str, Path]) -> Path | None:
-    key = target.strip().lower()
-    return index.get(key) or index.get(Path(key).name)
+def embed_closure(path: Path, index: VaultIndex
+                  ) -> tuple[list[Path], list[str], list[str], list[str]]:
+    """Everything whose content renders into `path`, recursively.
 
-
-def embed_closure(path: Path, index: dict[str, Path]
-                  ) -> tuple[list[Path], list[str], list[str]]:
-    """Every note reachable from `path` by embeds, plus unresolved embed
-    targets, plus dependencies that exist but could NOT be evaluated.
-
-    Recursive because an embed of an embed still lands in the exported bytes.
-
-    The third list is what makes this fail closed. Two cases used to be
-    dropped silently: a note past MAX_EMBED_DEPTH, and a note that could not
-    be read. Both exist and both would render, so a restricted note could sit
-    behind either while the root reported clear. Unresolved targets (nothing
-    exists to leak) and attachments (cannot be classified; blocking them would
-    block every note with an image) stay advisory. Microsoft M-DASH 2026-09-23,
-    CWE-863, nine findings.
+    Returns (notes reached, unresolved references, media attachments,
+    incomplete: dependencies that exist or may exist but could not be judged).
+    Recursive because an embed of an embed still lands in what is shown.
     """
     seen: set[Path] = set()
     unresolved: list[str] = []
+    media: list[str] = []
     incomplete: list[str] = []
-    frontier = [(path, 0)]
+    frontier: list[tuple[Path, int]] = [(path, 0)]
+
+    def reach(target: str, source: Path, depth: int) -> None:
+        if _MEDIA_EXT.search(target):
+            media.append(f"{target} (media attachment — cannot be classified)")
+            return
+        cands = index.resolve(target, source)
+        if not cands:
+            unresolved.append(target)
+            return
+        for c in cands:
+            if c in seen or c == path:
+                continue
+            if depth + 1 > MAX_EMBED_DEPTH:
+                incomplete.append(f"{target} (beyond embed depth {MAX_EMBED_DEPTH})")
+                continue
+            seen.add(c)
+            frontier.append((c, depth + 1))
+
     while frontier:
         current, depth = frontier.pop()
+        suffix = current.name.lower()
+        if suffix.endswith(".base"):
+            incomplete.append(f"{current.name} (a base renders other notes' "
+                              "properties by query; cannot be evaluated)")
+            continue
+        if suffix.endswith(".canvas"):
+            try:
+                files, texts = _canvas_references(current)
+            except ValueError as exc:
+                incomplete.append(f"{current.name} ({exc})")
+                continue
+            for f in files:
+                reach(f, index.root / "_", depth)       # canvas paths are vault-relative
+            for t in texts:
+                refs, opaque = references(current, t)
+                incomplete += [f"{current.name}: {o}" for o in opaque]
+                for r in refs:
+                    reach(r, current, depth)
+            continue
+        if _MEDIA_EXT.search(suffix) or not suffix.endswith(".md"):
+            if current != path and not suffix.endswith(".md"):
+                incomplete.append(f"{current.name} (embedded file of a kind "
+                                  "the gate cannot evaluate)")
+            continue
         try:
-            text = current.read_text(encoding="utf-8")
+            text = _read(current)
         except (OSError, UnicodeDecodeError) as exc:
             incomplete.append(f"{current.name} (unreadable: {type(exc).__name__})")
             continue
-        for target in _EMBED_RE.findall(text):
-            if _ATTACHMENT_EXT.search(target):
-                unresolved.append(f"{target} (attachment — cannot be classified)")
-                continue
-            resolved = resolve_link(target, index)
-            if resolved is None:
-                unresolved.append(f"{target} (unresolved)")
-            elif resolved not in seen and resolved != path:
-                if depth + 1 > MAX_EMBED_DEPTH:
-                    incomplete.append(
-                        f"{target} (beyond embed depth {MAX_EMBED_DEPTH})")
-                    continue
-                seen.add(resolved)
-                frontier.append((resolved, depth + 1))
-    return sorted(seen), unresolved, incomplete
+        refs, opaque = references(current, text)
+        incomplete += [f"{current.name}: {o}" if current != path else o for o in opaque]
+        for r in refs:
+            reach(r, current, depth)
+    notes = sorted(p for p in seen if p.name.lower().endswith(".md"))
+    return notes, sorted(set(unresolved)), media, incomplete
+
+
+def _rel(p: Path) -> str:
+    try:
+        return p.relative_to(VAULT_ROOT).as_posix()
+    except ValueError:
+        return str(p)
 
 
 def evaluate(paths: list[Path], ceiling: str,
@@ -165,46 +356,66 @@ def evaluate(paths: list[Path], ceiling: str,
     results: list[dict] = []
 
     for path in paths:
-        tier = note_tier(path) or unclassified_as
-        embedded, unresolved, incomplete = embed_closure(path, index)
+        declared, unknown, err = _tier_detail(path)
+        tier = declared or (None if (unknown or err) else unclassified_as)
+        embedded, unresolved, media, incomplete = embed_closure(path, index)
+        if err:
+            incomplete.insert(0, f"note itself is unreadable ({err})")
+        if unknown and not declared:
+            incomplete.insert(0, f"note declares an unrecognised tier `{unknown[0]}`")
 
         reasons: list[str] = []
         worst = tier
-        if tier is None:
+        if tier is None and not (unknown or err):
             reasons.append("unclassified — no usable `classification` value")
-        elif TIER_RANK[tier] > limit:
+        elif tier is not None and TIER_RANK[tier] > limit:
             reasons.append(f"note is `{tier}`, above the `{ceiling}` ceiling")
 
+        dep_restricted = False
         for dep in embedded:
-            dep_tier = note_tier(dep) or unclassified_as
-            rel = dep.relative_to(VAULT_ROOT)
+            dt_, du, de = _tier_detail(dep)
+            rel = _rel(dep)
+            if de:
+                incomplete.append(f"{rel} (unreadable: {de})")
+                continue
+            if du and not dt_:
+                incomplete.append(f"{rel} declares an unrecognised tier `{du[0]}`")
+                continue
+            dep_tier = dt_ or unclassified_as
             if dep_tier is None:
                 reasons.append(f"embeds unclassified note `{rel}`")
-                worst = None if worst is None else worst
-            elif TIER_RANK[dep_tier] > limit:
+                continue
+            dep_restricted |= dep_tier == NEVER_EXPORTABLE
+            if TIER_RANK[dep_tier] > limit:
                 reasons.append(f"embeds `{dep_tier}` note `{rel}`")
                 if worst is not None and TIER_RANK[dep_tier] > TIER_RANK[worst]:
                     worst = dep_tier
 
+        for u in unresolved:
+            reasons.append(f"embed `{u}` does not resolve to any note in the "
+                           "vault — the gate cannot confirm what it shows")
         for gap in incomplete:
-            reasons.append(f"could not evaluate an embedded dependency: {gap}")
+            reasons.append(f"could not evaluate: {gap}")
 
+        try:
+            links_text = _read(path)
+        except (OSError, UnicodeDecodeError):
+            links_text = ""
         results.append({
             "path": path,
             "tier": tier,
             "effective": worst,
             "embedded": embedded,
             "unresolved": unresolved,
-            "links": sorted({t for t in _LINK_RE.findall(
-                path.read_text(encoding="utf-8", errors="replace"))}),
+            "media": media,
+            "links": sorted({_wiki_target(t) for t in _WIKI_LINK_RE.findall(links_text)}),
             "reasons": reasons,
             "blocked": bool(reasons),
             # An incomplete closure cannot be overridden: override is for
             # "I know this is fine to share", and the gate cannot know what
             # it could not read -- a restricted note may be behind the gap.
-            "restricted": (tier == NEVER_EXPORTABLE
-                           or bool(incomplete)
-                           or any(note_tier(d) == NEVER_EXPORTABLE for d in embedded)),
+            "restricted": (tier == NEVER_EXPORTABLE or bool(incomplete)
+                           or dep_restricted),
             "incomplete": incomplete,
         })
     return results
@@ -220,9 +431,8 @@ def audit(action: str, audience: str, results: list[dict],
             "action": action,
             "audience": audience,
             "override": override or "",
-            "cleared": [str(r["path"].relative_to(VAULT_ROOT))
-                        for r in results if not r["blocked"]],
-            "blocked": {str(r["path"].relative_to(VAULT_ROOT)): r["reasons"]
+            "cleared": [_rel(r["path"]) for r in results if not r["blocked"]],
+            "blocked": {_rel(r["path"]): r["reasons"]
                         for r in results if r["blocked"]},
         })
     except Exception as exc:
@@ -231,10 +441,7 @@ def audit(action: str, audience: str, results: list[dict],
 
 def report(results: list[dict], ceiling: str, audience: str) -> None:
     for r in results:
-        try:
-            name = r["path"].relative_to(VAULT_ROOT)
-        except ValueError:
-            name = r["path"]
+        name = _rel(r["path"])
         if r["blocked"]:
             print(f"  BLOCKED  {name}")
             for reason in r["reasons"]:
@@ -243,10 +450,10 @@ def report(results: list[dict], ceiling: str, audience: str) -> None:
             print(f"  clear    {name}  [{r['tier']}]")
         if r["embedded"]:
             print(f"           transcludes {len(r['embedded'])} note(s): "
-                  + ", ".join(str(d.relative_to(VAULT_ROOT)) for d in r["embedded"][:4])
+                  + ", ".join(_rel(d) for d in r["embedded"][:4])
                   + (" ..." if len(r["embedded"]) > 4 else ""))
-        for u in r["unresolved"]:
-            print(f"           ? embed {u}")
+        for m in r["media"]:
+            print(f"           · {m}")
 
 
 def gather(raw: list[str]) -> list[Path]:
@@ -255,14 +462,31 @@ def gather(raw: list[str]) -> list[Path]:
         p = Path(item)
         if not p.is_absolute():
             p = VAULT_ROOT / p
+        p = _inside_vault(p, item)
         if p.is_dir():
-            out.extend(sorted(p.rglob("*.md")))
+            out.extend(_inside_vault(q, str(q)) for q in sorted(p.rglob("*.md")))
         elif p.is_file():
-            out.append(p.resolve())
+            out.append(p)
         else:
             print(f"Error: no such path: {item}", file=sys.stderr)
             sys.exit(2)
     return out
+
+
+def _inside_vault(p: Path, item: str) -> Path:
+    """`p` as a path inside the vault, or exit 2 before anything is judged.
+
+    A note outside the vault used to be evaluated, reported CLEAR with the
+    audit record silently not written, and -- for a symlink resolving outside
+    -- copied before the export crashed on relative_to, leaving a partial
+    export and no audit trail (M-DASH [37]). The gate governs this vault.
+    """
+    absolute = Path(os.path.abspath(p))
+    for cand in (absolute, absolute.resolve()):
+        if cand == VAULT_ROOT or cand.is_relative_to(VAULT_ROOT):
+            return cand
+    print(f"Error: {item} is outside the vault ({VAULT_ROOT})", file=sys.stderr)
+    sys.exit(2)
 
 
 def main() -> int:
@@ -367,7 +591,7 @@ def main() -> int:
         print(f"PROCEEDING UNDER OVERRIDE — exporting {len(overridden)} "
               f"note(s) that exceed `{ceiling}`.")
     for r in allowed:
-        rel = r["path"].relative_to(VAULT_ROOT)
+        rel = r["path"].relative_to(VAULT_ROOT)   # gather() guarantees this
         target = dest / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(r["path"], target)
@@ -378,7 +602,7 @@ def main() -> int:
         lines = ["# Withheld from this export", "",
                  f"Audience `{args.audience}` · ceiling `{ceiling}`", ""]
         for r in withheld:
-            lines.append(f"- `{r['path'].relative_to(VAULT_ROOT)}`")
+            lines.append(f"- `{_rel(r['path'])}`")
             lines += [f"    - {reason}" for reason in r["reasons"]]
         (dest / "WITHHELD.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 

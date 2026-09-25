@@ -100,3 +100,16 @@ class TestAuditRespectsTheFilter:
         assert IGNORED not in found, (
             "the audit is walking gitignored output; component 02 will "
             "hard-fail on any machine that has run the RAG sync")
+
+
+@pytest.mark.parametrize("block, expected", [
+    ("classification: public\nclassification: confidential", "confidential"),
+    ("classification: confidential\nclassification: public", "confidential"),
+    ("classification: public   # reviewed", "public"),
+    ("classification: 'public' # reviewed", "public"),
+    ("Classification: restricted\nclassification: public", "restricted"),
+])
+def test_every_declared_value_counts_not_the_first(audit, block: str, expected: str) -> None:
+    """A `public` line above a real tier used to pass this audit, and the note
+    went into a public commit. Adversarial review, 2026-09-25."""
+    assert audit.parse_classification(f"---\n{block}\n---\nbody\n") == expected

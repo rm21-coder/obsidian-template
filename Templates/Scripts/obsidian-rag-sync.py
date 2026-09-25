@@ -115,6 +115,9 @@ from pathlib import Path
 
 import requests
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import classification_tier  # noqa: E402
+
 try:
     from dotenv import load_dotenv
     # Load API keys from the canonical secrets file. Edit this path if your
@@ -220,9 +223,6 @@ FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
 WIKILINK_RE = re.compile(r"!?\[\[[^\]]*\]\]")
 IMG_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 WS_RE = re.compile(r"\s+")
-# Anchor at line start (multiline) so we only match the YAML key, not any
-# occurrence of "classification:" in the body of the note.
-CLASSIFICATION_RE = re.compile(r"(?m)^classification\s*:\s*(.+?)\s*$")
 
 
 def extractable_body_chars(text: str) -> int:
@@ -242,14 +242,15 @@ def parse_classification(text: str) -> str | None:
     the gate. Strings are not unquoted — `confidential` and `"confidential"`
     both resolve to `confidential`.
     """
-    m = FRONTMATTER_RE.match(text)
-    if not m:
-        return None
-    cm = CLASSIFICATION_RE.search(m.group(0))
-    if not cm:
-        return None
-    value = cm.group(1).strip().strip('"').strip("'").lower()
-    return value or None
+    # One reader for every gate (classification_tier): all declared values,
+    # YAML comment and quoting rules, most restrictive wins. The first-match
+    # regex this replaced let a `public` line above the real tier win, and
+    # read `restricted  # PHI` as an unknown value. Anything unrecognised is
+    # returned as-is so the caller's fail-secure branch excludes the note.
+    tier, unknown = classification_tier.effective(text)
+    if unknown and tier != "restricted":
+        return unknown[0]
+    return tier
 
 
 def file_hash(path: Path) -> str:

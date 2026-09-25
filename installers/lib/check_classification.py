@@ -79,7 +79,7 @@ SKIPPED_ROOT_FILES = frozenset({"README.md"})
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 # Anchored at column 0 inside the YAML block so a stray
 # "classification:" in body text can't accidentally satisfy the gate.
-CLASSIFICATION_RE = re.compile(r"(?m)^classification\s*:\s*(.+?)\s*$")
+CLASSIFICATION_RE = re.compile(r"(?mi)^classification[ \t]*:(.*)$")
 
 REQUIRED_VALUE = "public"
 
@@ -89,13 +89,30 @@ def parse_classification(text: str) -> str | None:
     if there is no frontmatter or no `classification:` key. Strings are
     unquoted (`"public"` and `public` both resolve to `public`).
     """
-    m = FRONTMATTER_RE.match(text)
+    m = FRONTMATTER_RE.match(text.lstrip("\ufeff"))
     if not m:
         return None
-    cm = CLASSIFICATION_RE.search(m.group(1))
-    if not cm:
+    # EVERY declared value counts, not the first. With a first-match read, a
+    # `classification: public` line above a real `confidential` one passed
+    # this audit and the note went into a public commit. Any value other than
+    # the required one is returned, so the audit fails on it. Same rule as
+    # Templates/Scripts/classification_tier.py, restated here because this
+    # file also runs on recipients' machines with no vault on the path.
+    values = []
+    for cm in CLASSIFICATION_RE.finditer(m.group(1)):
+        v = cm.group(1).strip()
+        if v[:1] in ("'", '"'):
+            end = v.find(v[0], 1)
+            v = v[1:end] if end != -1 else v[1:]
+        else:
+            v = re.split(r"[ \t]#", " " + v, maxsplit=1)[0]
+        v = v.strip().lower()
+        if v:
+            values.append(v)
+    if not values:
         return None
-    return cm.group(1).strip().strip('"').strip("'").lower() or None
+    others = [v for v in values if v != REQUIRED_VALUE]
+    return others[0] if others else REQUIRED_VALUE
 
 
 def should_audit(rel_path: Path) -> bool:
