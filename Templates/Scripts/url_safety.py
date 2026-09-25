@@ -35,6 +35,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 from pathlib import Path
+import re
 from typing import Callable
 from urllib.parse import urljoin, urlparse
 
@@ -60,6 +61,9 @@ SAFE_FETCH_CHUNK_SIZE = 64 * 1024
 MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024
 
 
+_USERINFO_IN_PATH = re.compile(r"[^/]*@")
+
+
 def redact_url(url: str) -> str:
     """A URL made safe to log: userinfo dropped, query string elided.
 
@@ -72,13 +76,20 @@ def redact_url(url: str) -> str:
     """
     try:
         parts = urlparse(url)
+        host = parts.hostname or ""
+        port = parts.port
     except ValueError:
+        # A bad port raises from .port, not from urlparse -- outside the old
+        # try, so a hostile redirect Location crashed the refusal log itself.
         return "<unparseable url>"
-    host = parts.hostname or ""
-    if parts.port:
-        host = f"{host}:{parts.port}"
+    if port:
+        host = f"{host}:{port}"
+    # Malformed forms put the userinfo in the PATH: "http:user:pass@host/p"
+    # and "http:///user:pass@host/p" both parse with an empty netloc. Drop
+    # anything before an "@" in any segment, wherever it landed.
+    path = _USERINFO_IN_PATH.sub("<redacted>@", parts.path)
     query = "?…" if parts.query else ""
-    return f"{parts.scheme}://{host}{parts.path}{query}"
+    return f"{parts.scheme}://{host}{path}{query}"
 SAFE_DOWNLOAD_TIMEOUT_SECONDS = 120
 
 USER_AGENT = (
@@ -183,7 +194,10 @@ def _walk(url: str, *, log: Logger, timeout: int):
                 headers={"User-Agent": USER_AGENT},
             )
         except requests.RequestException as e:
-            log(f"transport error on {redact_url(current)}: {e}")
+            # The exception text is not logged: requests puts the full URL,
+            # query string and all, into it ("Max retries exceeded with url:
+            # /p?sig=..."), which undid the redaction on the line's own prefix.
+            log(f"transport error on {redact_url(current)}: {type(e).__name__}")
             return
         status = resp.status_code
         if status in (301, 302, 303, 307, 308):

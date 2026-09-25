@@ -178,13 +178,39 @@ def get_access_token(config):
     return tok["access_token"]
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Graph does not redirect calendarView. urllib forwards request headers
+    across a redirect, Authorization included, so a redirect would hand the
+    bearer token to wherever the Location points. Refuse instead."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            req.full_url, code, "redirect refused (bearer token not forwarded)",
+            headers, fp)
+
+
+_GRAPH_ORIGIN = urllib.parse.urlsplit(GRAPH)
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _graph_get(url, access_token, prefer_tz=None):
+    # The token goes to Graph and nowhere else. @odata.nextLink comes out of
+    # the previous response, so a tampered response could name any host --
+    # over any scheme -- and the bounded loop would dutifully send the bearer
+    # token there. Adversarial review of the M-DASH [0] fix, 2026-09-25.
+    parts = urllib.parse.urlsplit(url)
+    if (parts.scheme != "https"
+            or (parts.hostname or "").lower() != _GRAPH_ORIGIN.hostname
+            or parts.port not in (None, 443)
+            or parts.username or parts.password):
+        die("refusing to send the Graph token to %s://%s"
+            % (parts.scheme, parts.hostname or "?"))
     headers = {"Authorization": "Bearer " + access_token,
                "Accept": "application/json"}
     if prefer_tz:
         headers["Prefer"] = 'outlook.timezone="%s"' % prefer_tz
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=60) as r:
+    with _OPENER.open(req, timeout=60) as r:
         return json.loads(r.read())
 
 
