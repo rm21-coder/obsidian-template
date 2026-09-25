@@ -63,6 +63,7 @@ import hashlib
 import hmac
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -179,7 +180,14 @@ def scan_plugins(plugins_dir: Path) -> dict[str, dict]:
                 "manifest_error": str(e),
             }
             continue
-        out[mf.get("id") or entry.name] = {
+        key = mf.get("id") or entry.name
+        if key in out:
+            # Two folders declaring one id used to collapse into a single
+            # entry, so the second folder's main.js was never compared with
+            # anything. Keep both; the suffixed key is unvetted by
+            # construction, so it surfaces as a new plugin.
+            key = f"{key}@{entry.name}"
+        out[key] = {
             "name": mf.get("name") or entry.name,
             "version": mf.get("version") or "",
             "manifest_sha256": sha256_file(manifest),
@@ -197,8 +205,19 @@ def load_allowlist() -> dict[str, dict]:
     (mapping plugin_id → record). On verification failure, fires an
     ALLOWLIST_TAMPER alert and exits non-zero. A file that is not in the
     signed envelope is tamper too -- see below."""
-    if not ALLOWLIST_PATH.exists():
+    # lstat, not exists(): a symlink loop made exists() False and the run
+    # took the quiet "no allowlist" path; a FIFO in its place blocked
+    # read_text forever with launchd refusing to start the next run. Only a
+    # missing entry is "no allowlist"; anything else that is not a regular
+    # file is tamper. Adversarial review round 2, 2026-09-25.
+    try:
+        st = os.lstat(ALLOWLIST_PATH)
+    except FileNotFoundError:
         return {}
+    except OSError as e:
+        _fire_tamper(f"allowlist cannot be examined ({type(e).__name__})")
+    if not stat.S_ISREG(st.st_mode):
+        _fire_tamper("allowlist is not a regular file")
     # Every way the file can fail to be a readable JSON document is tamper,
     # not a crash or a quiet log line. Non-JSON used to exit 2 with only a log
     # line; invalid UTF-8 and a directory in its place escaped as uncaught
@@ -206,7 +225,10 @@ def load_allowlist() -> dict[str, dict]:
     # reporting. Adversarial review of the M-DASH fixes, 2026-09-25.
     try:
         raw = json.loads(ALLOWLIST_PATH.read_text(encoding="utf-8"))
-    except (ValueError, OSError) as e:      # JSONDecodeError, UnicodeDecodeError ⊂ ValueError
+    except (ValueError, OSError, RecursionError) as e:
+        # JSONDecodeError and UnicodeDecodeError are ValueErrors. RecursionError
+        # is not: deeply nested JSON raises it on the system Python 3.9 that
+        # launchd runs, and it escaped as a crash with no alert.
         _fire_tamper(f"allowlist unreadable or not JSON ({type(e).__name__})")
 
     # An unsigned file is refused, not "migrated". This branch used to

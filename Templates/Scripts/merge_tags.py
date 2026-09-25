@@ -11,7 +11,7 @@ and writes a rollback manifest on --apply.
 EDIT the MERGES map below for your own taxonomy, then:
     python3 Templates/Scripts/merge_tags.py             # dry-run over the whole vault
     python3 Templates/Scripts/merge_tags.py --apply     # perform the edits
-    python3 Templates/Scripts/merge_tags.py --rollback merge_tags_manifest_*.json
+    python3 Templates/Scripts/merge_tags.py --rollback ~/.local/state/obsidian-template/rollback/merge_tags_manifest_*.json
 """
 
 import argparse
@@ -90,14 +90,8 @@ def main():
     args = ap.parse_args()
 
     if args.rollback:
-        from manifest_rollback import UnsafeManifest, apply_rollback
-        try:
-            n = apply_rollback(args.rollback, VAULT_ROOT)
-        except UnsafeManifest as exc:
-            print(f"Refusing rollback, nothing written: {exc}", file=sys.stderr)
-            sys.exit(1)
-        print(f"Rolled back {n} files from {args.rollback}")
-        return
+        from manifest_rollback import run_rollback_cli
+        sys.exit(run_rollback_cli(args.rollback, VAULT_ROOT))
 
     if not MERGES:
         sys.exit("MERGES is empty — edit the MERGES map at the top of this script first.")
@@ -126,7 +120,8 @@ def main():
             new_text, _, _ = rewrite(c["original"])
             Path(c["path"]).write_text(new_text, encoding="utf-8")
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        manifest = Path(f"merge_tags_manifest_{stamp}.json")
+        from manifest_rollback import new_manifest_path
+        manifest = new_manifest_path("merge_tags", stamp)
         manifest.write_text(json.dumps({"changes": changes}, ensure_ascii=False, indent=0))
         print(f"\nApplied. Rollback manifest: {manifest}")
         print(f"Undo with:  python3 merge_tags.py --rollback {manifest}")

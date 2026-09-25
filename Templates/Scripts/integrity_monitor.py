@@ -65,6 +65,7 @@ import hashlib
 import json
 import os
 import re
+import stat as _stat
 import subprocess
 import sys
 from pathlib import Path
@@ -86,7 +87,12 @@ AGENT_WINDOWS_TASK = r"\Obsidian\security-integrity"
 DELETION_FLOOR = 50          # absolute floor below which a drop is fine
 DELETION_RATIO = 0.05         # 5% relative
 # .ps1/.psd1 cover the Windows scheduler layer (Templates/Scripts/windows/).
-SCRIPT_EXTS = {".py", ".sh", ".plist", ".ps1", ".psd1"}
+# .js/.applescript/.txt/.yaml added 2026-09-25 after the adversarial review:
+# the meeting-pull prompt template, requirements.txt, the handoff transform,
+# the dashboard applet source and pipeline config are executed or steer
+# execution, and none of them was hashed.
+SCRIPT_EXTS = {".py", ".sh", ".plist", ".ps1", ".psd1",
+               ".js", ".applescript", ".txt", ".yaml", ".yml"}
 
 # Third-party LaunchAgents that rewrite themselves on their own schedule
 # (vendor auto-updaters). Their recurring CONTENT_CHANGE is noise, and a
@@ -235,6 +241,12 @@ def scan_state_dir() -> dict[str, dict]:
             continue
         try:
             stat = path.stat()
+            if not _stat.S_ISREG(stat.st_mode):
+                # Never open it: a FIFO planted here blocked this scan (and
+                # the plugin check) forever. Recorded, so it differs from the
+                # baseline hash and is reported.
+                out[path.name] = {"error": "not a regular file"}
+                continue
             out[path.name] = {
                 "sha256": sha256_file(path),
                 "size": stat.st_size,

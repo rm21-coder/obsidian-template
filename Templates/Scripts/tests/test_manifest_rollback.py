@@ -161,3 +161,81 @@ def test_relative_path_resolves_against_the_vault_not_the_cwd(
     assert mr.apply_rollback(m, vault) == 1
     assert (vault / "Notes" / "a.md").read_text() == "before\n"
     assert decoy.read_text() == "decoy\n"
+
+
+# ---------------------------------------------------------------------------
+# Round 2 of the adversarial review, 2026-09-25.
+
+@pytest.mark.parametrize("rel", [
+    "Templateſ/x.md",                     # U+017F: 'Templates' to APFS, not to lower()
+    "Notes/agentſ.md",
+    "CLAUDE.local.md", "Notes/GEMINI.md", "copilot-instructions.md",
+    "docs/Security-Harness.md",
+])
+def test_denylist_holds_against_folding_and_variants(vault: Path, tmp_path: Path, rel: str) -> None:
+    real = {"Templateſ/x.md": vault / "Templates" / "x.md",
+            "Notes/agentſ.md": vault / "Notes" / "agents.md"}.get(rel, vault / rel)
+    real.parent.mkdir(parents=True, exist_ok=True)
+    real.write_text("real\n")
+    m = _manifest(tmp_path, [{"path": str(vault / rel), "original": "pwned"}])
+    with pytest.raises(mr.UnsafeManifest):
+        mr.apply_rollback(m, vault)
+    assert real.read_text() == "real\n"
+
+
+def test_a_manifest_inside_the_vault_is_refused(vault: Path) -> None:
+    """Synced devices can plant or edit anything inside the vault."""
+    m = vault / "Notes" / "planted_manifest.json"
+    m.write_text(json.dumps({"changes": [{"path": str(vault / "Notes" / "a.md"),
+                                          "original": "pwned"}]}))
+    with pytest.raises(mr.UnsafeManifest, match="inside the vault"):
+        mr.apply_rollback(m, vault)
+    assert (vault / "Notes" / "a.md").read_text() == "changed\n"
+
+
+def test_new_manifests_are_written_outside_the_vault(tmp_path: Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OBSIDIAN_ROLLBACK_DIR", str(tmp_path / "rb"))
+    p = mr.new_manifest_path("vault_lint", "20260925_120000")
+    assert p.parent == tmp_path / "rb" and p.parent.is_dir()
+    assert oct(p.parent.stat().st_mode & 0o777) == "0o700"
+
+
+@pytest.mark.parametrize("body", ["{not json", "[" * 100000])
+def test_a_malformed_manifest_is_a_refusal_not_a_traceback(tmp_path: Path, vault: Path,
+                                                           body: str) -> None:
+    m = tmp_path / "m.json"; m.write_text(body)
+    with pytest.raises(mr.UnsafeManifest):
+        mr.apply_rollback(m, vault)
+
+
+def test_a_target_deleted_before_its_swap_is_not_recreated(
+        vault: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    a = vault / "Notes" / "a.md"
+    m = _manifest(tmp_path, [{"path": str(a), "original": "before\n"}])
+    real_mkstemp = mr.tempfile.mkstemp
+    def mkstemp_then_delete(**kw):
+        out = real_mkstemp(**kw); a.unlink(); return out
+    monkeypatch.setattr(mr.tempfile, "mkstemp", mkstemp_then_delete)
+    with pytest.raises(mr.UnsafeManifest, match="does not exist"):
+        mr.apply_rollback(m, vault)
+    assert not a.exists(), "the rollback created a file"
+
+
+def test_a_failed_swap_after_one_restore_is_reported_as_partial(
+        vault: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    a = vault / "Notes" / "a.md"
+    b = vault / "Notes" / "b.md"; b.write_text("changed-b\n")
+    real_replace = mr.os.replace
+    calls = {"n": 0}
+    def flaky_replace(src, dst):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError(28, "No space left on device")
+        return real_replace(src, dst)
+    monkeypatch.setattr(mr.os, "replace", flaky_replace)
+    m = _manifest(tmp_path, [{"path": str(a), "original": "A"}, {"path": str(b), "original": "B"}])
+    assert mr.run_rollback_cli(m, vault) == 2
+    err = capsys.readouterr().err
+    assert "ROLLBACK INCOMPLETE" in err and "nothing written" not in err
+    assert str(a) in err

@@ -125,11 +125,16 @@ on it.
 python3 Templates/Scripts/vault_lint.py --apply           # dup-tags + bad-tags
 python3 Templates/Scripts/vault_lint.py --fix-malformed   # spliced frontmatter
 python3 Templates/Scripts/vault_lint.py --fix-links       # broken wikilinks
-python3 Templates/Scripts/vault_lint.py --rollback vault_lint_manifest_<ts>.json
+python3 Templates/Scripts/vault_lint.py --rollback ~/.local/state/obsidian-template/rollback/vault_lint_manifest_<ts>.json
 ```
 
-Every write records the complete original file in a manifest next to the
-script, so `--rollback` restores byte-for-byte.
+Every write records the complete original file in a manifest, so
+`--rollback` restores byte-for-byte. Manifests are written to `~/.local/state/obsidian-template/rollback/`,
+outside the vault, and `--rollback` refuses one found inside it: a synced
+vault can receive a planted or edited manifest from another device, and a
+manifest says what to write where. A rollback restores existing notes only;
+it never creates a file, and it will not touch `Templates/`, `docs/`,
+dot-folders or agent-instruction files (`CLAUDE*.md`, `AGENTS*.md`, ...).
 
 **`--apply`** touches only the frontmatter `tags:` block. Bodies, other keys,
 indentation, and quoting are left byte-for-byte unchanged.
@@ -174,7 +179,7 @@ lines of unreferenced People notes and buries what needs action.
 ## Footprint
 
 - One LaunchAgent, one weekly run, one log file.
-- No dependencies, no network, no state directory. The rollback manifests are
+- No dependencies, no network. The rollback manifests (in `~/.local/state/obsidian-template/rollback/`) are
   the only files it writes outside the vault's notes.
 - A full sweep over ~2,500 notes takes a couple of seconds.
 

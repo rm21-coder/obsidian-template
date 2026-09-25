@@ -177,7 +177,7 @@ $P "$S" --dry-run --additive 'Clippings' 'Creations'
 # enrich a reviewed folder, adding at most 3 tags per note:
 $P "$S" --apply --additive --max-add 3 'Knowledge'
 # undo the last apply:
-$P "$S" --rollback tag_rag_manifest_YYYYMMDD_HHMMSS.json
+$P "$S" --rollback ~/.local/state/obsidian-template/rollback/tag_rag_manifest_YYYYMMDD_HHMMSS.json   # written outside the vault
 ```
 
 It runs on demand (no LaunchAgent by default). For a large run, watch progress with `grep -c 'current :' your.log` (notes processed) versus `grep -c '>> written'` (notes changed) — writes lag well behind, since additive tagging leaves well-tagged notes unchanged.

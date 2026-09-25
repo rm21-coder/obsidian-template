@@ -401,3 +401,46 @@ class TestEndToEndMain:
         rc = pic.main(self._argv(sample_vault))
         assert rc == 1
         assert any("templater" in m for _, m in silent_notify)
+
+
+class TestRound2AllowlistShapes:
+    """Adversarial review round 2, 2026-09-25: each of these silenced the
+    control with no alert -- one by hanging it forever."""
+
+    def test_fifo_in_place_of_the_allowlist_is_tamper_not_a_hang(
+            self, fake_keychain, tmp_state_dir) -> None:
+        import os
+        os.mkfifo(pic.ALLOWLIST_PATH)
+        with pytest.raises(SystemExit) as exc:
+            pic.load_allowlist()
+        assert exc.value.code == 1
+        assert "not a regular file" in (tmp_state_dir / "alerts.log").read_text()
+
+    def test_symlink_loop_is_tamper_not_no_allowlist(
+            self, fake_keychain, tmp_state_dir) -> None:
+        pic.ALLOWLIST_PATH.symlink_to(pic.ALLOWLIST_PATH)
+        with pytest.raises(SystemExit) as exc:
+            pic.load_allowlist()
+        assert exc.value.code == 1
+        assert "ALLOWLIST_TAMPER" in (tmp_state_dir / "alerts.log").read_text()
+
+    def test_recursion_error_is_tamper(self, fake_keychain, tmp_state_dir,
+                                       monkeypatch) -> None:
+        """Deep nesting raises RecursionError on the system Python 3.9 launchd
+        uses (not on newer Pythons, so it is simulated here)."""
+        pic.ALLOWLIST_PATH.write_text("[[[]]]")
+        def deep(*a, **k): raise RecursionError("maximum recursion depth exceeded")
+        monkeypatch.setattr(pic.json, "loads", deep)
+        with pytest.raises(SystemExit) as exc:
+            pic.load_allowlist()
+        assert exc.value.code == 1
+
+    def test_two_folders_with_one_id_are_both_recorded(self, tmp_path) -> None:
+        plugins = tmp_path / "plugins"
+        for folder, js in (("aaa-copy", "evil()"), ("dataview", "real()")):
+            d = plugins / folder; d.mkdir(parents=True)
+            (d / "manifest.json").write_text(json.dumps({"id": "dataview", "version": "1"}))
+            (d / "main.js").write_text(js)
+        out = pic.scan_plugins(plugins)
+        assert len(out) == 2, out
+        assert "dataview@dataview" in out or "dataview@aaa-copy" in out

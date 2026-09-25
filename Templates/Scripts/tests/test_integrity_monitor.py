@@ -90,6 +90,23 @@ class TestScanStateDir:
         assert "plugin_allowlist.json" in out
         assert "integrity_state.json" not in out
 
+    def test_fifo_is_reported_not_opened(self, tmp_state_dir: Path) -> None:
+        """A FIFO planted as plugin_allowlist.json blocked this scan forever
+        (adversarial review round 2, 2026-09-25). It must be recorded -- so it
+        differs from the baseline hash -- without being read."""
+        import os
+        os.mkfifo(tmp_state_dir / "plugin_allowlist.json")
+        out = im.scan_state_dir()          # returns: would hang if it opened it
+        assert out["plugin_allowlist.json"] == {"error": "not a regular file"}
+
+    def test_prompt_and_config_files_are_now_hashed(self, tmp_path: Path) -> None:
+        for name in ("meeting_pull_prompt.txt", "requirements.txt",
+                     "meeting_handoff_transform.js", "DashboardActions.applescript",
+                     "voice_cleanup_config.yaml"):
+            (tmp_path / name).write_text("x")
+        out = im.scan_dir(tmp_path, exts=im.SCRIPT_EXTS)
+        assert len(out) == 5, sorted(out)
+
     def test_excludes_alerts_log_naturally(self,
                                            tmp_state_dir: Path) -> None:
         """alerts.log is not .json, so the glob already excludes it."""

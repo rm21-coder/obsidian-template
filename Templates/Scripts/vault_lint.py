@@ -39,7 +39,7 @@ Every write is recorded in a rollback manifest.
     python3 Templates/Scripts/vault_lint.py --skip links     # all but one (repeatable)
     python3 Templates/Scripts/vault_lint.py --verbose        # full lists, not samples
     python3 Templates/Scripts/vault_lint.py --json report.json
-    python3 Templates/Scripts/vault_lint.py --rollback vault_lint_manifest_*.json
+    python3 Templates/Scripts/vault_lint.py --rollback ~/.local/state/obsidian-template/rollback/vault_lint_manifest_*.json
 
 Before it is useful you have to tell it what "correct" means for your vault:
 Knowledge/Tag Taxonomy.md is the tag allowlist, REQUIRED_KEYS below is the
@@ -1240,14 +1240,8 @@ def main():
     args = ap.parse_args()
 
     if args.rollback:
-        from manifest_rollback import UnsafeManifest, apply_rollback
-        try:
-            n = apply_rollback(args.rollback, VAULT_ROOT)
-        except UnsafeManifest as exc:
-            print(f"Refusing rollback, nothing written: {exc}", file=sys.stderr)
-            return 1
-        print(f"Rolled back {n} files from {args.rollback}")
-        return 0
+        from manifest_rollback import run_rollback_cli
+        return run_rollback_cli(args.rollback, VAULT_ROOT)
 
     active = [c for c in (args.only or CHECKS) if c not in (args.skip or [])]
 
@@ -1360,7 +1354,8 @@ def main():
                         ", ".join(sorted(set(protected)))))
         if changes:
             stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            manifest = Path(__file__).parent / "vault_lint_manifest_{}.json".format(stamp)
+            from manifest_rollback import new_manifest_path
+            manifest = new_manifest_path("vault_lint", stamp)
             manifest.write_text(json.dumps({"changes": changes}, ensure_ascii=False, indent=0),
                                 encoding="utf-8")
             print("\nRewrote {} notes. Rollback manifest: {}".format(len(changes), manifest.name))
