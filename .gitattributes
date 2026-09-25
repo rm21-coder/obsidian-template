@@ -33,6 +33,7 @@
 *.plist         text eol=lf
 *.applescript   text eol=lf
 installers/lib/hooks/pre-commit text eol=lf
+installers/lib/hooks/pre-push text eol=lf
 
 # CRLF: the Windows PowerShell layer, which is Windows-only by definition.
 # Note this is about line endings only -- the same files are also held
