@@ -340,18 +340,205 @@ def render_prompt(template_path, config, config_path, out_dir):
 
 
 def allowed_tools(config):
-    """Build the --allowedTools list.
+    """Build the --allowedTools list: the two calendar tools, nothing else.
 
     A headless session cannot answer a permission prompt, so every MCP tool the
     prompt uses has to be named here up front -- and named exactly as the CLI
     exposes it (`claude mcp list`), which is not always how a desktop client
     labels the same connector.
+
+    This session reads full event bodies, and a meeting invite is text anyone
+    can write. Until 2026-09-25 it was also granted Bash and Write so it could
+    save the calendar JSON and run the transform itself -- which made a crafted
+    invite a prompt-injection path to a shell running as the user, unattended
+    at 05:00 (Microsoft M-DASH, CWE-749). The session now only reads the
+    calendar and returns JSON; this script writes the file and runs the
+    transform. See producer_command() for why removing Bash and Write alone
+    would not have been enough.
     """
     prefix = config.get("mcp_prefix") or DEFAULT_MCP_PREFIX
     search_tool = config.get("search_tool") or DEFAULT_SEARCH_TOOL
     read_tool = config.get("read_tool") or DEFAULT_READ_TOOL
-    tools = ["Bash", "Write", "%s__%s" % (prefix, search_tool), "%s__%s" % (prefix, read_tool)]
-    return " ".join(tools)
+    return " ".join(["%s__%s" % (prefix, search_tool), "%s__%s" % (prefix, read_tool)])
+
+
+# Every built-in tool this CLI can offer, removed from the session outright.
+# Measured against Claude Code 2.1.278, 2026-09-25: with the other flags below
+# but WITHOUT this list, Read still succeeded inside the working directory and
+# the generic ReadMcpResourceTool stayed available -- and that one can read
+# any resource the connector exposes, email included. Names the running CLI
+# does not have are ignored, so the list errs long. It is the second line of
+# defence, not the only one: see producer_command().
+DENIED_BUILTINS = (
+    "Agent", "Artifact", "ArtifactComments", "ArtifactData", "AskUserQuestion",
+    "Bash", "BashOutput", "CronCreate", "CronDelete", "CronList", "DesignSync",
+    "Edit", "EnterPlanMode", "EnterWorktree", "ExitPlanMode", "ExitWorktree",
+    "Glob", "Grep", "KillShell", "ListAgents", "ListMcpResourcesTool",
+    "Monitor", "MultiEdit", "NotebookEdit", "NotebookRead", "PowerShell",
+    "PushNotification", "Read", "ReadMcpResourceDirTool", "ReadMcpResourceTool",
+    "RemoteTrigger", "ReportFindings", "ScheduleWakeup", "SendMessage",
+    "ShareOnboardingGuide", "Skill", "SlashCommand", "Task", "TaskOutput",
+    "TaskStop", "TodoWrite", "ToolSearch", "WebFetch", "WebSearch", "Write",
+)
+
+# The rest of the Microsoft 365 connector. Only the calendar search and the
+# event read are needed; mail, Teams and SharePoint are not this job's business.
+OTHER_M365_TOOLS = (
+    "chat_message_search", "find_meeting_availability", "get_me",
+    "outlook_email_search", "outlook_find_available_time",
+    "sharepoint_folder_search", "sharepoint_search", "teams_list_chats",
+)
+
+
+# The reply's shape, enforced by the CLI (--json-schema) rather than scraped
+# from prose. Found live 2026-09-25: asked for bare JSON as text, the session
+# returned a calendar whose event bodies contained quotes it did not escape,
+# and the reply would not parse. The old flow never hit this because it passed
+# the JSON through the Write tool, whose arguments the API encodes
+# structurally; --json-schema restores that guarantee without the tool.
+# Events are left loosely typed on purpose: their shape is the connector's.
+EVENTS_SCHEMA = json.dumps({
+    "type": "object",
+    "properties": {"events": {"type": "array", "items": {"type": "object"}}},
+    "required": ["events"],
+})
+
+
+def disallowed_tools(config):
+    prefix = config.get("mcp_prefix") or DEFAULT_MCP_PREFIX
+    allowed = set(allowed_tools(config).split())
+    names = list(DENIED_BUILTINS) + ["%s__%s" % (prefix, t) for t in OTHER_M365_TOOLS]
+    return " ".join(n for n in names if n not in allowed)
+
+
+def producer_command(claude, prompt, tools, denied):
+    """The headless CLI invocation for the claude producer.
+
+    Four layers, each measured against the real CLI rather than assumed,
+    because the obvious single flag does not do what it looks like it does:
+    `--tools ""` removes the MCP tools too and leaves a session that can read
+    nothing, and a non-empty `--tools` does the same.
+
+      --restricted          no code-running tools or WebFetch, settings files
+                            ignored, and file tools confined to the working
+                            directory -- which is an empty private temp dir
+                            (see the cwd passed by main()). Proven: a Read of
+                            a file outside it was refused.
+      --permission-mode dontAsk
+                            anything not pre-approved is refused rather than
+                            prompted for, so a tool a future CLI adds is
+                            denied by default. Proven: WebSearch and the
+                            connector's mail search were refused.
+      --allowedTools        pre-approves exactly the two calendar tools.
+      --disallowedTools     removes every other built-in and the rest of the
+                            connector from the session entirely. Load-bearing:
+                            dontAsk alone still allowed Read inside the working
+                            directory and left ReadMcpResourceTool available.
+
+    Removing only Bash and Write would not have been enough: Read, Grep and
+    Glob run without asking in a default session, so an injected instruction
+    could still have had the session read a secrets file and return it inside
+    an event body, which this pipeline would carry into a vault note.
+
+    --output-format json gives one machine-readable envelope instead of prose
+    to scrape. --no-session-persistence stops the CLI saving a transcript of
+    every meeting body to disk each morning.
+    """
+    return [claude, "-p", prompt,
+            "--restricted",
+            "--permission-mode", "dontAsk",
+            "--allowedTools", tools,
+            "--disallowedTools", denied,
+            "--json-schema", EVENTS_SCHEMA,
+            "--output-format", "json",
+            "--no-session-persistence"]
+
+
+class ProducerOutputError(ValueError):
+    """The CLI returned, but not with a usable calendar."""
+
+
+def _first_json_object(text):
+    """The first JSON object in `text`, tolerating a code fence or a sentence
+    around it -- a model asked for bare JSON does not always obey."""
+    start = text.find("{")
+    if start < 0:
+        raise ProducerOutputError("no JSON object in the session's reply")
+    try:
+        obj, _end = json.JSONDecoder(strict=False).raw_decode(text, start)
+    except ValueError as exc:
+        raise ProducerOutputError("the session's reply was not valid JSON: %s" % exc)
+    if not isinstance(obj, dict):
+        raise ProducerOutputError("the session's reply was not a JSON object")
+    return obj
+
+
+def extract_events(stdout):
+    """Return the events list from `claude -p --output-format json` stdout.
+
+    Only `events` is taken from the model. `user` and `week` are built from
+    config by build_calendar(): they are known here, and asking a model to
+    copy them "verbatim" was one more thing it could get wrong.
+    """
+    try:
+        # strict=False: event bodies carry tabs and other control characters,
+        # and one probe of the real CLI returned an envelope that strict
+        # parsing rejects. It only relaxes control characters inside strings.
+        envelope = json.loads(stdout, strict=False)
+    except ValueError:
+        raise ProducerOutputError("CLI output was not the JSON envelope --output-format json promises")
+    if not isinstance(envelope, dict):
+        raise ProducerOutputError("CLI output was not a JSON object")
+    if envelope.get("is_error"):
+        raise ProducerOutputError("the CLI reported an error: %s"
+                                  % str(envelope.get("result") or envelope.get("subtype"))[:300])
+    structured = envelope.get("structured_output")
+    if isinstance(structured, dict):
+        obj = structured                   # validated against EVENTS_SCHEMA
+    else:
+        # Fallback for a CLI that did not honour --json-schema: parse the text.
+        result = envelope.get("result")
+        if not isinstance(result, str):
+            raise ProducerOutputError("CLI envelope carried no structured or text result")
+        obj = _first_json_object(result)
+    events = obj.get("events")
+    if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
+        raise ProducerOutputError("the reply had no 'events' list of objects")
+    return events
+
+
+def build_calendar(config, events):
+    """The transform's input: user and week from config, events from the model."""
+    _after, _before, week_start, week_end = window_bounds(config)
+    return {
+        "user": {k: config[k] for k in ("display_name", "email", "tenant", "timezone")},
+        "week": {"start": week_start, "end": week_end},
+        "events": events,
+    }
+
+
+def run_transform(calendar, out_dir, domains):
+    """Write the calendar to a temp file and run the transform on it.
+
+    Returns (returncode, stdout). The temp file is private to this user and
+    removed afterwards whatever happens -- it holds every meeting body.
+    """
+    import tempfile
+    transform = SCRIPTS_DIR / "mcp_meeting_transform.py"
+    fd, tmp = tempfile.mkstemp(prefix="meeting_pull_", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(calendar, fh)
+        completed = subprocess.run(
+            [sys.executable, str(transform), "--input", tmp,
+             "--out-dir", str(out_dir), "--tenant-domains", ",".join(domains)],
+            capture_output=True, text=True, timeout=120)
+        return completed.returncode, (completed.stdout or "") + (completed.stderr or "")
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
 
 
 def resolve_out_dir(args, config):
@@ -481,7 +668,10 @@ def main():
         prompt = render_prompt(template_path, config, config_path, out_dir)
         tools = allowed_tools(config)
         if args.dry_run:
-            log("dry run - would invoke: claude -p <prompt> --allowedTools %r" % tools)
+            log("dry run - would invoke: claude -p <prompt> --restricted "
+                "--permission-mode dontAsk --allowedTools %r --disallowedTools "
+                "<%d tools> --output-format json" % (
+                    tools, len(disallowed_tools(config).split())))
             log("drop folder: %s" % out_dir)
             print(prompt)
             return 0
@@ -509,7 +699,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     if producer == "claude":
         claude = find_claude(args.claude)
-        producer_cmd = [claude, "-p", prompt, "--allowedTools", tools]
+        producer_cmd = producer_command(claude, prompt, tools, disallowed_tools(config))
     command = keep_awake(producer_cmd)
 
     attempts = max(1, args.retries + 1)
@@ -518,10 +708,15 @@ def main():
         # Captured rather than inherited so the auth signature can be read
         # out of it; re-emitted verbatim straight afterwards so the log keeps
         # the producer's own words, which are what the dashboard reads.
+        # An empty private directory, so the file tools --restricted confines
+        # to the working directory have nothing to read.
+        import tempfile
+        workdir = tempfile.mkdtemp(prefix="meeting_pull_cwd_")
         try:
             completed = subprocess.run(command, capture_output=True, text=True,
-                                       timeout=PRODUCER_TIMEOUT_SEC)
+                                       timeout=PRODUCER_TIMEOUT_SEC, cwd=workdir)
         except subprocess.TimeoutExpired as exc:
+            shutil.rmtree(workdir, ignore_errors=True)
             for chunk in (exc.stdout, exc.stderr):
                 if not chunk:
                     continue
@@ -534,8 +729,41 @@ def main():
                 log("retrying in %ds" % args.retry_delay)
                 time.sleep(args.retry_delay)
             continue
+        shutil.rmtree(workdir, ignore_errors=True)
         transcript = (completed.stdout or "") + (completed.stderr or "")
-        if transcript.strip():
+
+        if completed.returncode == 0 and producer == "claude":
+            # The session returned; now this script does what the session used
+            # to do with Bash and Write. Its reply is NOT echoed to the log:
+            # it contains every meeting body.
+            try:
+                events = extract_events(completed.stdout or "")
+            except ProducerOutputError as exc:
+                log("the session returned no usable calendar: %s" % exc)
+                if attempt < attempts:
+                    log("retrying in %ds" % args.retry_delay)
+                    time.sleep(args.retry_delay)
+                continue
+            log("session returned %d event(s); running the transform" % len(events))
+            rc, out = run_transform(build_calendar(config, events), out_dir,
+                                    tenant_domains(config, config_path))
+            if out.strip():
+                print(out.rstrip(), flush=True)
+            if rc != 0:
+                log("transform exited %d - no handoff written" % rc)
+                if attempt < attempts:
+                    log("retrying in %ds" % args.retry_delay)
+                    time.sleep(args.retry_delay)
+                continue
+            clear_auth_block()
+            log("done")
+            return 0
+
+        if transcript.strip() and producer == "claude":
+            # Failure: keep the CLI's own words (the auth signature the
+            # dashboard looks for lives here), but not an unbounded reply.
+            print(transcript.rstrip()[-2000:], flush=True)
+        elif transcript.strip():
             print(transcript.rstrip(), flush=True)
 
         if completed.returncode == 0:
@@ -561,9 +789,9 @@ def main():
             return EXIT_AUTH
 
         log("producer exited %d - no handoff written" % completed.returncode)
-        # A handoff can exist despite a non-zero exit: the transform runs before
-        # the CLI's final message, so a session that dies at the very end has
-        # already delivered the goods. Re-pulling would be harmless but wasteful.
+        # A handoff can exist despite a non-zero exit -- for the graph producer,
+        # which runs the transform itself, or from an earlier attempt today.
+        # Re-pulling would be harmless but wasteful.
         if handoff_exists_for_today(out_dir):
             log("today's handoff is present anyway - treating as success")
             return 0

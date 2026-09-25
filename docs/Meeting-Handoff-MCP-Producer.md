@@ -236,6 +236,49 @@ dashboard lists both halves in its pipeline-health panel for exactly this
 reason — check the producer's log (`~/Library/Logs/meeting-pull.log`) first
 when notes are missing.
 
+
+### What the scheduled session is allowed to do
+
+The unattended session reads full event bodies, and a meeting invite is text
+anyone can write — so it is treated as reading untrusted input with nobody
+watching. It can do exactly two things: search the calendar and read an event.
+It returns the events as JSON, and `meeting_pull.py` itself builds the
+transform's input (taking `user` and `week` from config, not from the model),
+writes it to a private temp file, runs the transform, and deletes the file.
+
+Concretely, four layers, each measured against the real CLI rather than
+assumed — because the obvious flag does not do what it looks like: `--tools ""`
+removes the MCP tools too, leaving a session that cannot read the calendar.
+
+- `--restricted` removes the code-running tools and WebFetch, ignores settings
+  files, and confines file tools to the working directory — which is an empty
+  private temp directory created for each attempt and deleted after.
+- `--permission-mode dontAsk` refuses anything not pre-approved instead of
+  prompting, so a tool added by a future CLI version is denied by default.
+- `--allowedTools` pre-approves exactly the two calendar tools.
+- `--disallowedTools` removes every other built-in tool, and the rest of the
+  Microsoft 365 connector (mail, Teams, SharePoint), from the session. This one
+  is load-bearing: without it, `Read` still worked inside the working directory
+  and the generic `ReadMcpResourceTool` — which can read mail through the
+  connector — stayed available.
+
+`--no-session-persistence` keeps the CLI from saving a transcript of every
+meeting body each morning, and the session's reply is never written to the
+log — only the transform's summary.
+
+One residual is inherent to the connector and worth stating: the event-read
+tool the job genuinely needs takes a resource URI and is not limited to
+calendar items. An injected instruction could in principle have it read
+another item the connector exposes and return it inside an event body. That
+would land in your own vault, not leave the machine, and the classification
+and export controls still apply — a far smaller problem than the shell the
+session used to have, but not zero.
+
+Until 2026-09-25 the session was granted `Bash` and `Write` so it could save the
+file and run the transform itself. That made a crafted invite a
+prompt-injection path to a shell running as you, at 05:00, unattended.
+Microsoft M-DASH flagged it (CWE-749).
+
 ## Skipping the LLM entirely: the direct Graph producer
 
 The producer's work is deterministic — the Claude session in the recommended
