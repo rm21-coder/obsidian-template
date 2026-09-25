@@ -287,7 +287,8 @@ each one a restricted note exported as "clear". So now:
 | Situation | Result |
 |---|---|
 | Embed resolves to nothing in the vault | **Blocks**; `--override` allowed (you can see the target does not exist) |
-| Query block (`dataview`, `dataviewjs`, `tasks`, `base`, inline `` `= …` ``), a `.base`, an unparseable canvas, an unreadable dependency, a closure deeper than 6 | **Blocks; cannot be overridden** — a restricted note may be behind it |
+| Query block (`dataview`, `dataviewjs`, `tasks`, `base`, inline `` `= …` ``) or an embedded `.base` | **Blocks**; `--override` allowed — look at what it renders first; the gate cannot |
+| An unparseable canvas, an unreadable dependency, a closure deeper than 6 | **Blocks; cannot be overridden** — a restricted note may be behind it |
 | A declared tier the gate does not recognise | **Blocks; cannot be overridden**, and `--treat-unclassified` does not apply |
 | Images, audio, video, PDF | Reported, advisory — media carries no tier |
 
