@@ -103,8 +103,8 @@ class TestAuditRespectsTheFilter:
 
 
 @pytest.mark.parametrize("block, expected", [
-    ("classification: public\nclassification: confidential", "confidential"),
-    ("classification: confidential\nclassification: public", "confidential"),
+    ("classification: public\nclassification: confidential", "(frontmatter the gate cannot read reliably)"),  # duplicate key: Obsidian rejects it (round 4)
+    ("classification: confidential\nclassification: public", "(frontmatter the gate cannot read reliably)"),  # duplicate key: Obsidian rejects it (round 4)
     ("classification: public   # reviewed", "public"),
     ("classification: 'public' # reviewed", "public"),
     # Another spelling of the key is unreadable (round 3): still never public.
