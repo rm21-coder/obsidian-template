@@ -57,15 +57,19 @@ def _redact_url(url: str) -> str:
     url_safety.redact_url, kept here on purpose -- url_safety imports requests
     at module scope, and this watcher runs for days, so importing it would add
     a way for the watcher to fail at startup. M-DASH 2026-09-23 (CWE-532)."""
+    import re
     from urllib.parse import urlparse
     try:
         p = urlparse(url)
+        host = p.hostname or ""
+        port = p.port          # raises on a bad port; keep it inside the try
     except ValueError:
         return "<unparseable url>"
     if not p.scheme:
         return url            # a local path or bare name, not a URL
-    host = (p.hostname or "") + (f":{p.port}" if p.port else "")
-    return f"{p.scheme}://{host}{p.path}" + ("?…" if p.query else "")
+    host += f":{port}" if port else ""
+    path = re.sub(r"[^/]*@", "<redacted>@", p.path)   # userinfo parsed into the path
+    return f"{p.scheme}://{host}{path}" + ("?…" if p.query else "")
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 VAULT_ROOT = SCRIPTS_DIR.parent.parent

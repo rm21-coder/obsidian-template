@@ -142,11 +142,12 @@ class TestPreferTimezone:
     def _capture(self, monkeypatch):
         sent = []
 
-        def fake_urlopen(req, timeout=None):
-            sent.append(req)
-            return io.BytesIO(json.dumps({"value": []}).encode())
+        class _Opener:
+            def open(self, req, timeout=None):
+                sent.append(req)
+                return io.BytesIO(json.dumps({"value": []}).encode())
 
-        monkeypatch.setattr(gcf.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(gcf, "_OPENER", _Opener())
         return sent
 
     def test_calendarview_requests_the_window_timezone(self, monkeypatch) -> None:
@@ -268,3 +269,38 @@ def test_fetch_events_stops_at_the_page_ceiling(
     with pytest.raises(SystemExit):
         gcf.fetch_events("tok", "2026-08-19T00:00:00", "2026-08-20T00:00:00")
     assert len(calls) == gcf.MAX_PAGES
+
+
+class TestTokenGoesOnlyToGraph:
+    """Adversarial review 2026-09-25 of the M-DASH [0] fix: @odata.nextLink
+    comes from the response, and the loop sent the bearer token to whatever
+    host it named. Bounding the loop did not stop a single leaked request."""
+
+    @pytest.mark.parametrize("link", [
+        "http://graph.microsoft.com/v1.0/me/calendarView?$skiptoken=x",   # downgrade
+        "https://attacker.example/x",
+        "https://graph.microsoft.com.attacker.example/v1.0/x",
+        "https://user" + "@" + "graph.microsoft.com/v1.0/x",  # split so it is not an address
+        "https://graph.microsoft.com:8443/v1.0/x",
+    ])
+    def test_next_link_off_graph_is_refused_before_any_request(
+            self, monkeypatch, link) -> None:
+        sent = []
+
+        class _Opener:
+            def open(self, req, timeout=None):
+                sent.append(req.full_url)
+                return io.BytesIO(json.dumps(
+                    {"value": [], "@odata.nextLink": link}).encode())
+
+        monkeypatch.setattr(gcf, "_OPENER", _Opener())
+        with pytest.raises(SystemExit):
+            gcf.fetch_events("tok", "2026-08-19T00:00:00", "2026-08-20T00:00:00")
+        assert len(sent) == 1, f"token was sent to {sent[1:]}"
+
+    def test_redirects_are_refused_not_followed(self) -> None:
+        handler = gcf._NoRedirect()
+        req = gcf.urllib.request.Request(gcf.GRAPH + "/me",
+                                         headers={"Authorization": "Bearer tok"})
+        with pytest.raises(gcf.urllib.error.HTTPError, match="redirect refused"):
+            handler.redirect_request(req, None, 302, "Found", {}, "https://attacker.example/")
