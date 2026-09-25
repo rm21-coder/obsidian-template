@@ -4,7 +4,7 @@
 #
 # What this does:
 #   1. On first run, pip-installs the test dependencies (one-shot): pytest,
-#      pytest-cov, numpy, pyyaml, python-dotenv, requests.
+#      pytest-cov, numpy, pyyaml, python-dotenv, requests, defusedxml.
 #      numpy is a test-only dependency here: whisper_onnx.py imports it at
 #      module scope, and test_whisper_onnx.py imports that module directly,
 #      so a missing numpy is a collection error for the whole suite rather
@@ -52,6 +52,9 @@ python3 -c "import numpy" 2>/dev/null || missing+=("numpy")
 python3 -c "import yaml" 2>/dev/null || missing+=("pyyaml")
 python3 -c "import dotenv" 2>/dev/null || missing+=("python-dotenv")
 python3 -c "import requests" 2>/dev/null || missing+=("requests")
+# defusedxml: podcast_transcribe and handoff_blob_pull import it at module scope
+# to parse untrusted XML safely (bandit B314, closed 2026-09-25).
+python3 -c "import defusedxml" 2>/dev/null || missing+=("defusedxml")
 
 if [ ${#missing[@]} -gt 0 ]; then
     echo "[tests] installing missing test dependencies: ${missing[*]}"

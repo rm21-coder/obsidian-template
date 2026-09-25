@@ -33,7 +33,11 @@ import sys
 import tempfile
 import urllib.parse
 from pathlib import Path
-from xml.etree import ElementTree as ET
+# The listing is parsed with defusedxml: entity and external-reference
+# declarations are refused (bandit B314, open since CISO packet v2.3, closed
+# 2026-09-25). Azure never sends either, so a listing that has one is refused.
+import defusedxml.ElementTree as SafeET
+from defusedxml import DefusedXmlException
 
 import requests
 from dotenv import load_dotenv
@@ -153,8 +157,11 @@ def _bounded_get(session: requests.Session, url: str, limit: int) -> bytes:
 def list_blob_names(session: requests.Session) -> list[str]:
     url = f'{ACCOUNT_URL}/{CONTAINER}?restype=container&comp=list&{SAS}'
     try:
-        root = ET.fromstring(_bounded_get(session, url, MAX_LISTING_BYTES))
-    except ET.ParseError as exc:
+        root = SafeET.fromstring(_bounded_get(session, url, MAX_LISTING_BYTES))
+    except DefusedXmlException as exc:
+        raise BlobRefused(f'container listing declares entities or external '
+                          f'references ({type(exc).__name__}); refused') from exc
+    except SafeET.ParseError as exc:
         raise BlobRefused(f'container listing is not valid XML: {exc}') from exc
     return [el.text for el in root.iter('Name') if el.text]
 

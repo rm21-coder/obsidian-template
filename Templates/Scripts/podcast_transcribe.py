@@ -59,7 +59,14 @@ import sys
 import tempfile
 import time
 import urllib.error
-import xml.etree.ElementTree as ET
+# A podcast feed is untrusted external input, and the stdlib parser is
+# documented as unsafe against maliciously constructed XML (entity expansion,
+# external entities). defusedxml wraps it and refuses entity declarations and
+# external references while still accepting a plain DOCTYPE, which old RSS
+# 0.91 feeds carry. Open finding from CISO packet v2.3 (bandit B314), closed
+# 2026-09-25.
+import defusedxml.ElementTree as SafeET
+from defusedxml import DefusedXmlException
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlparse
@@ -265,8 +272,11 @@ def parse_rss(xml_bytes: bytes) -> tuple[str, list[dict]]:
     """Return (channel_title, [{title, enclosure_url, pub_date, ...}, ...])
     sorted newest first. Supports RSS 2.0 with <enclosure> tags."""
     try:
-        root = ET.fromstring(xml_bytes)
-    except ET.ParseError as e:
+        root = SafeET.fromstring(xml_bytes)
+    except DefusedXmlException as e:
+        raise RuntimeError(f"refused RSS XML: {type(e).__name__} "
+                           "(entity or external-reference declarations)") from e
+    except SafeET.ParseError as e:
         raise RuntimeError(f"could not parse RSS XML: {e}") from e
 
     # Strip default namespace if present
