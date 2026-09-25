@@ -324,3 +324,34 @@ class TestTranscriptLayout:
                 {"start": 33.0, "text": ending},
                 {"start": 35.0, "text": "Next thought."}]))
             assert "**[0:35]**" in lines, f"{ending!r} not treated as an end"
+
+
+# ---------------------------------------------------------------------------
+# A feed is untrusted XML: parsed with defusedxml (bandit B314, open since
+# CISO packet v2.3, closed 2026-09-25).
+
+_BILLION_LAUGHS = b"""<?xml version="1.0"?>
+<!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+<!ENTITY lol3 "&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;&lol2;">]>
+<rss version="2.0"><channel><title>&lol3;</title></channel></rss>"""
+
+_XXE = b"""<?xml version="1.0"?>
+<!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]>
+<rss version="2.0"><channel><title>&x;</title></channel></rss>"""
+
+
+@pytest.mark.parametrize("feed", [_BILLION_LAUGHS, _XXE], ids=["entity-expansion", "external-entity"])
+def test_hostile_feed_is_refused_not_expanded(feed: bytes) -> None:
+    with pytest.raises(RuntimeError, match="refused RSS XML: EntitiesForbidden"):
+        pt.parse_rss(feed)
+
+
+def test_old_rss_091_with_a_plain_doctype_still_parses() -> None:
+    feed = (b'<?xml version="1.0"?>\n'
+            b'<!DOCTYPE rss PUBLIC "-//Netscape Communications//DTD RSS 0.91//EN" '
+            b'"http://my.netscape.com/publish/formats/rss-0.91.dtd">\n'
+            b'<rss version="0.91"><channel><title>Old Show</title>'
+            b'<item><title>Ep 1</title><enclosure url="https://example.com/1.mp3" '
+            b'type="audio/mpeg" length="1"/></item></channel></rss>')
+    title, items = pt.parse_rss(feed)
+    assert title == "Old Show" and items and items[0]["enclosure_url"].endswith("1.mp3")

@@ -9,6 +9,10 @@ requests
 # faster-whisper: podcast_transcribe.py off Apple Silicon (CPU transcription).
 yt-dlp
 markitdown
+# defusedxml: safe XML parsing for untrusted podcast RSS and the relay's
+# container listing. Already installed as a markitdown dependency; declared
+# because the scripts now import it directly.
+defusedxml
 # ctranslate2 (faster-whisper's compiled backend) publishes no win_arm64 wheel
 # and no sdist, so this is unsatisfiable on native ARM64 Python for Windows.
 # Left unguarded it doesn't just fail — pip backtracks through every older

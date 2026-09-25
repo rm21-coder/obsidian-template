@@ -137,3 +137,17 @@ class TestAdversarialReviewRound2:
         hbp.download_blob(_Session(b"PWN"), "n.json", inbox / "n.json")
         assert victim.read_text() == "original"
         assert (inbox / "n.json").read_bytes() == b"PWN"
+
+
+def test_listing_with_entity_declarations_is_refused() -> None:
+    """defusedxml (B314 closed 2026-09-25): Azure never declares entities."""
+    body = (b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]>'
+            b'<EnumerationResults><Blobs><Blob><Name>&a;</Name></Blob></Blobs></EnumerationResults>')
+    with pytest.raises(hbp.BlobRefused, match="declares entities"):
+        hbp.list_blob_names(_Session(body))
+
+
+def test_ordinary_listing_still_parses() -> None:
+    body = (b'<?xml version="1.0" encoding="utf-8"?><EnumerationResults><Blobs>'
+            b'<Blob><Name>schedule-handoff-2026-09-25.v1.json</Name></Blob></Blobs></EnumerationResults>')
+    assert hbp.list_blob_names(_Session(body)) == ["schedule-handoff-2026-09-25.v1.json"]

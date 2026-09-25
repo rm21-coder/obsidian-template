@@ -34,21 +34,9 @@ semgrep  Templates/Scripts/meeting_pull.py          dangerous-subprocess-use-tai
 semgrep  Templates/Scripts/morning_dashboard.py     dangerous-subprocess-use-tainted-env-args   # list form; LAUNCHCTL_BIN defaults to /bin/launchctl, env override is a test seam. re-check 2026-11-25
 
 # --- XML parsed with ElementTree (bandit B314 / semgrep use-defused-xml) -----
-# ACCEPTED, NOT DISMISSED. These are real: xml.etree.ElementTree is documented
-# as not secure against maliciously constructed data (entity expansion /
-# quadratic blowup). The fix is defusedxml, which is already present in the
-# resolved dependency tree transitively but is NOT declared in
-# requirements.txt - declaring a new dependency on a cross-platform template is
-# a deliberate change, not a drive-by. Tracked as an open finding for CISO
-# packet v2.3 rather than silently closed.
-#   podcast_transcribe.py parses a podcast RSS feed, which is genuinely
-#   untrusted external input. This is the one that matters.
-#   handoff_blob_pull.py parses an Azure Blob listing; the Blob relay was
-#   dropped 2026-08-13 and survives as an optional secondary path.
-bandit   Templates/Scripts/podcast_transcribe.py    B314   # OPEN FINDING: untrusted RSS via ElementTree. Fix = declare defusedxml. re-check 2026-09-25
-bandit   Templates/Scripts/handoff_blob_pull.py     B314   # OPEN FINDING: Azure listing via ElementTree; relay is dropped/optional. re-check 2026-09-25
-semgrep  Templates/Scripts/podcast_transcribe.py    use-defused-xml   # as above. re-check 2026-09-25
-semgrep  Templates/Scripts/handoff_blob_pull.py     use-defused-xml   # as above. re-check 2026-09-25
+# CLOSED 2026-09-25: podcast_transcribe.py and handoff_blob_pull.py now parse
+# with defusedxml (declared in requirements.txt); neither imports the stdlib
+# parser any more. Nothing is suppressed for this class.
 
 # --- unpinned model download (bandit B615) ----------------------------------
 # ACCEPTED, NOT DISMISSED. snapshot_download() has no `revision`, so it fetches
