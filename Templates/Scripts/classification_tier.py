@@ -25,6 +25,7 @@ Stdlib only and import-light, so every gate can use it.
 from __future__ import annotations
 
 import re
+import unicodedata
 
 TIERS = ("public", "internal-use-only", "confidential", "restricted")
 TIER_RANK = {t: i for i, t in enumerate(TIERS)}
@@ -55,33 +56,75 @@ def _value(raw: str) -> str:
     return v.strip().lower()
 
 
-def declared(text: str) -> list[str]:
-    """Every value declared for `classification` in the frontmatter, in order.
+# A top-level line this reader fully understands: a plain key, a colon, then
+# a space or end of line. Plain YAML keys cannot contain escapes, quotes or
+# flow syntax, which is exactly what makes them readable without a parser.
+_PLAIN_KEY_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_ .-]*[ \t]*:(?:[ \t]|$)")
+UNREADABLE = "(frontmatter the gate cannot read reliably)"
 
-    A key with an empty value followed by an indented line is YAML's
-    multi-line form, which this does not interpret: it is reported as the
-    literal "(multi-line value)" so a gate treats it as unrecognised.
+
+def _fold(s: str) -> str:
+    return unicodedata.normalize("NFKC", s).casefold()
+
+
+def declared(text: str) -> list[str]:
+    """Every value declared for `classification`, in order, plus UNREADABLE
+    wherever the frontmatter takes a shape this reader cannot interpret.
+
+    Round 2 of the adversarial review (2026-09-25) showed why a regex over
+    "column-0 key lines" is not enough on its own: frontmatter written as a
+    JSON/flow mapping -- `{"classification": "restricted", ...}` -- or with a
+    quoted key is valid YAML that Obsidian reads, and the regex saw either a
+    planted nested `classification: public` or nothing at all. Rather than
+    grow a YAML parser (stdlib only, and it would still disagree with
+    Obsidian's somewhere), anything at top level that is not a plain
+    `key: value` line or a block-list item is reported as UNREADABLE, which
+    every gate treats as an unrecognised tier: fail closed. Measured on the
+    maintainer's 2,836-note vault, no note uses such a line.
     """
     fm = frontmatter(text)
     if fm is None:
         return []
     out: list[str] = []
     lines = fm.splitlines()
-    for m in _KEY_RE.finditer(fm):
-        v = _value(m.group(1))
-        if not v:
-            line_no = fm.count("\n", 0, m.start())
-            nxt = lines[line_no + 1] if line_no + 1 < len(lines) else ""
-            if nxt[:1] in (" ", "\t"):
-                v = "(multi-line value)"
-        out.append(v)
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        nxt = lines[idx + 1] if idx + 1 < len(lines) else ""
+        if line[:1] in (" ", "\t"):
+            # Indented: a continuation, a nested mapping or a list item. A
+            # nested `classification` is not the note's tier, but it is a
+            # claim about it the gate cannot place -- fail closed.
+            if re.match(r"^[ \t]+[\"']?classification[\"']?[ \t]*:", _fold(line)):
+                out.append(UNREADABLE)
+            continue
+        if line.startswith("-"):
+            continue                    # block-list item of the key above
+        m = _KEY_RE.match(line)
+        if m:
+            v = _value(m.group(1))
+            quoted = m.group(1).strip()[:1] in ("'", '"')
+            if nxt[:1] in (" ", "\t") and not nxt.lstrip().startswith(("-", "#")):
+                # YAML folds an indented next line into this value
+                # ("public" + "restricted" -> "public restricted"); an
+                # empty value with an indented line is a nested/multi-line
+                # value. Either way, not something to read literally.
+                if not v or not quoted:
+                    v = "(multi-line value)"
+            out.append(v)
+            continue
+        if not _PLAIN_KEY_RE.match(line):
+            out.append(UNREADABLE)
     return out
 
 
 def effective(text: str) -> tuple[str | None, list[str]]:
     """(most restrictive recognised tier or None, unrecognised declared values).
 
-    An empty declared value counts as no value at all.
+    An empty declared value counts as no value at all. Gates must treat a
+    non-empty second element as "cannot evaluate", whatever the first says:
+    PyYAML and Obsidian may read a different value than the one recognised.
     """
     values = [v for v in declared(text) if v]
     known = [v for v in values if v in TIER_RANK]

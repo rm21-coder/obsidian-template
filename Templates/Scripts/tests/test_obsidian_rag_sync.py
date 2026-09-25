@@ -277,3 +277,21 @@ def test_remove_still_raises_on_a_real_error(rag, monkeypatch):
     monkeypatch.setattr(rag.session, "post", lambda url, **kw: FakeResponse(500))
     with pytest.raises(requests.HTTPError):
         rag.remove_from_collection("file-1")
+
+
+@pytest.mark.parametrize("fm, excluded", [
+    ('classification: public\nclassification: restricted', True),      # most restrictive wins
+    ('classification: restricted   # PHI', True),                      # comment
+    ('{"classification": "restricted"}', True),                        # flow mapping: unreadable
+    ('"classification": restricted', True),                            # quoted key: unreadable
+    ('classification: confidential', False),
+])
+def test_upload_gate_reads_the_tier_the_way_every_gate_does(rag, fm: str, excluded: bool) -> None:
+    """A restricted note must never reach the RAG index because of how its
+    frontmatter is spelled. Adversarial review, 2026-09-25."""
+    value = rag.parse_classification(f"---\n{fm}\n---\nbody\n")
+    # None means "no tier" -- which rag-sync INDEXES (missing -> default
+    # internal-use-only). Only a known-excluded or unknown value is excluded.
+    is_excluded = value is not None and (value in rag.EXCLUDED_CLASSIFICATIONS
+                                         or value not in rag.KNOWN_CLASSIFICATIONS)
+    assert is_excluded == excluded, value

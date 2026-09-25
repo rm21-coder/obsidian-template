@@ -84,11 +84,34 @@ CLASSIFICATION_RE = re.compile(r"(?mi)^classification[ \t]*:(.*)$")
 REQUIRED_VALUE = "public"
 
 
+def _shared_tier_reader():
+    """Templates/Scripts/classification_tier.py from this checkout, the one
+    reader every gate shares, or None if the checkout does not carry it (the
+    inline fallback below then applies the same core rule)."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[2] / "Templates" / "Scripts" / "classification_tier.py"
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("_classification_tier", path)
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except Exception:  # noqa: BLE001 -- fall back rather than skip the audit
+        return None
+    return mod
+
+
 def parse_classification(text: str) -> str | None:
     """Return the lowercased classification value from frontmatter, or None
     if there is no frontmatter or no `classification:` key. Strings are
     unquoted (`"public"` and `public` both resolve to `public`).
     """
+    shared = _shared_tier_reader()
+    if shared is not None:
+        tier, unknown = shared.effective(text)
+        if unknown:
+            return unknown[0]
+        return tier
     m = FRONTMATTER_RE.match(text.lstrip("\ufeff"))
     if not m:
         return None
