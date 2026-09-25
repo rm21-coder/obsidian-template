@@ -379,8 +379,11 @@ class TestKickstartAgent:
         calls = self._capture(monkeypatch)
         assert sc.kickstart_agent("ignored",
                                   windows_task=r"\Obsidian\security-integrity") is True
-        assert calls[0][0] == ["schtasks", "/Run", "/TN",
+        assert calls[0][0] == [sc.SCHTASKS_EXE, "/Run", "/TN",
                                r"\Obsidian\security-integrity"]
+        # Absolute, never resolved through PATH or the current directory.
+        assert sc.SCHTASKS_EXE.lower().endswith(("system32\\schtasks.exe",
+                                                 "system32/schtasks.exe"))
 
     def test_windows_without_a_task_name_is_a_noop(self, monkeypatch) -> None:
         monkeypatch.setattr(sys, "platform", "win32")

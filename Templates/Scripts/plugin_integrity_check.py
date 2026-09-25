@@ -199,12 +199,15 @@ def load_allowlist() -> dict[str, dict]:
     signed envelope is tamper too -- see below."""
     if not ALLOWLIST_PATH.exists():
         return {}
+    # Every way the file can fail to be a readable JSON document is tamper,
+    # not a crash or a quiet log line. Non-JSON used to exit 2 with only a log
+    # line; invalid UTF-8 and a directory in its place escaped as uncaught
+    # exceptions -- no alert, no notification, the control simply stopped
+    # reporting. Adversarial review of the M-DASH fixes, 2026-09-25.
     try:
         raw = json.loads(ALLOWLIST_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        security_common.log("plugin-check",
-                            f"FATAL: allowlist corrupt: {e}")
-        sys.exit(2)
+    except (ValueError, OSError) as e:      # JSONDecodeError, UnicodeDecodeError ⊂ ValueError
+        _fire_tamper(f"allowlist unreadable or not JSON ({type(e).__name__})")
 
     # An unsigned file is refused, not "migrated". This branch used to
     # accept any file lacking the envelope keys as a trusted pre-v1.4
@@ -223,7 +226,9 @@ def load_allowlist() -> dict[str, dict]:
 
     state = raw.get("state")
     stored_hmac = raw.get("hmac")
-    if not isinstance(state, dict) or not isinstance(stored_hmac, str):
+    if not isinstance(state, dict) or not isinstance(stored_hmac, str) \
+            or not stored_hmac.isascii():
+        # isascii: hmac.compare_digest raises TypeError on a non-ASCII str.
         _fire_tamper("allowlist envelope malformed")  # noqa: returns sys.exit
     key = _require_hmac_key()
     expected = _compute_hmac(state, key)
@@ -368,12 +373,20 @@ def main(argv: list[str]) -> int:
     if not allowlist:
         # First run with no baseline — refuse to silently accept everything.
         # Tell the user to vet manually then run with --update.
-        msg = (f"No baseline yet. Vet the {len(current)} installed "
-               f"plugin(s), then run: plugin_integrity_check.py --update")
+        # Worded so it does not invite adopting whatever is installed: on a
+        # machine that HAD a baseline, a missing allowlist means it was
+        # deleted, and --update would certify the state the deletion hid.
+        # (The integrity monitor reports the deletion independently, since
+        # the allowlist is one of its state-dir trust anchors.)
+        msg = (f"No allowlist. If this machine never had one, vet the "
+               f"{len(current)} installed plugin(s), then run "
+               f"plugin_integrity_check.py --update. If it DID have one, it "
+               f"has been deleted: investigate before adopting anything.")
         security_common.log("plugin-check", msg)
         if not args.json:
             security_common.notify("Obsidian plugin integrity",
-                   "No baseline. Run with --update after vetting.")
+                   "No allowlist. If one existed it was deleted: investigate "
+                   "before --update.")
         if args.json:
             print(json.dumps({"status": "no_baseline",
                               "current": current}, indent=2))
