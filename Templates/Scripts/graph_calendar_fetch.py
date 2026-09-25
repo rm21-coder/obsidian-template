@@ -198,10 +198,14 @@ def _graph_get(url, access_token, prefer_tz=None):
     # the previous response, so a tampered response could name any host --
     # over any scheme -- and the bounded loop would dutifully send the bearer
     # token there. Adversarial review of the M-DASH [0] fix, 2026-09-25.
-    parts = urllib.parse.urlsplit(url)
+    try:
+        parts = urllib.parse.urlsplit(url)
+        port = parts.port       # raises on a malformed port: keep it inside
+    except ValueError:
+        die("refusing a malformed Graph URL")
     if (parts.scheme != "https"
             or (parts.hostname or "").lower() != _GRAPH_ORIGIN.hostname
-            or parts.port not in (None, 443)
+            or port not in (None, 443)
             or parts.username or parts.password):
         die("refusing to send the Graph token to %s://%s"
             % (parts.scheme, parts.hostname or "?"))
