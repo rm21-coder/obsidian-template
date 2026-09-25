@@ -72,6 +72,8 @@ class HandoffRecord:
 def validate_schema(payload: dict,
                     supported: frozenset = SUPPORTED_SCHEMA_VERSIONS) -> None:
     """Raise HandoffError unless the payload matches a supported schema."""
+    if not isinstance(payload, dict):
+        raise HandoffError("payload is not a JSON object")
     sv = payload.get("schema_version")
     if sv not in supported:
         raise HandoffError(
@@ -79,6 +81,15 @@ def validate_schema(payload: dict,
     missing = [k for k in REQUIRED_TOP_LEVEL if k not in payload]
     if missing:
         raise HandoffError(f"missing required top-level keys: {missing}")
+    # Types, not just presence. A string where the meetings list belongs
+    # crashed the consumer before its per-meeting error handling, the handoff
+    # was never acked, and every later run crashed on it again. Adversarial
+    # review round 2, 2026-09-25. Per-meeting shape is checked by the
+    # consumer, which skips a bad meeting rather than the whole handoff.
+    for key, kind in (("meetings", list), ("contacts", list), ("user", dict)):
+        if key in payload and not isinstance(payload[key], kind):
+            raise HandoffError(f"`{key}` must be a JSON {kind.__name__}, "
+                               f"got {type(payload[key]).__name__}")
 
 
 def sha256_hex(data: bytes) -> str:

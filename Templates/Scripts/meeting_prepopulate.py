@@ -1862,6 +1862,23 @@ def _is_cancelled(m: dict) -> tuple[bool, str]:
 # Main
 # ============================================================
 
+MAX_ATTENDEES = 250
+
+
+def _meeting_shape_problem(m) -> str | None:
+    """Why a handoff meeting cannot be processed, or None if it can."""
+    if not isinstance(m, dict):
+        return f'not an object ({type(m).__name__})'
+    for key in ('uid', 'subject', 'start', 'end'):
+        if m.get(key) is not None and not isinstance(m[key], str):
+            return f'`{key}` is {type(m[key]).__name__}, not a string'
+    att = m.get('attendees')
+    if att is not None and (not isinstance(att, list)
+                            or not all(isinstance(a, dict) for a in att)):
+        return '`attendees` is not a list of objects'
+    return None
+
+
 def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                     dry_run: bool, no_move: bool) -> int:
     # Integrity (SHA-256), producer signature, and schema were already verified
@@ -1879,9 +1896,10 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
     now_iso = now.isoformat(timespec='seconds')
 
     user_email = (payload.get('user', {}).get('email') or '').lower()
-    contact_by_email = {(c.get('email') or '').lower(): c
-                        for c in payload.get('contacts', [])
-                        if c.get('email')}
+    contact_by_email = {c['email'].lower(): c
+                        for c in payload.get('contacts') or []
+                        if isinstance(c, dict) and isinstance(c.get('email'), str)
+                        and c['email']}
 
     people_idx = PeopleIndex()
     people_idx.load()
@@ -1915,7 +1933,15 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                  len(learned['suppress']), len(learned['participants']),
                  len(learned['types']))
 
-    for m in payload.get('meetings', []):
+    for m in payload.get('meetings') or []:
+        # A malformed meeting is skipped and counted, never retried: it will
+        # not become well-formed on the next run, and treating it as an error
+        # withheld the ack for the whole handoff forever.
+        bad = _meeting_shape_problem(m)
+        if bad:
+            log.warning('  SKIP malformed meeting: %s', bad)
+            counters['meeting-invalid'] += 1
+            continue
         uid = m.get('uid') or ''
         prev = seen_state.get(uid) if uid else None
         cancelled, cancel_reason = _is_cancelled(m)
@@ -1987,8 +2013,16 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
 
             # Resolve attendees -> stubs / wikilinks (required only;
             # optional and admin-demoted attendees excluded)
+            attendees = m.get('attendees') or []
+            if len(attendees) > MAX_ATTENDEES:
+                # One invite could otherwise write thousands of People stubs
+                # into the synced vault, and every later run rescans them.
+                log.warning('  %d attendees; resolving the first %d only',
+                            len(attendees), MAX_ATTENDEES)
+                counters['attendees-truncated'] += 1
+                attendees = attendees[:MAX_ATTENDEES]
             required = build_people_wikilinks(
-                m.get('attendees') or [], contact_by_email, people_idx,
+                attendees, contact_by_email, people_idx,
                 now_iso, dry_run, counters, user_email, admin_emails,
                 count_optional_as_participants(m))
 

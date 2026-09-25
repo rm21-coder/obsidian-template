@@ -282,6 +282,7 @@ class TestTokenGoesOnlyToGraph:
         "https://graph.microsoft.com.attacker.example/v1.0/x",
         "https://user" + "@" + "graph.microsoft.com/v1.0/x",  # split so it is not an address
         "https://graph.microsoft.com:8443/v1.0/x",
+        "https://graph.microsoft.com:99999/v1.0/x",       # malformed port: refused, not a crash
     ])
     def test_next_link_off_graph_is_refused_before_any_request(
             self, monkeypatch, link) -> None:

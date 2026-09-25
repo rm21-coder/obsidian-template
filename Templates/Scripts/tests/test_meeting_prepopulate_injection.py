@@ -173,3 +173,34 @@ def test_reschedule_cannot_overwrite_outside_meetings(meetings: Path, tmp_path: 
                               dry_run=False, changes=[])
     assert out is None
     assert victim.read_text() == "keep"
+
+
+# ---------------------------------------------------------------------------
+# Round 2: a wrong-typed handoff must not crash every run or withhold the ack.
+
+import handoff_source as hs
+
+
+@pytest.mark.parametrize("payload_patch", [
+    {"meetings": "x"}, {"contacts": "x"}, {"user": ["x"]},
+])
+def test_wrong_container_types_are_a_schema_error(payload_patch: dict) -> None:
+    payload = {"schema_version": next(iter(hs.SUPPORTED_SCHEMA_VERSIONS)),
+               **{k: [] for k in hs.REQUIRED_TOP_LEVEL if k != "schema_version"}}
+    payload.update(payload_patch)
+    with pytest.raises(hs.HandoffError, match="must be a JSON"):
+        hs.validate_schema(payload)
+
+
+@pytest.mark.parametrize("m", [
+    "x", None, 42, {"uid": ["a"]}, {"uid": "u", "subject": {"x": 1}},
+    {"uid": "u", "attendees": "bob"}, {"uid": "u", "attendees": [1, 2]},
+])
+def test_malformed_meeting_is_named(m) -> None:
+    assert mp._meeting_shape_problem(m)
+
+
+def test_well_formed_meeting_passes_the_shape_check() -> None:
+    assert mp._meeting_shape_problem({"uid": "u", "subject": "s", "start": "2026-09-25T09:00:00",
+                                      "end": "2026-09-25T10:00:00",
+                                      "attendees": [{"email": "a@example.com"}]}) is None
