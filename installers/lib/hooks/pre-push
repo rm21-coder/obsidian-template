@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# pre-push — full standing security suite before anything reaches the remote.
+#
+# pre-commit runs only `security-checks.sh --fast` (secrets + shell), because a
+# hook that costs a minute on every commit is a hook people learn to bypass.
+# That left semgrep, bandit, pip-audit and the dynamic checks running only when
+# someone remembered to -- and the full suite once sat FAILING on main,
+# unnoticed, across several sessions' commits. A push is rarer than a commit
+# and is the moment code becomes public, so it can afford the ~40s --full run.
+#
+# Pushes need the network, and so does --full (pip-audit queries PyPI, semgrep
+# fetches its registry rulesets), so this adds no new failure mode offline. A
+# scanner that is not installed is a named SKIP, not a failure; so is a stopped
+# open-webui container.
+#
+# To bypass for a single push (you should know why):
+#     git push --no-verify
+#
+# Installed by ./installers/install-git-hooks.sh.
+
+set -u
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+    echo "pre-push: not a git repository, skipping security suite." >&2
+    exit 0
+}
+
+# stdin carries one line per ref: <local ref> <local sha> <remote ref> <remote sha>.
+# A push that only deletes remote refs publishes no code; don't make it wait.
+ZERO="0000000000000000000000000000000000000000"
+publishes=0
+while read -r _lref lsha _rref _rsha; do
+    [[ -n "${lsha:-}" && "$lsha" != "$ZERO" ]] && publishes=1
+done
+if [[ $publishes -eq 0 ]]; then
+    exit 0
+fi
+
+CHECKS="$REPO_ROOT/installers/lib/security-checks.sh"
+if [[ ! -x "$CHECKS" ]]; then
+    echo "pre-push: $CHECKS not found or not executable, skipping." >&2
+    exit 0
+fi
+
+# Temp artifacts, as in pre-commit: kept on failure so the detail is reachable,
+# removed on success. The dated evidence set for a packet build is a separate,
+# deliberate --full run into the default artifact directory.
+HOOK_ARTIFACTS="$(mktemp -d -t obsidian_prepush)"
+echo "pre-push: running full security suite (~40s)..." >&2
+if ! "$CHECKS" --full --artifacts "$HOOK_ARTIFACTS" > "$HOOK_ARTIFACTS/summary.txt" 2>&1; then
+    echo "" >&2
+    grep -E "^\s+\S+\s+FAIL" "$HOOK_ARTIFACTS/summary.txt" >&2 || true
+    echo "" >&2
+    echo "pre-push: security suite FAILED. Push refused." >&2
+    echo "Details: $HOOK_ARTIFACTS" >&2
+    echo "Re-run yourself with: installers/lib/security-checks.sh --full" >&2
+    echo "Override with --no-verify only if you know why." >&2
+    exit 1
+fi
+grep -E "^RESULT:" "$HOOK_ARTIFACTS/summary.txt" | sed 's/ (artifacts:.*//; s/^/pre-push: /' >&2
+rm -rf "$HOOK_ARTIFACTS"
+exit 0

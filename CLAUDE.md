@@ -122,9 +122,14 @@ installers/lib/security-checks.sh --dast     # the dynamic checks alone
 
 - **Every commit, automatically:** the `pre-commit` hook runs `--fast`. That is
   secrets + shell only, the two passes that stop an *irreversible* mistake on a
-  public repo. Install it with `./installers/install-git-hooks.sh`.
+  public repo.
+- **Every push, automatically:** the `pre-push` hook runs `--full` (~40s) and
+  refuses the push on any FAIL. `--fast` alone once let the full suite sit
+  failing on `main` unnoticed; a push is when code becomes public. Install both
+  hooks with `./installers/install-git-hooks.sh`.
 - **Before a release, a packet build, or copying scripts into a live vault:**
-  `--full`, no exceptions and no partial runs.
+  `--full` into the default artifact directory, no exceptions and no partial
+  runs. The hook's run does not count: it keeps no artifacts on success.
 - **Otherwise, when you change code:** name the passes the change implicates
   and ask whether to run them. Do not run a long pass silently, and do not skip
   the question.
