@@ -36,7 +36,15 @@ TIER_RANK = {t: i for i, t in enumerate(TIERS)}
 # first later line that STARTS with "---" -- "----" and "--- end" included.
 # A reader that ended only at a bare "---" kept reading into what Obsidian
 # shows as body text, where a decoy `classification: public` was waiting.
-_OPEN_RE = re.compile(r"\A\ufeff?---\n")
+#
+# Up to TWO byte-order marks: Obsidian's decoder strips one and its markdown
+# parser a second, so a double-BOM file still has frontmatter to Obsidian.
+# Allowing one here hid the whole block (round 4, a differential fuzz of ~4.5M
+# cases against Obsidian's own worker; the only under-read it found).
+_OPEN_RE = re.compile(r"\A\ufeff{0,2}---\n")
+# Line breaks to YAML 1.1 (PyYAML, which the classifier uses) but not to
+# Obsidian's YAML 1.2: the two parsers would see different keys.
+_ALT_BREAKS = ("\x85", "\u2028", "\u2029")
 
 
 def frontmatter(text: str) -> str | None:
@@ -93,10 +101,16 @@ def declared(text: str) -> list[str]:
     if fm is None:
         return []
     out: list[str] = []
+    if any(ch in fm for ch in _ALT_BREAKS):
+        out.append(UNREADABLE)
     lines = fm.split("\n")
     seen_key = False
+    list_ok = False
+    declared_once = False
     for idx, line in enumerate(lines):
-        stripped = line.strip()
+        # Only space and tab are YAML whitespace. str.strip() also removes
+        # NBSP, U+3000 and form feed, which made content lines look blank.
+        stripped = line.strip(" \t")
         if not stripped or stripped.startswith("#"):
             continue
         if line[:1] in (" ", "\t"):
@@ -104,7 +118,10 @@ def declared(text: str) -> list[str]:
                 out.append(UNREADABLE)
             continue
         if line.startswith("-"):
-            if not seen_key:
+            # A list item belongs to a key with an empty value (or follows
+            # another item). After a scalar value it is a YAML error, and
+            # Obsidian then shows no properties at all.
+            if not (seen_key and list_ok):
                 out.append(UNREADABLE)
             continue
         m = _PLAIN_KEY_RE.match(line)
@@ -113,6 +130,7 @@ def declared(text: str) -> list[str]:
             continue
         seen_key = True
         key = m.group(1)
+        list_ok = not line[m.end():].strip(" \t") or line[m.end():].lstrip(" \t").startswith("#")
         if key == "classification":
             sm = _STRICT_RE.match(line)
             nxt = next((ln for ln in lines[idx + 1:]
@@ -121,7 +139,16 @@ def declared(text: str) -> list[str]:
                 out.append(UNREADABLE)
             else:
                 out.append((sm.group(1) or sm.group(2) or sm.group(3)).lower())
-        elif "classif" in _fold(key) and not _SIBLING_KEY_RE.fullmatch(key):
+                if declared_once:
+                    # Obsidian's YAML parser rejects a duplicate key and shows
+                    # no properties at all; PyYAML takes the last. The value is
+                    # still counted (most restrictive), and the note is flagged.
+                    out.append(UNREADABLE)
+                declared_once = True
+        elif "classif" in re.sub(r"[\s_\-.\u200b-\u200d\u2060\ufeff]", "", _fold(key)) \
+                and not _SIBLING_KEY_RE.fullmatch(key):
+            # Near-miss spellings ("clas sification") are not the tier to any
+            # parser, but they are a claim about it: fail closed.
             out.append(UNREADABLE)
     return out
 

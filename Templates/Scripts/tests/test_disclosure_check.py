@@ -628,3 +628,23 @@ def test_symlink_alias_of_a_folder_is_indexed_under_both_paths(vault: Path):
     (vault / "Aalias").symlink_to(real)
     host = note(vault, "Host", body="![[Aalias/Secret]]", tier="public")
     _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+# Round 4: differential fuzz against Obsidian's own frontmatter worker.
+@pytest.mark.parametrize("text", [
+    "﻿﻿---\nclassification: restricted\n---\nPHI\n",       # two BOMs: Obsidian reads it
+])
+def test_double_bom_frontmatter_is_read(vault: Path, text: str):
+    p = vault / "Knowledge" / "R.md"; p.write_text(text, encoding="utf-8")
+    assert D.note_tier(p) == "restricted"
+    _assert_restricted_blocks(D.evaluate([p], "confidential")[0])
+
+
+@pytest.mark.parametrize("fm", ["a:  classification: restricted",
+                                "# classification: restricted",
+                                "a: x\x85classification: restricted",
+                                "classification: public\n\xa0",
+                                "classification: public\n　"])
+def test_parser_disagreements_are_unreadable(vault: Path, fm: str):
+    p = vault / "Knowledge" / "R.md"; p.write_text(f"---\n{fm}\n---\nbody\n", encoding="utf-8")
+    _assert_restricted_blocks(D.evaluate([p], "public", unclassified_as="public")[0])
