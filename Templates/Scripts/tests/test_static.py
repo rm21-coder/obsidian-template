@@ -596,6 +596,34 @@ class TestCommittedModesMatchInstaller:
 
 
 # ---------------------------------------------------------------------------
+# 4g. The dashboard URL scheme must never be able to rebaseline security.
+#
+# obsidian-dashboard:// is a registered URL scheme, so any web page can fire
+# it. A rebaseline action on it let a page erase a tamper the integrity
+# controls had just detected. Removed 2026-09-25.
+# ---------------------------------------------------------------------------
+
+class TestDashboardSchemeCannotRebaseline:
+
+    @pytest.mark.parametrize("name", ["dashboard_actions.sh",
+                                      "morning_dashboard.py",
+                                      "build_dashboard_actions_app.sh"])
+    def test_no_rebaseline_action_or_link(self, scripts_dir: Path, name: str) -> None:
+        text = (scripts_dir / name).read_text(encoding="utf-8")
+        live = [ln for ln in text.splitlines()
+                if "rebaseline-security" in ln and not ln.lstrip().startswith("#")]
+        assert not live, (
+            f"{name} exposes rebaseline-security on the obsidian-dashboard:// "
+            f"scheme, which any web page can open: {live}")
+
+    def test_dispatcher_does_not_run_update_at_all(self, scripts_dir: Path) -> None:
+        code = [ln for ln in (scripts_dir / "dashboard_actions.sh").read_text(
+            encoding="utf-8").splitlines() if not ln.lstrip().startswith("#")]
+        assert not any("--update" in ln for ln in code), (
+            "the URL-scheme dispatcher runs a control with --update")
+
+
+# ---------------------------------------------------------------------------
 # 5. Installer Keychain invariants.
 #
 # These are source assertions rather than behavior tests because the behavior
