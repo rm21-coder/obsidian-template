@@ -4,6 +4,15 @@ This file gives Claude Code the context it needs to work in this repository.
 Read it first. The project context lives here, in the repo, where every
 machine (macOS **and** Windows) can see it.
 
+## If you are helping someone INSTALL this, read ONBOARDING.md instead
+
+This file is for changing the template. `ONBOARDING.md` is the companion for
+getting it running on a new machine: prerequisites a human has to satisfy, the
+one install command, first-run checks, and the failure catalogue. It also sets
+the rule that Claude explains and diagnoses while the human runs the
+installer. Keep the two in step — if you change install behaviour here, the
+onboarding doc is downstream of it.
+
 ## What this repository is
 
 A public, shareable **template** for an Obsidian "second brain" plus the
