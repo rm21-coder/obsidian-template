@@ -108,7 +108,9 @@ Enable-ScheduledTask -TaskName meeting-pull -TaskPath '\Obsidian\'
 
 ## First run — check it actually works
 
-Do these in order. The first two are safe to re-run anytime.
+Do these in order. The first two are safe to re-run anytime. Run them from
+the vault folder (`~/Obsidian`, or `%USERPROFILE%\Obsidian` on Windows) — the
+relative ones below depend on it, and nothing here is on your PATH.
 
 ```bash
 ./install.sh --only 90-verify
