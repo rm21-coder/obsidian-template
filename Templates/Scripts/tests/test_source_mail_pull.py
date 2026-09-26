@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 import source_mail_pull as smp
+from platform_caps import requires_sigalrm
 
 KEY = "test-key-not-the-real-one"
 
@@ -453,6 +454,7 @@ class TestHangGuards:
         this job is 300s."""
         assert smp.RUN_DEADLINE_SEC < 300
 
+    @requires_sigalrm
     def test_the_deadline_fires_and_names_the_consequence(self) -> None:
         import time
         assert smp._arm_deadline(1) is True

@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 import integrity_monitor as im
+from platform_caps import requires_fifo
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +91,7 @@ class TestScanStateDir:
         assert "plugin_allowlist.json" in out
         assert "integrity_state.json" not in out
 
+    @requires_fifo
     def test_fifo_is_reported_not_opened(self, tmp_state_dir: Path) -> None:
         """A FIFO planted as plugin_allowlist.json blocked this scan forever
         (adversarial review round 2, 2026-09-25). It must be recorded -- so it

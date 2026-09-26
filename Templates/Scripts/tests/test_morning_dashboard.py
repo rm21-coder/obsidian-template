@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 import morning_dashboard as md
+from platform_caps import macos_only
 
 
 ON_MACOS = sys.platform == "darwin"
@@ -222,6 +223,7 @@ def _fake_print(out: str, rc: int = 0):
     return lambda *a, **kw: Result()
 
 
+@macos_only
 def test_print_parses_the_crash_loop_signature(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _fake_print(PRINT_OUTPUT))
 
@@ -232,6 +234,7 @@ def test_print_parses_the_crash_loop_signature(monkeypatch):
     assert got["min_runtime"] == 10
 
 
+@macos_only
 def test_print_is_not_fooled_by_nested_state_lines(monkeypatch):
     """The job's state, not a coalition's."""
     monkeypatch.setattr(subprocess, "run", _fake_print(PRINT_OUTPUT))
@@ -239,6 +242,7 @@ def test_print_is_not_fooled_by_nested_state_lines(monkeypatch):
     assert md._launchctl_print("com.voice-cleanup")["state"] == "spawn scheduled"
 
 
+@macos_only
 def test_a_never_run_job_reports_none_not_zero(monkeypatch):
     """"Never exited" and "exited 0" are different facts.
 
