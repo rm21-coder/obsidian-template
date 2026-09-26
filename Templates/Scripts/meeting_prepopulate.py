@@ -494,6 +494,28 @@ def _safe_stem(s: str) -> str:
     return s
 
 
+# Windows' classic MAX_PATH is 260 characters for the WHOLE path, including
+# the terminating NUL, unless long paths are enabled machine-wide (not
+# something a template can assume). The 200-byte stem cap above keeps a
+# filename legal on every filesystem, but on Windows the vault path plus
+# People\_Unresolved\ plus 200 characters still exceeded 260, the write
+# failed, and the invite stalled the handoff there -- found on the Windows
+# ARM64 test laptop, 2026-09-25. Leave room for a " 99" collision suffix.
+_WIN_MAX_PATH = 259
+_COLLISION_ROOM = len(" 99.md")
+
+
+def _fit_path_limit(stem: str, target_dir: Path) -> str:
+    """Shorten `stem` so target_dir/<stem 99>.md fits Windows' path limit.
+    A no-op elsewhere."""
+    if sys.platform != "win32":
+        return stem
+    budget = _WIN_MAX_PATH - len(str(target_dir.resolve())) - 1 - _COLLISION_ROOM
+    if len(stem) <= budget:
+        return stem
+    return stem[:max(budget, 8)].rstrip(". ") or "Unknown"
+
+
 def _is_credential_token(s: str) -> bool:
     return bool(re.fullmatch(
         r'(MD|PhD|Ph\.D\.|MBA|RN|MPH|DO|DDS|JD|EdD|MS|MA)', s, re.I))
@@ -1157,7 +1179,7 @@ def resolve_or_create_person(attendee: dict, contact_by_email: dict,
         return stem, 'name-match'
 
     # Step 3: create new stub (§8.1 step 3)
-    canonical = _safe_stem(canonical)
+    canonical = _fit_path_limit(_safe_stem(canonical), target_dir)
     stem = canonical
     # Handle filename collision (different person with same canonical name).
     # Check both the target dir AND the alternate dir, since the same person
@@ -1184,7 +1206,15 @@ def resolve_or_create_person(attendee: dict, contact_by_email: dict,
     log.info('  CREATE-STUB %s/%s.md  (source=%s)', rel, stem, name_source)
     if not dry_run:
         target_dir.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding='utf-8')
+        try:
+            path.write_text(content, encoding='utf-8')
+        except OSError as exc:
+            # A stub that cannot be written is skipped, never raised: an
+            # exception here withheld the handoff's ack, so the same invite
+            # failed every later run. The meeting note still gets written.
+            log.warning('  SKIPPED stub %s: %s', path.name, type(exc).__name__)
+            counters['stub-write-failed'] += 1
+            return None, 'stub-write-failed'
     # Always update in-memory index so subsequent attendees in the same
     # run don't re-create the same stub (matters in dry-run especially).
     if email:

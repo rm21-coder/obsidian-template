@@ -584,11 +584,19 @@ if (-not $prof) {
     Write-Host '                    (-ListProfiles to see what is available)'
 }
 Write-Host ''
-Write-Host 'The 12 enabled jobs are LIVE now and will fire on their triggers -- fill in'
-Write-Host '.env first if you have not, or they will log errors until you do.'
-Write-Host 'Sanity-check one by hand:'
-Write-Host ("  {0} `"{1}`"" -f $venvPy, (Join-Path $scriptsDir 'tag_clippings.py'))
-Write-Host 'The 3 disabled jobs (source-mail-pull, meeting-pull, handoff-blob-pull) each'
-Write-Host 'need a per-user resource first; validate the script, then enable deliberately:'
-Write-Host "  Enable-ScheduledTask -TaskName source-mail-pull -TaskPath '\Obsidian\'"
+if ($SkipTasks) {
+    # The banner below used to print unconditionally, telling a -SkipTasks
+    # operator that 12 jobs were live when none had been registered.
+    Write-Host 'No scheduled tasks were registered (-SkipTasks). Nothing runs on a'
+    Write-Host 'schedule until you re-run without -SkipTasks, or run:'
+    Write-Host ("  {0}" -f (Join-Path $PSScriptRoot 'Register-Tasks.ps1'))
+} else {
+    Write-Host 'The 12 enabled jobs are LIVE now and will fire on their triggers -- fill in'
+    Write-Host '.env first if you have not, or they will log errors until you do.'
+    Write-Host 'Sanity-check one by hand:'
+    Write-Host ("  {0} `"{1}`"" -f $venvPy, (Join-Path $scriptsDir 'tag_clippings.py'))
+    Write-Host 'The 3 disabled jobs (source-mail-pull, meeting-pull, handoff-blob-pull) each'
+    Write-Host 'need a per-user resource first; validate the script, then enable deliberately:'
+    Write-Host "  Enable-ScheduledTask -TaskName source-mail-pull -TaskPath '\Obsidian\'"
+}
 Write-Host 'See docs/Windows Setup.md for the full guide.'

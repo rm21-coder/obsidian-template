@@ -13,6 +13,12 @@ markitdown
 # container listing. Already installed as a markitdown dependency; declared
 # because the scripts now import it directly.
 defusedxml
+# tzdata: Windows ships no IANA time-zone database, and zoneinfo reads only
+# that or this package. Without it the whole meeting pipeline (meeting_pull,
+# meeting_prepopulate, mcp_meeting_transform, graph_calendar_fetch) failed to
+# resolve the configured zone -- which install.ps1 itself writes -- while the
+# 'UTC' fallback kept working. Found on the Windows ARM64 laptop, 2026-09-25.
+tzdata; sys_platform == "win32"
 # ctranslate2 (faster-whisper's compiled backend) publishes no win_arm64 wheel
 # and no sdist, so this is unsatisfiable on native ARM64 Python for Windows.
 # Left unguarded it doesn't just fail — pip backtracks through every older
