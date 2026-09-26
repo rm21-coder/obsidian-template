@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 import manifest_rollback as mr
+from platform_caps import requires_symlinks, POSIX_MODES
 
 
 @pytest.fixture
@@ -206,10 +207,12 @@ def test_new_manifests_are_written_outside_the_vault(tmp_path: Path,
     monkeypatch.setenv("OBSIDIAN_ROLLBACK_DIR", str(tmp_path / "rb"))
     p = mr.new_manifest_path("vault_lint", "20260925_120000")
     assert p.parent == tmp_path / "rb" and p.parent.is_dir()
-    assert oct(p.parent.stat().st_mode & 0o777) == "0o700"
+    if POSIX_MODES:   # Windows has no POSIX modes; its ACL path is tested separately
+        assert oct(p.parent.stat().st_mode & 0o777) == "0o700"
 
 
-@pytest.mark.parametrize("body", ["{not json", "[" * 100000])
+@pytest.mark.parametrize("body", ["{not json", "[" * 100000],
+                         ids=["not-json", "deep-nesting"])   # short ids: Windows env-var cap
 def test_a_malformed_manifest_is_a_refusal_not_a_traceback(tmp_path: Path, vault: Path,
                                                            body: str) -> None:
     m = mr.new_manifest_path("test", "x"); m.write_text(body)
@@ -282,6 +285,7 @@ def test_rollback_dir_inside_the_vault_is_refused(vault: Path, monkeypatch) -> N
         mr.apply_rollback(m, vault)
 
 
+@requires_symlinks
 def test_new_manifest_does_not_follow_a_planted_symlink(rollback_dir: Path, tmp_path: Path) -> None:
     victim = tmp_path / "victim.txt"; victim.write_text("keep")
     rollback_dir.mkdir(parents=True, exist_ok=True)

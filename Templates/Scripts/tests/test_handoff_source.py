@@ -13,6 +13,7 @@ import hmac
 import pytest
 
 import handoff_source as hs
+from platform_caps import CAN_SYMLINK
 
 DATA = b'{"meetings": []}'
 
@@ -62,6 +63,9 @@ def test_configured_key_file_that_is_not_a_file_fails_closed(
     if make == "directory":
         kf.mkdir()
     elif make == "dangling":
+        if not CAN_SYMLINK:
+            pytest.skip("cannot create symlinks here (Windows: Developer Mode or "
+                        "elevation) -- the dangling-key-file case is NOT verified")
         kf.symlink_to(tmp_path / "nowhere")
     monkeypatch.setenv("HANDOFF_HMAC_KEY_FILE", str(kf))
     monkeypatch.delenv("HANDOFF_HMAC_KEY", raising=False)

@@ -19,6 +19,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from platform_caps import make_cli_stub
 
 SCRIPTS = Path(__file__).resolve().parent.parent
 CHECKER = SCRIPTS / "claude_auth_check.py"
@@ -40,12 +41,12 @@ def load(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 
 def fake_cli(tmp_path: Path, name: str, stderr: str, code: int) -> str:
-    p = tmp_path / name
-    p.write_text("#!/bin/sh\n"
-                 f"cat >&2 <<'EOF'\n{stderr}\nEOF\n"
-                 f"exit {code}\n", encoding="utf-8")
-    p.chmod(0o755)
-    return str(p)
+    # A real executable on every platform (platform_caps.make_cli_stub): the
+    # old #!/bin/sh stub could not run on Windows at all.
+    source = ("import sys\n"
+              f"sys.stderr.write({stderr!r} + '\\n')\n"
+              f"sys.exit({code})\n")
+    return str(make_cli_stub(tmp_path, name, source))
 
 
 @pytest.fixture

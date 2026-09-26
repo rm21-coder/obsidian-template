@@ -26,6 +26,7 @@ from pathlib import Path
 import pytest
 
 import plugin_integrity_check as pic
+from platform_caps import requires_fifo, requires_symlinks
 
 
 # ---------------------------------------------------------------------------
@@ -407,6 +408,7 @@ class TestRound2AllowlistShapes:
     """Adversarial review round 2, 2026-09-25: each of these silenced the
     control with no alert -- one by hanging it forever."""
 
+    @requires_fifo
     def test_fifo_in_place_of_the_allowlist_is_tamper_not_a_hang(
             self, fake_keychain, tmp_state_dir) -> None:
         import os
@@ -416,6 +418,7 @@ class TestRound2AllowlistShapes:
         assert exc.value.code == 1
         assert "not a regular file" in (tmp_state_dir / "alerts.log").read_text()
 
+    @requires_symlinks
     def test_symlink_loop_is_tamper_not_no_allowlist(
             self, fake_keychain, tmp_state_dir) -> None:
         pic.ALLOWLIST_PATH.symlink_to(pic.ALLOWLIST_PATH)

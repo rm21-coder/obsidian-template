@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import disclosure_check as D
+from platform_caps import requires_symlinks
 
 
 @pytest.fixture
@@ -377,6 +378,7 @@ def test_escaped_pipe_in_a_table_is_an_alias_separator(vault: Path):
     _assert_restricted_blocks(D.evaluate([host], "public")[0])
 
 
+@requires_symlinks
 def test_symlinked_folder_is_indexed(vault: Path, tmp_path: Path):
     ext = tmp_path / "ext"; ext.mkdir()
     (ext / "Secret.md").write_text("---\nclassification: restricted\n---\nX\n")
@@ -612,8 +614,12 @@ def test_round3_embed_forms_are_judged(vault: Path, body: str):
     _assert_restricted_blocks(D.evaluate([host], "public")[0])
 
 
+# ids= matters: pytest otherwise puts the whole input into the test id, which
+# lands in the PYTEST_CURRENT_TEST environment variable -- capped at 32,767
+# characters on Windows, where these errored before running (2026-09-25).
 @pytest.mark.parametrize("body", ["![" * 20000, "![a](" + "(" * 50000,
-                                  ("![a](" + "x" * 10) * 5000, "![[" * 20000])
+                                  ("![a](" + "x" * 10) * 5000, "![[" * 20000],
+                         ids=["open-images", "open-parens", "unclosed-dests", "open-wikis"])
 def test_pathological_text_is_linear(vault: Path, body: str):
     import time
     host = note(vault, "Host", body=body, tier="public")
@@ -622,6 +628,7 @@ def test_pathological_text_is_linear(vault: Path, body: str):
     assert time.time() - t0 < 5
 
 
+@requires_symlinks
 def test_symlink_alias_of_a_folder_is_indexed_under_both_paths(vault: Path):
     real = vault / "Zreal"; real.mkdir()
     (real / "Secret.md").write_text("---\nclassification: restricted\n---\nX\n")

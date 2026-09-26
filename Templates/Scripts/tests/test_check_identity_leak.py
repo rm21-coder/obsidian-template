@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -352,6 +353,6 @@ class TestRepoIsClean:
         to hold in any clone."""
         repo_root = SCANNER.parent.parent.parent
         r = subprocess.run(
-            ("python3", str(SCANNER), "--worktree", "--quiet"),
+            (sys.executable, str(SCANNER), "--worktree", "--quiet"),
             cwd=repo_root, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr

@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import meeting_pull as mp
+from platform_caps import make_cli_stub
 
 CONFIG = {
     "display_name": "Ada Example", "email": "ada@example.edu",
@@ -180,17 +181,15 @@ class TestEndToEnd:
         monkeypatch.setattr(mp, "keep_awake", lambda cmd: cmd)
 
         def fake(reply: str, rc: int = 0) -> Path:
-            script = tmp_path / "claude"
-            script.write_text(
-                f"#!{sys.executable}\n"
+            # A real executable on every platform (see platform_caps): the
+            # shebang-only stub could not be run by Windows at all.
+            return make_cli_stub(tmp_path, "claude",
                 "import json, os, sys\n"
                 f"json.dump({{'argv': sys.argv[1:], 'cwd': os.getcwd(), "
                 "'cwd_contents': os.listdir('.')}, "
                 f"open({str(argv_log)!r}, 'w'))\n"
                 f"sys.stdout.write({reply!r})\n"
                 f"sys.exit({rc})\n")
-            script.chmod(0o755)
-            return script
 
         def run(claude: Path, *extra: str) -> int:
             monkeypatch.setattr(sys, "argv", [

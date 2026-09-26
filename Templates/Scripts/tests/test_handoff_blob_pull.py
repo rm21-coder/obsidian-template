@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import handoff_blob_pull as hbp
+from platform_caps import requires_symlinks
 
 
 class _Raw:
@@ -128,6 +129,7 @@ class TestAdversarialReviewRound2:
         monkeypatch.setattr(hbp.requests, "Session", lambda: _Session(b"<not xml"))
         assert hbp.run(dry_run=False) == 1
 
+    @requires_symlinks
     def test_planted_part_symlink_is_not_followed(
             self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         inbox = tmp_path / "in"; inbox.mkdir()
