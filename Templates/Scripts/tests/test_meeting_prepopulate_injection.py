@@ -204,3 +204,34 @@ def test_well_formed_meeting_passes_the_shape_check() -> None:
     assert mp._meeting_shape_problem({"uid": "u", "subject": "s", "start": "2026-09-25T09:00:00",
                                       "end": "2026-09-25T10:00:00",
                                       "attendees": [{"email": "a@example.com"}]}) is None
+
+
+def test_stub_path_fits_windows_max_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows ARM64 test laptop, 2026-09-25: vault path + People/ + a 200-byte
+    stem exceeded MAX_PATH, the write failed, the handoff stalled. The stem is
+    now fitted to the directory it lands in."""
+    deep = tmp_path / ("v" * 60) / ("w" * 60) / "People"
+    deep.mkdir(parents=True)
+    monkeypatch.setattr(mp, "PEOPLE_DIR", deep)
+    monkeypatch.setattr(mp, "PEOPLE_UNRESOLVED_DIR", deep / "_Unresolved")
+    monkeypatch.setattr(mp.sys, "platform", "win32")
+    stem = _resolve("Ab " * 200)
+    written = list(deep.rglob("*.md"))
+    assert written, "no stub was written"
+    assert all(len(str(p.resolve())) <= mp._WIN_MAX_PATH for p in written), \
+        [len(str(p.resolve())) for p in written]
+
+
+def test_a_stub_that_cannot_be_written_is_skipped_not_raised(people: Path, monkeypatch) -> None:
+    """Whatever the cause, a failed stub write must not propagate: that is
+    what withheld the handoff's ack."""
+    real = Path.write_text
+    def boom(self, *a, **k):
+        if self.parent.name in ("People", "_Unresolved"):
+            raise FileNotFoundError(2, "path too long")
+        return real(self, *a, **k)
+    monkeypatch.setattr(Path, "write_text", boom)
+    stem, status = mp.resolve_or_create_person(
+        {"display_name": "Pat Quinn", "email": ""}, {}, mp.PeopleIndex(), NOW,
+        dry_run=False, counters=Counter())
+    assert (stem, status) == (None, "stub-write-failed")
