@@ -149,6 +149,22 @@ all back out cleanly.
 Logs live in `~/Library/Logs/` on macOS (`meeting-pull.log`, `tag-clippings.log`,
 `obsidian-classify.log`, and so on). Read the log before theorising.
 
+On Windows, every job logs to `%LOCALAPPDATA%\obsidian-logs\<task-name>.log`
+(`tag-clippings.log`, `meeting-pull.log`, `morning-dashboard.log`, …), stdout
+and stderr together in one file. Task Scheduler itself throws a job's output
+away; the tasks run each script through `run_logged.py`, which captures it. A
+failed run ends with a `run_logged: <task> exited with code N` line. Each log
+is capped at 5 MB, with one older generation kept as `<task-name>.log.1`.
+
+```powershell
+Get-Content "$env:LOCALAPPDATA\obsidian-logs\tag-clippings.log" -Tail 50
+```
+
+If that directory is empty or missing, the tasks were registered by an older
+version that ran scripts directly. Re-run `Register-Tasks.ps1` to pick up the
+runner. `Get-ScheduledTaskInfo -TaskName <name> -TaskPath '\Obsidian\'` still
+gives the last run time and exit code.
+
 **Every model call fails with `Connection error`.** You are off the VPN. The
 gateway is internal-only. Reconnect and re-run; the scheduled jobs will catch
 up on their own.

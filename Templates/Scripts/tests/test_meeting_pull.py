@@ -232,3 +232,74 @@ class TestEndToEnd:
         reply = json.dumps({"is_error": True, "result": "Invalid API key · Please run /login"})
         assert run(fake(reply, rc=1)) == mp.EXIT_AUTH
         assert "Please run /login" in capsys.readouterr().out
+
+
+class TestTheLogIsWhereTheNotificationSays:
+    """The failure notification names a log file, so that file has to exist
+    on the platform the notification fires on.
+
+    On Windows, Task Scheduler discards stdout, and the notification used to
+    tell Windows users to open ~/Library/Logs/meeting-pull.log -- a macOS path,
+    pointing at a file that was never written on any Windows machine. The task
+    now runs under run_logged.py, which writes the log; this names it.
+    """
+
+    def test_windows_log_lives_under_localappdata(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(mp.sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        assert mp.log_path() == tmp_path / "obsidian-logs" / "meeting-pull.log"
+
+    def test_windows_log_is_not_inside_the_watched_security_dir(self, monkeypatch, tmp_path):
+        # The integrity monitor watches obsidian-security; a log growing there
+        # would raise a drift alert every weekday morning.
+        monkeypatch.setattr(mp.sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        assert "obsidian-security" not in mp.log_path().parts
+
+    def test_macos_log_is_the_launchd_path(self, monkeypatch):
+        monkeypatch.setattr(mp.sys, "platform", "darwin")
+        assert mp.log_path() == Path.home() / "Library" / "Logs" / "meeting-pull.log"
+
+    def test_windows_log_is_the_file_the_task_runner_writes(self, monkeypatch, tmp_path):
+        import run_logged
+        monkeypatch.setattr(mp.sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        assert mp.log_path() == run_logged.log_path("meeting-pull")
+
+    def test_under_the_task_runner_each_line_is_logged_once(
+            self, tmp_path, monkeypatch, allow_subprocess):
+        """This job used to tee its own log on win32. Once run_logged.py was
+        capturing stdout, that wrote every line twice -- measured: three log()
+        calls, six lines. Run the real wrapper around the real log() with the
+        win32 branch live."""
+        import run_logged
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        harness = tmp_path / "harness.py"
+        harness.write_text(
+            "import sys\n"
+            "sys.path.insert(0, %r)\n"
+            "import meeting_pull as mp\n"
+            "mp.sys.platform = 'win32'   # after import: the stdlib needs the real value\n"
+            "for i in range(3):\n"
+            "    mp.log('probe line %%d' %% i)\n" % str(Path(mp.__file__).parent),
+            encoding="utf-8")
+        assert run_logged.run("meeting-pull", str(harness), []) == 0
+        lines = (tmp_path / "obsidian-logs" / "meeting-pull.log").read_text(
+            encoding="utf-8").splitlines()
+        probes = [ln.split("meeting_pull: ", 1)[1] for ln in lines]
+        assert probes == ["probe line 0", "probe line 1", "probe line 2"], lines
+
+    def test_log_does_not_write_a_file_of_its_own(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(mp.sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        mp.log("anything")
+        assert list(tmp_path.iterdir()) == []
+
+    def test_failure_notification_names_the_platform_log(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(mp.sys, "platform", "win32")
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+        source = Path(mp.__file__).read_text(encoding="utf-8")
+        assert "Library/Logs/meeting-pull.log" not in source, (
+            "a hardcoded macOS log path is back in meeting_pull.py")
+        assert "log_path()" in source.split("No calendar handoff written")[1][:120], (
+            "the failure notification no longer names log_path()")

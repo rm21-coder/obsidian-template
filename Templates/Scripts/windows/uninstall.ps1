@@ -11,6 +11,8 @@
     - generated Z_dashboards\ output
     - runtime state dirs: %LOCALAPPDATA%\{obsidian-security,obsidian-rag-sync,
       obsidian-automation}
+    - job logs: %LOCALAPPDATA%\obsidian-logs (uninstall.sh removes the agent
+      logs under ~/Library/Logs the same way)
     - the "Markitdown to Obsidian" Send To shortcut (via Install-SendTo.ps1)
     - the OBSIDIAN_VAULT user env var (if set)
 
@@ -159,7 +161,7 @@ Remove-PathSafe (Join-Path $repo '.tag_tracking.json')
 Remove-PathSafe (Join-Path $scriptsDir 'last-tag-diff.md')
 Remove-PathSafe (Join-Path $scriptsDir 'tag-promotion-candidates.md')
 Remove-PathSafe (Join-Path $repo 'Z_dashboards')
-foreach ($d in 'obsidian-security','obsidian-rag-sync','obsidian-automation') {
+foreach ($d in 'obsidian-security','obsidian-rag-sync','obsidian-automation','obsidian-logs') {
     Remove-PathSafe (Join-Path $env:LOCALAPPDATA $d)
 }
 

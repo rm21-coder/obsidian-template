@@ -150,6 +150,24 @@ DEFAULT_LOOKAHEAD_DAYS = 1
 DEFAULT_SKIP_WEEKENDS = True
 
 
+def log_path():
+    """Where this job's log lives on the current platform, for the failure
+    notification to name.
+
+    macOS: launchd's StandardOutPath in com.obsidian.meeting-pull.plist.
+    Windows: the task runs under run_logged.py, which appends stdout+stderr to
+    %LOCALAPPDATA%\\obsidian-logs\\meeting-pull.log. Either way the file is
+    written by whatever launched us, not by this script -- this job used to tee
+    its own log on Windows, and under run_logged that wrote every line twice.
+    """
+    if sys.platform == "win32":
+        import run_logged
+        return run_logged.log_path("meeting-pull")
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "meeting-pull.log"
+    return Path.home() / ".local" / "share" / "obsidian-logs" / "meeting-pull.log"
+
+
 def log(message):
     print("%s meeting_pull: %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), message), flush=True)
 
@@ -799,8 +817,8 @@ def main():
             log("retrying in %ds" % args.retry_delay)
             time.sleep(args.retry_delay)
 
-    notify_failure("No calendar handoff written after %d attempts. See ~/Library/Logs/meeting-pull.log"
-                   % attempts)
+    notify_failure("No calendar handoff written after %d attempts. See %s"
+                   % (attempts, log_path()))
     return 1
 
 
