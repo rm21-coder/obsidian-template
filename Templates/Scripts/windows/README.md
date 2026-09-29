@@ -24,6 +24,8 @@ for the full setup guide.
 - Python venv: `<vault>\Templates\Scripts\.venv\Scripts\python.exe` (3.10+).
 - Secrets: `$env:USERPROFILE\dev\secrets\.env` (gitignored, never committed).
 - Runtime state: `$env:LOCALAPPDATA\obsidian-*\`.
+- Job logs: `$env:LOCALAPPDATA\obsidian-logs\<task-name>.log`, written by
+  `..\run_logged.py`, which every task runs its script through.
 
 ## Files
 
