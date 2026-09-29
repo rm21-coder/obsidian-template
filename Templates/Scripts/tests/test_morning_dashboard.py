@@ -350,10 +350,86 @@ def test_the_hint_does_not_name_a_cause():
     """The rule stated above PIPELINE_HINTS, asserted rather than trusted:
     this hint carried two guessed causes in the same file as the rule
     forbidding them."""
-    hint = md.PIPELINE_HINTS["com.meeting-pull"]
+    hint = md.pipeline_hint("com.meeting-pull")
     for guess in ("re-auth", "Usual causes", "no longer match"):
         assert guess not in hint, f"hint names a cause: {guess!r}"
     assert "meeting-pull.log" in hint
+
+
+# ---------------------------------------------------------------------------
+# Hints name the log for the platform the dashboard runs on.
+#
+# They used to hardcode ~/Library/Logs/..., so on Windows a failing job was
+# reported with a pointer to a file that is never written there.
+# ---------------------------------------------------------------------------
+
+LOGGED_HINTS = sorted(md.PIPELINE_LOGS)
+
+
+@pytest.mark.parametrize("label", LOGGED_HINTS)
+def test_a_windows_hint_names_the_task_runners_log(monkeypatch, label):
+    monkeypatch.setattr(md.sys, "platform", "win32")
+    task = md.PIPELINE_LOGS[label][1]
+    hint = md.pipeline_hint(label)
+    assert f"%LOCALAPPDATA%\\obsidian-logs\\{task}.log" in hint
+    assert "Library/Logs" not in hint
+
+
+@pytest.mark.parametrize("label", LOGGED_HINTS)
+def test_a_macos_hint_names_the_plists_log(monkeypatch, label):
+    monkeypatch.setattr(md.sys, "platform", "darwin")
+    assert f"~/Library/Logs/{md.PIPELINE_LOGS[label][0]}" in md.pipeline_hint(label)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+@pytest.mark.parametrize("label", sorted(md.PIPELINE_HINTS))
+def test_every_hint_is_fully_filled_in(monkeypatch, platform, label):
+    """A {log} with no PIPELINE_LOGS entry would render as "... is in ."."""
+    monkeypatch.setattr(md.sys, "platform", platform)
+    hint = md.pipeline_hint(label)
+    assert "{" not in hint and "}" not in hint
+    assert " in ." not in hint and " to ." not in hint, hint
+
+
+def test_the_integrity_rebaseline_command_is_the_platforms(monkeypatch):
+    label = "com.obsidian.security.integrity"
+    monkeypatch.setattr(md.sys, "platform", "win32")
+    assert ".venv\\Scripts\\python.exe integrity_monitor.py --update" in md.pipeline_hint(label)
+    monkeypatch.setattr(md.sys, "platform", "darwin")
+    assert "/usr/bin/python3 integrity_monitor.py --update" in md.pipeline_hint(label)
+
+
+def test_the_shipped_meeting_pull_label_gets_the_real_hint(monkeypatch):
+    """The shipped plist is com.obsidian.meeting-pull, and its hint was the
+    literal text "See com.meeting-pull below." -- with nothing below it."""
+    monkeypatch.setattr(md.sys, "platform", "darwin")
+    hint = md.pipeline_hint("com.obsidian.meeting-pull")
+    assert hint == md.pipeline_hint("com.meeting-pull")
+    assert "~/Library/Logs/meeting-pull.log" in hint
+
+
+def _fake_task_scheduler(monkeypatch, tasks):
+    import json
+
+    def fake_run(cmd, **kwargs):
+        assert cmd[0] == md.POWERSHELL_EXE
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(tasks).encode(), b"")
+    monkeypatch.setattr(md.subprocess, "run", fake_run)
+
+
+@pytest.mark.parametrize("task", ["tag-clippings", "vault-lint", "security-integrity"])
+def test_a_failing_windows_task_gets_its_hint(monkeypatch, task):
+    """vault-lint and security-integrity were looked up as com.<task-name>,
+    which is not their label, so on Windows they never showed a hint at all."""
+    monkeypatch.setattr(md.sys, "platform", "win32")
+    _fake_task_scheduler(monkeypatch, [{
+        "name": task, "state": "Ready", "lastRun": "2026-09-28T07:00:00",
+        "lastResult": 2, "repetition": None,
+        "triggerType": "MSFT_TaskWeeklyTrigger"}])
+    [row] = md._collect_pipeline_health_windows()
+    assert row["status"] == "fail"
+    assert md.pipeline_hint(md.WIN_HINT_LABELS.get(task, f"com.{task}")) in row["problems"]
+    assert not any("Library/Logs" in p for p in row["problems"])
 
 
 # ---------------------------------------------------------------------------

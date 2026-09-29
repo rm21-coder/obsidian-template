@@ -568,17 +568,18 @@ PIPELINE_NAMES = {
 # produced 7,152 respawns at launchd's 10s minimum-runtime floor. The hint
 # had invented a shared-dependency story out of nothing but a shared path,
 # and it cost a morning aimed at the wrong component.
+#
+# {log} and {python} in a hint are filled by pipeline_hint() for the platform
+# the dashboard is running on (log paths: PIPELINE_LOGS). A fixed macOS path
+# sent a Windows reader looking for a file that was never written there.
 PIPELINE_HINTS = {
     "com.tag-clippings": (
         "Tags stop appearing on new clippings. Its own account of what went "
-        "wrong is in ~/Library/Logs/tag-clippings.err."
+        "wrong is in {log}."
     ),
     "com.voice-cleanup": (
         "Dropped voice memos stop becoming notes. The watcher logs every "
-        "cause it hits to ~/Library/Logs/voice-cleanup.err."
-    ),
-    "com.obsidian.meeting-pull": (  # same job, namespaced label
-        "See com.meeting-pull below."
+        "cause it hits to {log}."
     ),
     "com.meeting-pull": (
         # Named two guessed causes until 2026-09-04, in the same file as the
@@ -588,20 +589,66 @@ PIPELINE_HINTS = {
         # a checked signal (see cli_auth_defect).
         "The producer half: no fresh handoff means no meeting notes, even "
         "though the pre-populate consumer looks healthy. Its own account of "
-        "what went wrong is in ~/Library/Logs/meeting-pull.log."
+        "what went wrong is in {log}."
     ),
     "com.obsidian.security.integrity": (
         "Exits non-zero when it detects file drift -- usually your own recent "
         "script edits. Review the alert, then adopt the new baseline: "
-        "/usr/bin/python3 integrity_monitor.py --update."
+        "{python} integrity_monitor.py --update."
     ),
     "com.obsidian.vault-lint": (
         "Weekly content sweep. It runs with --exit-zero, so a non-zero status "
         "here means the lint itself failed, not that the vault is dirty -- "
-        "findings are in ~/Library/Logs/vault-lint.log. Being weekly, it gets "
+        "findings are in {log}. Being weekly, it gets "
         "~8 days of slack before it reads as stale."
     ),
 }
+
+# Where each hinted job's own output lands: (file under ~/Library/Logs that its
+# plist names, Windows task name). On Windows every task runs under
+# run_logged.py, which writes stdout and stderr together to one log named after
+# the task (see windows/Register-Tasks.ps1), so there is no .err to point at.
+PIPELINE_LOGS = {
+    "com.tag-clippings":         ("tag-clippings.err", "tag-clippings"),
+    "com.voice-cleanup":         ("voice-cleanup.err", "voice-cleanup"),
+    "com.meeting-pull":          ("meeting-pull.log",  "meeting-pull"),
+    "com.obsidian.vault-lint":   ("vault-lint.log",    "vault-lint"),
+}
+
+# Labels that share another label's hint. The shipped meeting-pull plist is
+# com.obsidian.meeting-pull; its hint used to read "See com.meeting-pull
+# below." -- which is exactly what the dashboard printed, with nothing below.
+PIPELINE_HINT_ALIASES = {
+    "com.obsidian.meeting-pull": "com.meeting-pull",
+}
+
+# Windows task names whose hint lives under a label that is not simply
+# com.<task-name>. Without this the vault-lint and integrity hints never showed
+# on Windows at all.
+WIN_HINT_LABELS = {
+    "vault-lint":         "com.obsidian.vault-lint",
+    "security-integrity": "com.obsidian.security.integrity",
+}
+
+
+def pipeline_hint(label: str) -> str | None:
+    """PIPELINE_HINTS[label] with its log path and interpreter filled in for
+    this platform, or None if the job has no hint."""
+    label = PIPELINE_HINT_ALIASES.get(label, label)
+    hint = PIPELINE_HINTS.get(label)
+    if hint is None:
+        return None
+    mac_log, win_task = PIPELINE_LOGS.get(label, ("", ""))
+    if sys.platform == "win32":
+        import run_logged
+        log = run_logged.display_path(win_task) if win_task else ""
+        # Run from Templates\Scripts; the venv is the interpreter the task uses.
+        python = r".venv\Scripts\python.exe"
+    else:
+        log = f"~/Library/Logs/{mac_log}" if mac_log else ""
+        python = "/usr/bin/python3"
+    return hint.format(log=log, python=python)
+
 
 # Wrapper-launched jobs (e.g. /usr/bin/open running an .app) exit immediately,
 # so their launchd StandardOut/ErrorPath never reflect the real worker. Point
@@ -1218,7 +1265,7 @@ def _collect_pipeline_health_windows() -> list[dict]:
         elif last_run is None and result == _WIN_TASK_NOT_RUN:
             problems.append("Has not run yet.")
 
-        hint = PIPELINE_HINTS.get(f"com.{name}")
+        hint = pipeline_hint(WIN_HINT_LABELS.get(name, f"com.{name}"))
         if hint and status != "pass":
             problems.append(hint)
 
@@ -1471,7 +1518,7 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
                 f"until the gateway is reachable again -- usually meaning the "
                 f"VPN is down.")
 
-        hint = PIPELINE_HINTS.get(label)
+        hint = pipeline_hint(label)
         if hint and status != "pass":
             problems.append(hint)
 
