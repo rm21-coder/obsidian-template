@@ -143,9 +143,11 @@ installers/lib/security-checks.sh --dast     # the dynamic checks alone
   and ask whether to run them. Do not run a long pass silently, and do not skip
   the question.
 
-**Where artifacts go.** Outside the repo, to
-`~/Documents/Claude/Projects/Obsidian Workflow/verification-artifacts/`, or
-wherever `--artifacts` / `$SECURITY_ARTIFACTS_DIR` points. **Never into this
+**Where artifacts go.** Outside the repo, to the sibling folder
+`../obsidian-security/verification-artifacts/` (for the maintainer, a
+local-only git repo with no remote), or wherever `--artifacts` /
+`$SECURITY_ARTIFACTS_DIR` points. Never into a cloud-synced folder such as
+`~/Documents`, which macOS syncs to iCloud. **Never into this
 repository:** it is public, and it IS an Obsidian vault, so scan output naming
 paths and plugin ids would both leak detail and appear as a folder in every
 downstream user's sidebar.

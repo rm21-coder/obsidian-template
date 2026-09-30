@@ -53,8 +53,11 @@ MODE="full"
 # Artifacts land OUTSIDE the repo by default. This repo is public and it IS an
 # Obsidian vault: scan output naming file paths, plugin ids and host details
 # does not belong in it, and a new top-level folder would show up in every
-# downstream user's sidebar.
-ARTIFACT_ROOT="${SECURITY_ARTIFACTS_DIR:-$HOME/Documents/Claude/Projects/Obsidian Workflow/verification-artifacts}"
+# downstream user's sidebar. The default is a SIBLING of the checkout, so it is
+# outside the repo for everyone and inside no cloud-synced folder: the previous
+# default sat under ~/Documents, which macOS syncs to iCloud. For the maintainer
+# the sibling is the local-only security repo that holds the packet program.
+ARTIFACT_ROOT="${SECURITY_ARTIFACTS_DIR:-$(dirname "$REPO_ROOT")/obsidian-security/verification-artifacts}"
 SUPPRESSIONS="$REPO_ROOT/installers/lib/security-suppressions.txt"
 
 while [[ $# -gt 0 ]]; do
