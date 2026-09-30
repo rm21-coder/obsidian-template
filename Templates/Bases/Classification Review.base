@@ -28,6 +28,7 @@ views:
       - classification
       - classification_suggested
       - classification_rationale
+      - classification_reviewed
     sort:
       - property: classification_suggested
         direction: DESC
@@ -35,6 +36,7 @@ views:
       note.classification: 150
       note.classification_suggested: 150
       note.classification_rationale: 620
+      note.classification_reviewed: 100
   - type: table
     name: Auto-applied by detector
     filters:
@@ -74,6 +76,7 @@ views:
       - classification
       - classification_suggested
       - classification_rationale
+      - classification_reviewed
     sort:
       - property: file.mtime
         direction: DESC

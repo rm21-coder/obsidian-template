@@ -8,7 +8,8 @@ nothing enforces is decoration, and a gate with nothing to read is a no-op.
 - Component: `58-classification`
 - Agent: `com.obsidian.classify` — 05:00, with catch-ups at 08:00 and 12:30
 - Log: `~/Library/Logs/obsidian-classify.log`
-- Review queue: `Topics/Classification`
+- Review queue: `Actions/Classification Review` (generated each run); the
+  morning dashboard shows the pending count
 
 ## The problem this solves
 
@@ -60,13 +61,13 @@ which sensitive-sounding subjects are simply this person's day job.
 `classification_reviewed: false`, which surface as the review queue. Accepting
 is a one-line edit; ignoring leaves the note where it was.
 
-The queue is a Bases view (`Templates/Bases/Classification Review.base`,
-embedded in `Topics/Classification`) rather than a Dataview table, for one
-reason: Bases tables edit properties **in place**. Reviewing a backlog of
-seventy notes by opening seventy notes is a workflow nobody completes, so the
-`Tier now` column is editable from the table and accepting a proposal never
-requires leaving it. Four views: pending review, detector auto-applications,
-the sensitive inventory, and what has already been ruled on.
+The queue is worked from a generated page, `Actions/Classification Review`,
+for one reason: reviewing a backlog of seventy notes by opening seventy notes
+is a workflow nobody completes. Each pending proposal on that page carries a
+tier dropdown and a Reject toggle bound to the note itself, so ruling on it
+never means leaving the page (see "Working the queue" below). A Bases table
+did this job first and was replaced: Obsidian has no pick-list property type,
+so the tier could only be typed, and accepting took a second step.
 
 | Key | Written by | Meaning |
 | --- | --- | --- |
@@ -190,29 +191,52 @@ $V $S --accept --tier confidential --dry-run  # preview first
 
 ### Working the queue
 
-**Read in the table, act on the command line.** That split is deliberate. The
-Bases view is where the rationales are legible side by side, which is the part
-that actually needs a human; ruling on thirty notes that you agree with is
-mechanical, and mechanical work belongs in one command rather than thirty
-click-throughs.
+**Work it from `Actions/Classification Review`.** Every run of the classifier
+regenerates that page with one block per pending proposal: the note, its tier
+now and the tier proposed, the reason the classifier gave, and two live fields
+bound to the note itself.
 
-1. Open `Topics/Classification` and read the pending view — note, current tier,
-   proposed tier, and the reason the classifier gave.
-2. Decline the ones you disagree with, individually:
-   `--reject --file "path/to/note.md"`. That marks the note ruled-on and leaves
-   its tier alone, keeping the declined proposal as the record.
-3. Accept the rest in a batch: `--accept --tier confidential`. Add `--folder`
-   to narrow it further, and `--dry-run` to see the list first. Accepting sets
-   `classification` to the proposed tier and retires the suggestion keys.
-4. Anything you neither accept nor reject stays queued and is never
-   re-adjudicated, so nothing shifts between sessions while you think.
+- **Accept:** pick the suggested tier in the *Tier* dropdown. That writes
+  `classification` on the note; nothing else is needed.
+- **Reject:** switch on *Reject*. That sets `classification_reviewed: true`,
+  so the note keeps its tier and is never proposed again. The declined
+  proposal stays on the note as the record.
+- **Later:** leave the block alone. Nothing is re-adjudicated while it waits.
 
-If you would rather work entirely in the table, editing `Tier now` by hand is
-equivalent to `--accept` for that note; follow it with `--reconcile`, which
-retires the suggestion keys on every note whose tier now meets or exceeds what
-was proposed. `--reconcile` leaves a note **below** its suggested tier
-completely untouched — that is an open decision, not an accepted one, and the
-pass must never close one on the reviewer's behalf.
+The page does not change under you. The next run retires what you accepted
+(the same pass as `--reconcile`, skipping notes edited in the last two
+minutes) and drops what you rejected. The page lists only notes still below
+their suggestion, and it inherits the highest tier it names, like the report.
+The morning dashboard shows a "Classification review" card with the count
+while anything is pending, and says so if the page has not been refreshed in
+48 hours.
+
+The fields are [Meta Bind](https://github.com/mProjectsCode/obsidian-meta-bind-plugin)
+inline fields in list form. Meta Bind is **not** in the template's pinned plugin
+set: install it yourself to get the fields. Without it they render as inline
+code and the page is a read-only list; rule from the command line. Bound fields inside a Markdown table were tried
+and misbehaved, so the page never uses one. A note whose path contains a
+character Meta Bind reserves (`{ } [ ] # ^ | : ?`, and a few that would break
+the page: `` ` % $ < > \ ``) gets a plain entry telling you to set the property
+in its Properties panel instead. Classifier rationales are model output about
+note content, which can be a clipped web page, so they are stripped of inline
+code, brackets, HTML and comment delimiters before they reach the page: a
+rationale must not be able to plant a live field or hide the entries after it.
+
+The command line does the same in bulk:
+
+1. Decline the ones you disagree with, individually:
+   `--reject --file "path/to/note.md"`.
+2. Accept the rest in a batch: `--accept --tier confidential`. Add `--folder`
+   to narrow it further, and `--dry-run` to see the list first.
+3. `--set-tier` records a tier of your choosing when you agree the note should
+   move but not with where.
+
+The Bases table (`Templates/Bases/Classification Review.base`, embedded in
+`Topics/Classification`) stays as the audit view: detector auto-applications,
+the sensitive inventory, and what has been ruled on. Its cells can edit in
+place too, but Obsidian has no pick-list property type, so a tier has to be
+typed exactly, and accepting there still needs the next run's reconcile.
 
 > **Editing in the table requires the property to have a registered type.**
 > Obsidian will not offer a real editor for a property it has no type for, so
@@ -223,6 +247,13 @@ pass must never close one on the reviewer's behalf.
 > *not* satisfy this — Bases does not read that plugin's field types, so having
 > `classification` defined there as a Select still leaves the table cell
 > uneditable. The command-line path above is unaffected either way.
+>
+> The template's `.obsidian/types.json` registers `classification` and its
+> companion keys as Text and `classification_reviewed` as a Checkbox, so a
+> fresh clone works as shipped. A vault that predates that, or that keeps its
+> own `.obsidian/`, needs the one-time fix above for both properties: without
+> the Checkbox type, the pending view's `Ruled on` column is a dead cell too,
+> and the table offers no way to reject.
 
 Each run writes `Templates/Scripts/last-classification-review.md`, including
 the notes it left alone. That file inherits the highest tier it names — it is a
