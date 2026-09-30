@@ -19,6 +19,11 @@
   a log. The runner passes the job's exit code through, so LastTaskResult is
   unchanged. Re-run this script after upgrading from a version that registered
   tasks without it.
+
+  Tasks launch pythonw.exe, not python.exe, so a job firing does not open a
+  console window. (-Hidden on the settings set would not do this: it hides the
+  task in the Task Scheduler UI, not the window.) Re-run this script to move an
+  existing install's tasks to pythonw.exe.
 .PARAMETER Only    Register just one job by name.
 .PARAMETER WhatIf  Show what would be registered without changing anything.
 #>
@@ -28,7 +33,7 @@ $ErrorActionPreference = 'Stop'
 
 $manifest   = Import-PowerShellDataFile (Join-Path $PSScriptRoot 'schedules.psd1')
 $scriptsDir = Get-ScriptsDir
-$python     = Get-VenvPython
+$python     = Get-VenvPythonW   # windowless: see common.ps1
 $runner     = Join-Path $scriptsDir 'run_logged.py'
 $folder     = '\Obsidian'
 

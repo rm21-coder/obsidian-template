@@ -24,6 +24,14 @@ come back wrapped as error records.
 The job's exit code is passed through unchanged, so LastTaskResult (and the
 dashboard's pipeline-health section, which reads it) means what it did
 before. The log is observability: if it cannot be opened, the job still runs.
+
+No console windows. Tasks launch this file with pythonw.exe, which has no
+console, and this starts the job with the console python.exe beside it under
+CREATE_NO_WINDOW: a console that exists but is never shown. The job must not
+simply run under pythonw.exe too. Every console program a job starts (the
+claude CLI under meeting-pull, PowerShell for a toast) would then find no
+console to inherit and open a visible window of its own; under a hidden
+console they inherit it. Toasts are not console windows and stay visible.
 """
 from __future__ import annotations
 
@@ -97,6 +105,51 @@ def child_env() -> dict:
     return env
 
 
+# Only defined on Windows. The literal is the documented value, for the tests
+# that exercise the Windows branch from another platform.
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def child_command(script: str, args: list[str]) -> list[str]:
+    """The job's command line: the console interpreter, even under pythonw.
+
+    See the module docstring for why the child must be python.exe. If the
+    console interpreter is missing, pythonw.exe runs the job instead: it still
+    works, and only a grandchild console program would show a window.
+    """
+    exe = Path(sys.executable)
+    if sys.platform == "win32" and exe.name.lower() == "pythonw.exe":
+        console = exe.with_name("python.exe")
+        if console.is_file():
+            exe = console
+    return [str(exe), script, *args]
+
+
+def spawn_options() -> dict:
+    """Extra subprocess.run keywords: on Windows, a console that is never shown."""
+    if sys.platform == "win32":
+        return {"creationflags": CREATE_NO_WINDOW}
+    return {}
+
+
+def diag(message: str) -> None:
+    """Report a problem with the runner itself, somewhere that survives.
+
+    Under pythonw.exe sys.stderr is None and print() to it silently does
+    nothing, so without the fallback these would be the one class of failure
+    that leaves no trace at all. The fallback file sits beside the job logs.
+    """
+    if sys.stderr is not None:
+        print(message, file=sys.stderr)
+        return
+    try:
+        log_dir().mkdir(parents=True, exist_ok=True)
+        with open(log_dir() / "run_logged.log", "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
 def exit_status(rc: int) -> int:
     """The child's return code in a form sys.exit() passes on intact.
 
@@ -110,20 +163,20 @@ def exit_status(rc: int) -> int:
 
 
 def run(job: str, script: str, args: list[str]) -> int:
-    cmd = [sys.executable, script, *args]
+    cmd = child_command(script, args)
+    opts = spawn_options()
     path = log_path(job)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         rotate(path)
         fh = open(path, "ab")
     except OSError as exc:
-        print(f"run_logged: cannot open {path} ({exc}); running {job} without a log",
-              file=sys.stderr)
-        return subprocess.run(cmd, env=child_env()).returncode
+        diag(f"run_logged: cannot open {path} ({exc}); running {job} without a log")
+        return subprocess.run(cmd, env=child_env(), **opts).returncode
 
     with fh:
         rc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT,
-                            env=child_env()).returncode
+                            env=child_env(), **opts).returncode
         if rc != 0:
             # Most jobs don't timestamp their own output, so without this a
             # traceback in the file could not be tied to a run.
@@ -134,11 +187,11 @@ def run(job: str, script: str, args: list[str]) -> int:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
-        print("usage: run_logged.py <job-name> <script.py> [args...]", file=sys.stderr)
+        diag("usage: run_logged.py <job-name> <script.py> [args...]")
         return 2
     job, script, rest = argv[0], argv[1], argv[2:]
     if not _JOB_NAME.match(job):
-        print(f"run_logged: refusing job name {job!r}: it becomes a filename", file=sys.stderr)
+        diag(f"run_logged: refusing job name {job!r}: it becomes a filename")
         return 2
     return exit_status(run(job, script, rest))
 

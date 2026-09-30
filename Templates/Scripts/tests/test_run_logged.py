@@ -256,3 +256,104 @@ class TestEveryTaskRunsThroughTheWrapper:
         line = next(ln for ln in src.splitlines()
                     if ln.startswith("foreach ($d in 'obsidian-security'"))
         assert "'obsidian-logs'" in line
+
+
+class TestNoConsoleWindow:
+    """A job firing must not open a window in the user's session.
+
+    The windowless behaviour itself can only be seen on Windows; these pin the
+    three things that produce it, so a refactor cannot quietly undo one.
+    """
+
+    @staticmethod
+    def _capture_run(monkeypatch) -> list[dict]:
+        calls: list[dict] = []
+
+        class _Done:
+            returncode = 0
+
+        def fake_run(cmd, **kwargs):
+            calls.append({"cmd": cmd, **kwargs})
+            return _Done()
+        monkeypatch.setattr(rl.subprocess, "run", fake_run)
+        return calls
+
+    def test_on_windows_the_job_starts_under_a_hidden_console(
+            self, tmp_path, localappdata, monkeypatch) -> None:
+        calls = self._capture_run(monkeypatch)
+        monkeypatch.setattr(rl.sys, "platform", "win32")
+        rl.run("demo", "job.py", [])
+        assert calls[0]["creationflags"] == 0x08000000   # CREATE_NO_WINDOW
+
+    def test_even_the_no_log_fallback_starts_it_hidden(
+            self, tmp_path, monkeypatch) -> None:
+        calls = self._capture_run(monkeypatch)
+        monkeypatch.setattr(rl.sys, "platform", "win32")
+        blocker = tmp_path / "file-not-dir"
+        blocker.write_text("x")
+        monkeypatch.setenv("LOCALAPPDATA", str(blocker))   # log dir cannot exist
+        rl.run("demo", "job.py", [])
+        assert calls[0]["creationflags"] == 0x08000000
+        assert "stdout" not in calls[0]
+
+    def test_elsewhere_no_windows_only_flag_is_passed(
+            self, localappdata, monkeypatch) -> None:
+        calls = self._capture_run(monkeypatch)
+        monkeypatch.setattr(rl.sys, "platform", "darwin")
+        rl.run("demo", "job.py", [])
+        assert "creationflags" not in calls[0]
+
+    def test_under_pythonw_the_job_gets_the_console_interpreter(
+            self, tmp_path, monkeypatch) -> None:
+        # A job under pythonw.exe has no console, so every console program it
+        # starts (claude CLI, PowerShell) would open a visible window instead
+        # of inheriting a hidden one.
+        venv = tmp_path / "Scripts"
+        venv.mkdir()
+        (venv / "pythonw.exe").write_text("")
+        (venv / "python.exe").write_text("")
+        monkeypatch.setattr(rl.sys, "platform", "win32")
+        monkeypatch.setattr(rl.sys, "executable", str(venv / "pythonw.exe"))
+        assert rl.child_command("job.py", ["--once"]) == [
+            str(venv / "python.exe"), "job.py", "--once"]
+
+    def test_without_a_console_interpreter_pythonw_still_runs_the_job(
+            self, tmp_path, monkeypatch) -> None:
+        (tmp_path / "pythonw.exe").write_text("")
+        monkeypatch.setattr(rl.sys, "platform", "win32")
+        monkeypatch.setattr(rl.sys, "executable", str(tmp_path / "pythonw.exe"))
+        assert rl.child_command("job.py", [])[0] == str(tmp_path / "pythonw.exe")
+
+    def test_the_task_launches_the_windowless_interpreter(self) -> None:
+        src = (WINDOWS / "Register-Tasks.ps1").read_text(encoding="utf-8")
+        assert "$python     = Get-VenvPythonW" in src, (
+            "Register-Tasks.ps1 launches the console python.exe again; every "
+            "job firing will open a console window")
+        common = (WINDOWS / "common.ps1").read_text(encoding="utf-8")
+        body = common[common.index("function Get-VenvPythonW"):]
+        assert ".venv\\Scripts\\pythonw.exe" in body.split("}")[0]
+
+
+class TestRunnerDiagnosticsSurviveWithoutStderr:
+    """Under pythonw.exe sys.stderr is None; print() to it vanishes."""
+
+    def test_a_refused_job_name_is_recorded_in_the_fallback_file(
+            self, localappdata, monkeypatch) -> None:
+        monkeypatch.setattr(rl.sys, "stderr", None)
+        assert rl.main(["../escape", "job.py"]) == 2
+        text = (localappdata / "obsidian-logs" / "run_logged.log").read_text(
+            encoding="utf-8")
+        assert "run_logged: refusing job name '../escape'" in text
+
+    def test_a_usage_error_is_recorded_in_the_fallback_file(
+            self, localappdata, monkeypatch) -> None:
+        monkeypatch.setattr(rl.sys, "stderr", None)
+        assert rl.main(["only-one"]) == 2
+        assert "usage: run_logged.py <job-name>" in (
+            localappdata / "obsidian-logs" / "run_logged.log").read_text(encoding="utf-8")
+
+    def test_with_stderr_present_nothing_is_written_to_the_file(
+            self, localappdata, capsys) -> None:
+        assert rl.main(["../escape", "job.py"]) == 2
+        assert "refusing job name" in capsys.readouterr().err
+        assert not (localappdata / "obsidian-logs" / "run_logged.log").exists()

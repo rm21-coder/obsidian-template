@@ -29,6 +29,21 @@ function Get-VenvPython {
     throw "No venv python at $py and no 'python' on PATH. Run install.ps1 first."
 }
 
+# The windowless interpreter, for scheduled tasks. A task that starts the
+# console python.exe opens a console window in the user's session every time
+# it fires -- with three jobs on a 5-minute trigger, a burst of windows all
+# day. pythonw.exe starts with no console. It runs only run_logged.py, which
+# starts the job itself hidden (see run_logged.py, child_command).
+#
+# The fallback keeps a task working when pythonw.exe is missing, at the cost
+# of the window, and says so -- a missing interpreter is not a silent choice.
+function Get-VenvPythonW {
+    $pyw = Join-Path (Get-ScriptsDir) '.venv\Scripts\pythonw.exe'
+    if (Test-Path $pyw) { return $pyw }
+    Write-Warning "No pythonw.exe at $pyw; tasks will use python.exe and show a console window."
+    return (Get-VenvPython)
+}
+
 function Get-SecretsFile {
     return (Join-Path $env:USERPROFILE 'dev\secrets\.env')
 }
