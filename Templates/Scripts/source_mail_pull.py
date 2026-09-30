@@ -479,8 +479,12 @@ def load_seen(root: Path) -> dict[str, float]:
     """digest -> first-seen unix time. Any read problem means an empty cache:
     fail open here is correct — the ts window still bounds replay, and a
     corrupt cache must not wedge the transport."""
+    # Resolved outside the try: fail-open is for a bad FILE, not a bad root.
+    # A None root once raised TypeError in here, returned {} on every run,
+    # and switched replay protection off without a word.
+    path = _seen_cache_path(root)
     try:
-        data = json.loads(_seen_cache_path(root).read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return {str(k): float(v) for k, v in data.items()}
     except Exception:
         return {}
@@ -509,11 +513,14 @@ def save_seen(root: Path, seen: dict[str, float]) -> None:
 # ---------------------------------------------------------------------------
 
 def process_mailbox(*, user: str, password: str, key: str,
-                    allowed: list[str], root: Path, dry_run: bool,
+                    allowed: list[str], root: Path | None, dry_run: bool,
                     host: str = IMAP_HOST) -> tuple[int, int]:
     """Drain unseen messages. Returns (accepted, rejected)."""
     accepted = rejected = 0
-    seen = load_seen(root)
+    # write_drop resolves a None root itself; the seen-cache needs a concrete
+    # one. The scheduler always passes None (no --root in the plist).
+    cache_root = root if root is not None else default_source_media_root()
+    seen = load_seen(cache_root)
     seen_dirty = False
     conn = imaplib.IMAP4_SSL(host, IMAP_PORT, timeout=IMAP_TIMEOUT)
     try:
@@ -614,7 +621,7 @@ def process_mailbox(*, user: str, password: str, key: str,
         return accepted, rejected
     finally:
         if seen_dirty:
-            save_seen(root, seen)
+            save_seen(cache_root, seen)
         try:
             conn.close()
         except Exception:

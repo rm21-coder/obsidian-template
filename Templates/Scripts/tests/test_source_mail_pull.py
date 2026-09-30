@@ -534,6 +534,29 @@ class TestReplaySeenCache:
         assert (a, r) == (1, 0)
         assert not (tmp_path / smp.SEEN_CACHE_NAME).exists()
 
+    def test_replay_rejected_with_the_default_root(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        # root=None is what the scheduler runs (the plist passes no --root).
+        # Every test above passes an explicit root, so none of them saw that
+        # load_seen(None) swallowed a TypeError and returned an empty cache,
+        # and save_seen(None) crashed the run after each accepted drop. From
+        # the public release until 2026-09-30 the cache never persisted and
+        # a fresh-ts replay was accepted.
+        import source_media
+        monkeypatch.setattr(source_media, "drop_root", lambda: tmp_path)
+        fake = _FakeIMAP([_raw_drop(_signed())])
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", fake)
+        assert self._pull(fake, None) == (1, 0)
+        assert (tmp_path / smp.SEEN_CACHE_NAME).is_file()
+        assert self._pull(fake, None) == (0, 1)
+
+    def test_a_bad_cache_root_is_not_mistaken_for_an_empty_cache(self) -> None:
+        # Fail-open covers an unreadable or corrupt FILE. A root that is not
+        # a path is a caller bug, and must surface rather than switch the
+        # replay control off.
+        with pytest.raises(TypeError, match="NoneType"):
+            smp.load_seen(None)  # type: ignore[arg-type]
+
     def test_cache_prunes_expired_entries(self, tmp_path: Path) -> None:
         import time as _time
         old = _time.time() - (smp.REPLAY_WINDOW_DAYS + 2) * 86400
