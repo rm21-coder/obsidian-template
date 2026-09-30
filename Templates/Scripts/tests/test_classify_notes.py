@@ -531,3 +531,163 @@ def test_an_elevated_folder_still_surfaces_a_genuine_elevation(vault: Path):
                          detectors_only=False, force=False)
     assert rec["action"] == "suggested"
     assert fm_of(p)["classification_suggested"] == "restricted"
+
+
+# ---------------------------------------------------------------------------
+# The review page (Actions/Classification Review) — the queue a person works.
+# ---------------------------------------------------------------------------
+
+def _page(vault: Path) -> str:
+    return (vault / C.REVIEW_NOTE_REL).read_text(encoding="utf-8")
+
+
+def _page_fm(vault: Path) -> dict:
+    return fm_of(vault / C.REVIEW_NOTE_REL)
+
+
+def _pending(vault: Path, rel: str, *, current: str = "internal-use-only",
+             suggested: str = "confidential",
+             rationale: str = '"undisclosed incident detail"') -> Path:
+    return write(vault, rel, "body", classification=current,
+                 classification_suggested=suggested,
+                 classification_rationale=rationale,
+                 classification_reviewed="false")
+
+
+def test_review_page_lists_only_proposals_still_waiting(vault: Path):
+    _pending(vault, "Knowledge/Waiting.md")
+    # Accepted (tier raised to the suggestion), rejected, and never proposed:
+    # none of these is a task any more.
+    _pending(vault, "Knowledge/Accepted.md", current="confidential")
+    write(vault, "Knowledge/Rejected.md", "body", classification="public",
+          classification_suggested="confidential",
+          classification_rationale='"x"', classification_reviewed="true")
+    write(vault, "Knowledge/Plain.md", "body", classification="public")
+
+    assert C.write_review_note(dry_run=False) == 1
+    page = _page(vault)
+    assert "[[Knowledge/Waiting|Waiting]]" in page
+    for absent in ("Accepted", "Rejected", "Plain"):
+        assert f"[[Knowledge/{absent}" not in page
+    assert _page_fm(vault)["pending"] == 1
+
+
+def test_review_page_fields_are_bound_to_the_note_itself(vault: Path):
+    _pending(vault, "Knowledge/MTW Router Outage (2026-09-08).md")
+    C.write_review_note(dry_run=False)
+    page = _page(vault)
+    rel = "Knowledge/MTW Router Outage (2026-09-08).md"
+    assert ("`INPUT[inlineSelect(option(public), option(internal-use-only), "
+            "option(confidential), option(restricted)):"
+            f"{rel}#classification]`") in page
+    assert f"`INPUT[toggle:{rel}#classification_reviewed]`" in page
+
+
+def test_review_page_inherits_the_highest_tier_it_names(vault: Path):
+    _pending(vault, "Knowledge/A.md", suggested="confidential")
+    _pending(vault, "Knowledge/B.md", current="confidential", suggested="restricted")
+    C.write_review_note(dry_run=False)
+    assert _page_fm(vault)["classification"] == "restricted"
+    # Most severe first.
+    page = _page(vault)
+    assert page.index("[[Knowledge/B|B]]") < page.index("[[Knowledge/A|A]]")
+
+
+def test_an_empty_queue_still_writes_a_page_saying_so(vault: Path):
+    assert C.write_review_note(dry_run=False) == 0
+    fm = _page_fm(vault)
+    assert fm["pending"] == 0
+    assert fm["classification"] == C.DEFAULT_TIER
+    assert "Nothing is waiting for review." in _page(vault)
+    assert "INPUT[" not in _page(vault)
+
+
+def test_a_rationale_cannot_plant_a_field_or_hide_the_rest_of_the_page(vault: Path):
+    """The rationale is model output about note content, which can be a
+    clipped web page. It must reach the page as inert text."""
+    hostile = ('"see `INPUT[toggle:People/Someone.md#classification_reviewed]` '
+               'and [[People/Someone]] <img src=x> %% everything below hides"')
+    _pending(vault, "Knowledge/Hostile.md", rationale=hostile)
+    _pending(vault, "Knowledge/Z Later.md")
+    C.write_review_note(dry_run=False)
+    page = _page(vault)
+    # Exactly the two fields per note that the page itself put there.
+    assert page.count("INPUT[") == 4
+    assert "People/Someone.md#classification_reviewed" not in page
+    assert "[[People/Someone" not in page
+    assert "%%" not in page
+    assert "<img" not in page
+    assert "[[Knowledge/Z Later|Z Later]]" in page
+
+
+@pytest.mark.parametrize("name", ["Q#1 plan", "a`b", "50% done", "x[1]", "a^b"])
+def test_a_path_meta_bind_cannot_bind_gets_no_live_fields(vault: Path, name: str):
+    _pending(vault, f"Knowledge/{name}.md")
+    C.write_review_note(dry_run=False)
+    page = _page(vault)
+    assert "INPUT[" not in page
+    assert "in its Properties panel" in page
+    assert _page_fm(vault)["pending"] == 1
+
+
+def test_the_review_page_is_never_itself_adjudicated(vault: Path):
+    _pending(vault, "Knowledge/A.md")
+    C.write_review_note(dry_run=False)
+    listed = {p.relative_to(vault).as_posix() for p in C.collect_files(None)}
+    assert C.REVIEW_NOTE_REL not in listed
+    assert "Knowledge/A.md" in listed
+
+
+def test_review_page_dry_run_writes_nothing(vault: Path):
+    _pending(vault, "Knowledge/A.md")
+    assert C.write_review_note(dry_run=True) == 1
+    assert not (vault / C.REVIEW_NOTE_REL).exists()
+
+
+def test_settling_retires_a_tier_picked_on_the_page(vault: Path):
+    """Picking the tier is the whole acceptance; the next run tidies up."""
+    p = _pending(vault, "Knowledge/A.md", current="confidential")
+    assert C.settle_accepted(dry_run=False) == 1
+    got = fm_of(p)
+    assert got["classification_reviewed"] is True
+    assert "classification_suggested" not in got
+
+
+def test_settling_leaves_a_note_edited_moments_ago(vault: Path,
+                                                   monkeypatch: pytest.MonkeyPatch):
+    p = _pending(vault, "Knowledge/A.md", current="confidential")
+    monkeypatch.setattr(C, "RECENT_EDIT_GUARD_SECONDS", 3600)
+    assert C.settle_accepted(dry_run=False) == 0
+    assert fm_of(p)["classification_suggested"] == "confidential"
+
+
+def test_an_off_vpn_night_still_refreshes_the_page(vault: Path,
+                                                   monkeypatch: pytest.MonkeyPatch):
+    """The gateway skip returns before any model work; the page (and the
+    dashboard count read from it) must not be left at yesterday's state."""
+    import llm_endpoint
+    accepted = _pending(vault, "Knowledge/Accepted.md", current="confidential")
+    _pending(vault, "Knowledge/Waiting.md")
+
+    def unreachable():
+        raise llm_endpoint.GatewayUnreachable("gateway does not resolve")
+    monkeypatch.setattr(llm_endpoint, "client", unreachable)
+    monkeypatch.setattr(C.sys, "argv", ["classify_notes.py", "--vault", str(vault)])
+    assert C.main() == 0
+    assert fm_of(accepted)["classification_reviewed"] is True
+    assert _page_fm(vault)["pending"] == 1
+    assert "[[Knowledge/Waiting|Waiting]]" in _page(vault)
+
+
+def test_a_command_line_ruling_refreshes_the_whole_page(vault: Path,
+                                                        monkeypatch: pytest.MonkeyPatch):
+    """Scoped to one --file, but the page must still list everything else."""
+    target = _pending(vault, "Knowledge/A.md")
+    _pending(vault, "Knowledge/B.md")
+    monkeypatch.setattr(C.sys, "argv", ["classify_notes.py", "--vault", str(vault),
+                                        "--reject", "--file", str(target)])
+    assert C.main() == 0
+    page = _page(vault)
+    assert "[[Knowledge/A|A]]" not in page
+    assert "[[Knowledge/B|B]]" in page
+    assert _page_fm(vault)["pending"] == 1

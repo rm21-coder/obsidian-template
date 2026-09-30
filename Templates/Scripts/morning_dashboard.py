@@ -422,6 +422,39 @@ RAG_REPORT_RE = re.compile(r"^RAG-Sync-(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})(\d{2})
 RAG_STALE_HOURS = 28
 
 
+# classify_notes.py regenerates this page on every run and records the queue
+# length in its frontmatter. Reading that count, rather than re-deriving the
+# queue here, keeps one definition of "pending" -- the classifier's.
+CLASSIFICATION_REVIEW = Path("Actions/Classification Review.md")
+
+# The classifier runs nightly. A page older than this means it has stopped
+# running, and the count shown is a count from then, not now.
+CLASSIFICATION_STALE_HOURS = 48
+
+
+def collect_classification_queue(now: _dt.datetime | None = None) -> dict | None:
+    """Pending classification proposals, from the classifier's review page.
+
+    None when there is no page, or it carries no readable count -- the card is
+    then left off rather than guessed at. Pipeline health already reports a
+    classifier that is failing to run.
+    """
+    fm = _frontmatter(VAULT / CLASSIFICATION_REVIEW)
+    raw = _fm_scalar(fm, "pending")
+    if not raw.isdigit():
+        return None
+    generated = None
+    try:
+        generated = _dt.datetime.strptime(_fm_scalar(fm, "generated"),
+                                          "%Y-%m-%dT%H:%M")
+    except ValueError:
+        pass
+    now = now or _dt.datetime.now()
+    stale = generated is None or (
+        now - generated > _dt.timedelta(hours=CLASSIFICATION_STALE_HOURS))
+    return {"pending": int(raw), "generated": generated, "stale": stale}
+
+
 def collect_rag_sync_status() -> dict | None:
     """Read the newest Creations/RAG-Sync-*.md report and summarize its health.
 
@@ -1844,7 +1877,8 @@ def render(today: _dt.date,
            gateway: dict | None = None,
            usage: list[dict] | None = None,
            cc_usage: dict | None = None,
-           show_actions: bool | None = None) -> str:
+           show_actions: bool | None = None,
+           classification: dict | None = None) -> str:
     now = now_local()
     pretty_date = today.strftime("%A, %B %d, %Y")
     tz_label = now.strftime("%Z") or "ET"
@@ -1916,6 +1950,26 @@ def render(today: _dt.date,
             )
         parts.append('  </ul>\n')
     parts.append('</section>\n')
+
+    # ----- Classification review (only while something is waiting) -----
+    # A task that lives in no to-do list, so it gets its own line here; an
+    # empty queue is not worth a card.
+    if classification and classification["pending"] > 0:
+        n = classification["pending"]
+        link = html.escape(obsidian_uri(CLASSIFICATION_REVIEW))
+        parts.append('<section class="card section-classification">\n')
+        parts.append('  <h2>Classification review</h2>\n')
+        parts.append(
+            f'  <div class="meta"><a href="{link}">{n} proposal'
+            f'{"s" if n != 1 else ""} pending review</a></div>\n')
+        if classification["stale"]:
+            when = (classification["generated"].strftime("%Y-%m-%d %H:%M")
+                    if classification["generated"] else "an unknown time")
+            parts.append(
+                f'  <p class="empty">List last refreshed {html.escape(when)}; '
+                'the classifier has not run since, so this count may be out '
+                'of date.</p>\n')
+        parts.append('</section>\n')
 
     # ----- Today's meetings card (under the to-dos) -----
     parts.append('<section class="card section-meetings">\n')
@@ -2149,9 +2203,11 @@ def main() -> int:
     health    = collect_pipeline_health(gateway=gateway)
     usage     = collect_llm_usage()
     cc_usage  = collect_claude_code_usage()
+    classification = collect_classification_queue()
 
     html_text = render(today, todos, meetings, new_today, rag, health,
-                       gateway=gateway, usage=usage, cc_usage=cc_usage)
+                       gateway=gateway, usage=usage, cc_usage=cc_usage,
+                       classification=classification)
 
     dated_path  = DASHBOARDS_DIR / f"morning-{today.isoformat()}.html"
     stable_path = DASHBOARDS_DIR / "morning.html"
@@ -2188,6 +2244,9 @@ def main() -> int:
     print(f"  todos:     {len(todos)} open")
     print(f"  meetings:  {len(meetings)}")
     print(f"  new today: {len(new_today)} (Clippings + Creations since midnight)")
+    if classification is not None:
+        print(f"  classify:  {classification['pending']} pending review"
+              + (" (list is stale)" if classification["stale"] else ""))
     if rag is not None:
         print(f"  rag sync:  {rag['status']} (last run {rag['run_dt']:%Y-%m-%d %H:%M}, "
               f"{rag['errors']} errors)")

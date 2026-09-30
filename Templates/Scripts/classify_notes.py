@@ -24,9 +24,9 @@ the classification policy requires. Three layers:
 
   L2  Human gate. The model NEVER writes `classification`. It writes
       `classification_suggested` / `classification_rationale` /
-      `classification_reviewed: false`, which surface as a review queue in
-      Topics/Classification. Accepting is a one-line edit; ignoring leaves
-      the note where it was.
+      `classification_reviewed: false`, which surface as a review queue on
+      the generated page Actions/Classification Review. Accepting is one
+      pick on that page; ignoring leaves the note where it was.
 
 Two deliberate asymmetries:
 
@@ -103,6 +103,11 @@ SKIP_SUBTREES = {"Meetings/_Runs"}
 
 TRACKING_FILE = VAULT_ROOT / ".classification_tracking.json"
 REPORT_FILE = VAULT_ROOT / "Templates" / "Scripts" / "last-classification-review.md"
+
+# The page a person works the queue from (see write_review_note). Lives in
+# Actions/ because it is a task, not reference material. Kept relative and
+# resolved against VAULT_ROOT at write time, so --vault needs no second global.
+REVIEW_NOTE_REL = "Actions/Classification Review.md"
 
 # Tier lattice. Index IS the severity — compared numerically throughout.
 TIERS = ["public", "internal-use-only", "confidential", "restricted"]
@@ -845,6 +850,207 @@ def write_report(records: list[dict], scanned: int, dry_run: bool) -> None:
         print(f"  Warning: could not write report: {exc}")
 
 
+# ─── Review note ─────────────────────────────────────────────────────────────
+#
+# The queue used to be worked from a Bases table, which cannot offer a pick
+# list (Obsidian has no select property type) and needed a second click plus a
+# --reconcile to accept anything. This page replaces it: one block per pending
+# proposal, with Meta Bind fields bound to the note itself, so picking a tier
+# IS the acceptance and the Reject toggle IS the ruling. Nothing here writes a
+# tier — the fields only let the person do it from one place. The next run's
+# reconcile pass retires what they accepted.
+#
+# Meta Bind's list form is used, not a table: bound fields inside a Markdown
+# table were tested against the installed plugin and misbehaved.
+
+# Characters Meta Bind's bind-target grammar reserves in a file path, plus the
+# ones that would break out of the inline-code span the field is written in or
+# open a comment/math block that swallows the rest of the page. A note whose
+# path holds any of them gets a plain-text entry and no live fields.
+_UNBINDABLE = set("{}[]#^|:?`%$<>\\")
+
+_FIELD_OPTIONS = ", ".join(f"option({t})" for t in TIERS)
+
+
+def bindable(rel_posix: str) -> bool:
+    return not any(ch in _UNBINDABLE or ord(ch) < 32 for ch in rel_posix)
+
+
+def md_inert(text: object, limit: int = 400) -> str:
+    """Untrusted text rendered so Obsidian displays it and does nothing else.
+
+    A rationale is model output about a note's content, and that content can
+    be a clipped web page. Without this, a page could steer the model into a
+    rationale holding `INPUT[...]` in backticks — a live field on this page,
+    bound to whatever note the page's author chose — or a `%%` that comments
+    out every block after it, hiding other proposals from review. Stripped:
+    inline code, link/embed brackets, HTML, table pipes, comment and math
+    delimiters, escapes, and `#` (which would tag this page).
+    """
+    flat = " ".join(str(text).split())
+    flat = flat.replace("[", "(").replace("]", ")")
+    flat = flat.replace("{", "(").replace("}", ")")
+    for ch in "`<>|%$\\#":
+        flat = flat.replace(ch, "")
+    flat = flat.lstrip("#>-+*=!~ ")
+    if len(flat) > limit:
+        flat = flat[:limit - 1].rstrip() + "…"
+    return flat
+
+
+def collect_queue(files: list[Path]) -> list[dict]:
+    """Proposals still waiting on a person, most severe first.
+
+    Pending means: a recognised suggested tier, not ruled on, and the note's
+    tier still below it. A note already raised to (or past) its suggestion is
+    accepted — reconcile retires it — so it does not belong on a to-do page.
+    """
+    queue: list[dict] = []
+    for filepath in files:
+        try:
+            text = filepath.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "classification_suggested" not in text:
+            continue
+        fm_body, _, _ = split_frontmatter(text.replace("\r\n", "\n"))
+        fm = parse_fm(fm_body)
+        suggested = fm.get("classification_suggested")
+        if not isinstance(suggested, str):
+            continue
+        suggested = suggested.strip().strip('"').strip("'").lower()
+        if suggested not in TIER_RANK or fm.get("classification_reviewed") is True:
+            continue
+        cur = current_tier(fm)
+        if cur is not None and TIER_RANK[cur] >= TIER_RANK[suggested]:
+            continue
+        queue.append({
+            "rel": filepath.relative_to(VAULT_ROOT).as_posix(),
+            "current": cur,
+            "suggested": suggested,
+            "rationale": fm.get("classification_rationale") or "",
+        })
+    queue.sort(key=lambda q: (-TIER_RANK[q["suggested"]], q["rel"]))
+    return queue
+
+
+def render_review_note(queue: list[dict], generated: datetime) -> str:
+    # Inherits the highest tier it names, for the same reason as the report:
+    # it is an index of where the vault's sensitive material sits.
+    tier = DEFAULT_TIER
+    for q in queue:
+        for t in (q["suggested"], q["current"]):
+            if t in TIER_RANK and TIER_RANK[t] > TIER_RANK[tier]:
+                tier = t
+    n = len(queue)
+    lines = [
+        "---",
+        "title: Classification Review",
+        f"classification: {tier}",
+        f"pending: {n}",
+        f"generated: {generated.strftime('%Y-%m-%dT%H:%M')}",
+        "tags:",
+        "  - classification",
+        "---",
+        "",
+        "# Classification review",
+        "",
+    ]
+    if not queue:
+        lines += ["Nothing is waiting for review.", ""]
+    else:
+        lines += [
+            f"**{n} proposal{'s' if n != 1 else ''} waiting.** For each one:",
+            "",
+            "- **Accept**: pick the suggested tier.",
+            "- **Reject**: switch on *Reject*. The note keeps its tier and is "
+            "never proposed again.",
+            "- **Later**: leave it. It stays here unchanged.",
+            "",
+            "Your choice is saved to the note the moment you make it. This page "
+            "tidies itself on the classifier's next run.",
+            "",
+        ]
+    lines += [
+        f"> Generated by `classify_notes.py`; edits to this page are overwritten. "
+        f"Classified `{tier}` because it lists notes up to that tier.",
+        "> The Tier and Reject fields need the Meta Bind community plugin. "
+        "Without it they show as code: rule from the command line instead "
+        "(`classify_notes.py --accept` / `--reject --file ...`).",
+        "",
+    ]
+    for q in queue:
+        rel = q["rel"]
+        name = md_inert(Path(rel).stem, limit=120) or "(untitled)"
+        current = q["current"] or "unset"
+        lines += [f"### {name}", ""]
+        if bindable(rel):
+            target = rel[:-3] if rel.endswith(".md") else rel
+            lines += [
+                f"- Note: [[{target}|{name}]] · now **{current}**, "
+                f"suggested **{q['suggested']}**",
+                f"- Why: {md_inert(q['rationale'])}",
+                f"- Tier: `INPUT[inlineSelect({_FIELD_OPTIONS}):{rel}#classification]`",
+                f"- Reject (keep current tier): "
+                f"`INPUT[toggle:{rel}#classification_reviewed]`",
+            ]
+        else:
+            lines += [
+                f"- Note: {md_inert(rel, limit=200)} · now **{current}**, "
+                f"suggested **{q['suggested']}**",
+                f"- Why: {md_inert(q['rationale'])}",
+                "- This note's path holds a character the review fields cannot "
+                "bind to. Open it and set `classification` (accept) or "
+                "`classification_reviewed` (reject) in its Properties panel.",
+            ]
+        lines.append("")
+    return "\n".join(lines)
+
+
+def write_review_note(dry_run: bool) -> int:
+    """Regenerate the review page from the whole vault. Returns the count.
+
+    Always vault-wide, whatever --file/--folder scoped the run: a page that
+    listed only this run's slice would silently drop everything else.
+    """
+    queue = collect_queue(collect_files(None))
+    if dry_run:
+        print(f"Review note: would list {len(queue)} pending proposal(s).")
+        return len(queue)
+    page = VAULT_ROOT / REVIEW_NOTE_REL
+    try:
+        page.parent.mkdir(parents=True, exist_ok=True)
+        page.write_text(render_review_note(queue, datetime.now()) + "\n",
+                        encoding="utf-8")
+        print(f"Review note: {len(queue)} pending -> {REVIEW_NOTE_REL}")
+    except OSError as exc:
+        print(f"  Warning: could not write review note: {exc}")
+    return len(queue)
+
+
+def settle_accepted(dry_run: bool) -> int:
+    """Reconcile the whole vault, skipping notes edited in the last moments.
+
+    What makes a tier pick on the review page a one-step acceptance. Notes
+    inside the recent-edit guard are left for the next run: one just changed
+    is probably open in the editor, and rewriting it underneath Obsidian is
+    how frontmatter gets clobbered.
+    """
+    files = collect_files(None)
+    if RECENT_EDIT_GUARD_SECONDS > 0:
+        now = time.time()
+        fresh: list[Path] = []
+        for f in files:
+            try:
+                if now - f.stat().st_mtime >= RECENT_EDIT_GUARD_SECONDS:
+                    fresh.append(f)
+            except OSError:
+                pass
+        files = fresh
+    accepted, _ = reconcile(files, dry_run)
+    return accepted
+
+
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def collect_files(folders: list[str] | None) -> list[Path]:
@@ -858,6 +1064,10 @@ def collect_files(folders: list[str] | None) -> list[Path]:
         if any(rel.as_posix().startswith(sub + "/") for sub in SKIP_SUBTREES):
             continue
         if folders and rel.parts[0] not in folders:
+            continue
+        # Our own generated page. Adjudicating it would queue the index of the
+        # vault's sensitive notes as a note in its own queue.
+        if rel.as_posix() == REVIEW_NOTE_REL:
             continue
         files.append(md)
     return files
@@ -942,6 +1152,7 @@ def main() -> int:
               f"{skipped} outside a baselined folder.")
         if args.dry_run and raised:
             print("DRY RUN — nothing was modified.")
+        write_review_note(args.dry_run)
         del lock
         return 0
 
@@ -978,6 +1189,7 @@ def main() -> int:
               f"{out_of_scope} pending but outside --tier.")
         if args.dry_run and ruled:
             print("DRY RUN — nothing was modified.")
+        write_review_note(args.dry_run)
         del lock
         return 0
 
@@ -993,8 +1205,18 @@ def main() -> int:
               f"{still_open} still below the suggested tier and left open.")
         if args.dry_run and accepted:
             print("DRY RUN — nothing was modified.")
+        write_review_note(args.dry_run)
         del lock
         return 0
+
+    # Settle what the person accepted on the review page and refresh it BEFORE
+    # anything that needs the model. Neither makes a model call, and a night
+    # off the VPN (the gateway skip just below) must not leave yesterday's
+    # page, and yesterday's dashboard count, standing.
+    settled = settle_accepted(args.dry_run)
+    if settled:
+        print(f"Retired {settled} proposal(s) accepted since the last run.\n")
+    write_review_note(args.dry_run)
 
     client = None
     endpoint = ""
@@ -1120,6 +1342,8 @@ def main() -> int:
     if not args.dry_run:
         save_tracking(tracking)
     write_report(records, evaluated, args.dry_run)
+    # Again, now that this run may have queued new proposals.
+    write_review_note(args.dry_run)
 
     counts = {a: sum(1 for r in records if r["action"] == a)
               for a in ("auto-applied", "suggested", "backfilled", "error")}

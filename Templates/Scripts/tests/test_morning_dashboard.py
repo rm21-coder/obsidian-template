@@ -627,3 +627,71 @@ def test_a_missing_env_file_is_not_an_error(tmp_path, monkeypatch):
     monkeypatch.setattr(md, "SECRETS_ENV", tmp_path / "absent" / ".env")
 
     md._load_endpoint_env()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Classification review card — the count read from the classifier's page.
+# ---------------------------------------------------------------------------
+
+import datetime as _dt  # noqa: E402
+
+import classify_notes  # noqa: E402
+
+
+def _render(classification):
+    return md.render(_dt.date(2026, 9, 30), [], [], [], None, [],
+                     show_actions=False, classification=classification)
+
+
+def _review_page(vault: Path, queue: list[dict], generated: _dt.datetime) -> None:
+    page = vault / classify_notes.REVIEW_NOTE_REL
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(classify_notes.render_review_note(queue, generated),
+                    encoding="utf-8")
+
+
+_ONE = [{"rel": "Knowledge/A.md", "current": "internal-use-only",
+         "suggested": "confidential", "rationale": "x"}]
+
+
+def test_dashboard_reads_the_count_the_classifier_writes(tmp_path, monkeypatch):
+    """A contract test across the two scripts: the page's frontmatter is the
+    interface, so it is produced by the real renderer, not a hand-made copy."""
+    monkeypatch.setattr(md, "VAULT", tmp_path)
+    now = _dt.datetime(2026, 9, 30, 7, 0)
+    _review_page(tmp_path, _ONE * 3, now - _dt.timedelta(hours=2))
+    got = md.collect_classification_queue(now=now)
+    assert got["pending"] == 3
+    assert got["stale"] is False
+
+
+def test_a_review_page_older_than_two_days_is_flagged_stale(tmp_path, monkeypatch):
+    monkeypatch.setattr(md, "VAULT", tmp_path)
+    now = _dt.datetime(2026, 9, 30, 7, 0)
+    _review_page(tmp_path, _ONE, now - _dt.timedelta(hours=49))
+    got = md.collect_classification_queue(now=now)
+    assert got["stale"] is True
+    out = _render(got)
+    assert "List last refreshed 2026-09-28 06:00" in out
+    assert "may be out of date" in out
+
+
+def test_no_review_page_means_no_card(tmp_path, monkeypatch):
+    monkeypatch.setattr(md, "VAULT", tmp_path)
+    assert md.collect_classification_queue() is None
+    assert "Classification review" not in _render(None)
+
+
+def test_the_card_shows_the_count_and_links_to_the_page():
+    out = _render({"pending": 2, "generated": _dt.datetime(2026, 9, 30, 5, 0),
+                   "stale": False})
+    assert "Classification review" in out
+    assert "2 proposals pending review" in out
+    assert "Actions/Classification%20Review" in out
+    assert "may be out of date" not in out
+
+
+def test_an_empty_queue_shows_no_card():
+    out = _render({"pending": 0, "generated": _dt.datetime(2026, 9, 30, 5, 0),
+                   "stale": False})
+    assert "Classification review" not in out
