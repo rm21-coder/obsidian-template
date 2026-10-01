@@ -28,6 +28,8 @@ import datetime as dt
 import os
 import re
 import sys
+import templater_guard  # noqa: E402
+
 from pathlib import Path
 
 VAULT = Path(os.path.expanduser("~/Obsidian"))
@@ -288,7 +290,8 @@ def write_block(path: Path, mode: str, dry_run: bool, now: dt.datetime) -> str:
             path.write_text(f"{fm}\n\n{body}" if body else f"{fm}\n", encoding="utf-8")
             return f"removed empty block {path.name}"
         return f"skip (no open follow-ups) {path.name}"
-    block = build_block(now, mode, attendee_tasks)
+    # Quotes task lines from other notes, some older than templater_guard.
+    block = templater_guard.neutralize(build_block(now, mode, attendee_tasks))
     new_text = f"{fm}\n\n{block}\n\n{body}" if body else f"{fm}\n\n{block}\n"
     total = sum(len(v) for v in attendee_tasks.values())
     if dry_run:

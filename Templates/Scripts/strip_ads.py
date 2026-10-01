@@ -46,6 +46,8 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import templater_guard  # noqa: E402
+
 from pathlib import Path
 
 # Vault root, derived from this script's location (Templates/Scripts/strip_ads.py
@@ -158,7 +160,9 @@ def process_file(path: Path, *, dry_run: bool, quiet: bool, verbose: bool) -> bo
         print(f"ERROR  {path}: {exc}", file=sys.stderr)
         return False
 
-    cleaned = strip_ads(original)
+    # A clipped page is text from outside the vault: it must not run as
+    # Templater code when shown (dynamic <%+ %> commands run in reading view).
+    cleaned = templater_guard.neutralize(strip_ads(original))
     if cleaned == original:
         if verbose:
             print(f"ok     {path}")

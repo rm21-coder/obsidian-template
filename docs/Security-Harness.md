@@ -70,6 +70,42 @@ The plugin integrity monitor is unaffected — it baselines post-install state,
 so the patched `main.js` is simply what it records as normal, and a later
 unexplained change to it still alerts.
 
+### Outside text is never Templater code
+
+This is not one of the two controls, but it is one less thing for them to
+watch. Templater runs dynamic commands (`<%+ … %>`, and `<%*+ … %>` as
+JavaScript) in the rendered text of every note shown in reading view, with no
+setting or folder limit. It also runs every command in a new note when
+"Trigger Templater on new file creation" is on (off in this template).
+
+The scripts write other people's words into notes:
+
+- invite subjects and attendee names;
+- clipped pages;
+- transcripts and converted documents;
+- report lines that repeat any of these.
+
+Each of those writers passes its text through `templater_guard.neutralize()`.
+It puts a zero-width space between the `<` and the `%` in every rendered form
+of the opener (`&lt;%`, `&#60;%`, `<&#37;`, `\<\%`, …). The text reads the
+same, but Templater no longer sees a command.
+
+`tests/test_templater_guard.py` lists every guarded writer. Any new script
+that writes outside text into the vault belongs on that list.
+
+The guard has two limits:
+
+- **Copied text keeps the space.** Text copied out of a neutralised note
+  carries the zero-width space, so a clipped JSP or ASP snippet (`<%= … %>`)
+  no longer pastes cleanly.
+- **New clippings are briefly raw.** A Web Clipper note stays unchanged for
+  the few seconds before `strip_ads` rewrites it. This matters only if the
+  note is switched to reading view in that window. Notes open in Live Preview
+  by default, and there the post-processor does not run on the body.
+
+Either way, the export gate blocks a dynamic command anywhere in an export
+(see `Data-Classification.md`).
+
 ## The two controls
 
 | Control | Script | Schedule | What it checks |

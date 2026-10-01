@@ -56,6 +56,8 @@ import os
 import re
 import subprocess
 import sys
+import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+
 import tempfile
 import time
 import urllib.error
@@ -646,7 +648,7 @@ def write_transcript_md(*, out_dir: Path, title: str, source_url: str,
         # Fall back to raw "text"
         lines.append((result.get("text") or "").strip())
 
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text(templater_guard.neutralize("\n".join(lines) + "\n"), encoding="utf-8")
     return path
 
 

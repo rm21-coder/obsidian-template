@@ -401,7 +401,11 @@ def write_digest(notes, gi, apply_: bool) -> str:
         out.append(f'- **{variants[0]}** — {links}')
     out.append('')
 
-    text = '\n'.join(out)
+    # Calendar subjects are other people's words: keep a "<%" in one from
+    # running as Templater code when the digest is opened in reading view.
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import templater_guard
+    text = templater_guard.neutralize('\n'.join(out))
     if apply_:
         DIGEST_NOTE.parent.mkdir(parents=True, exist_ok=True)
         DIGEST_NOTE.write_text(text, encoding='utf-8')
