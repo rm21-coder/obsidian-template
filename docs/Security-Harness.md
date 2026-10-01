@@ -102,7 +102,13 @@ broken.
 
 The plugin and workflow controls compare the current state against a **baseline
 you establish once**. Until you do, they intentionally exit `2` and alert
-("no baseline"). After installing, set the baselines:
+("no baseline"). The installer offers to record both as its **last** step
+(`88-security-baselines` on macOS, step 85 of `install.ps1` on Windows), after
+every plugin, script and scheduled job is in place. Taken any earlier, the
+first scheduled run reports the installer's own later steps as drift. Accept
+only if nothing but the installer has touched the machine since it started;
+otherwise, or after `--auto` / `-NonInteractive`, set them yourself, plugin
+allowlist first:
 
 ```bash
 /usr/bin/python3 ~/Obsidian/Templates/Scripts/plugin_integrity_check.py --update
@@ -113,6 +119,28 @@ you establish once**. Until you do, they intentionally exit `2` and alert
   and is **HMAC-signed** with a random key stored in your macOS Keychain (service
   `obsidian-allowlist-hmac`). Editing the allowlist by hand is therefore detected
   as `ALLOWLIST_TAMPER` — the baseline can only be changed through `--update`.
+- The plugin baseline also records:
+  - which plugins are **enabled**, read as Obsidian reads `community-plugins.json`
+    (`ENABLED_CHANGE`);
+  - for Meta Bind, Dataview, Templater, QuickAdd, Excalidraw, Metadata Menu,
+    Tasks and Omnisearch, the settings that let the plugin run code from note
+    content or on its own (`enableJs`, `enableDataviewJs`,
+    `trigger_on_file_creation`, QuickAdd startup macros, Excalidraw's startup
+    script, Metadata Menu formulas, Tasks' global query, and so on), each as
+    "set or not" plus a hash of its value (`SETTINGS_CHANGE`);
+  - a hash of every script and template those settings point to, including
+    Templater's templates folder (`(referenced) …`);
+  - any other dot-folder at the vault root that holds Obsidian configuration:
+    Obsidian can be pointed at one from outside the vault (`NEW Obsidian config
+    folder`).
+
+  An allowlist recorded before these fields existed reports `NOT_BASELINED`
+  until you vet and run `--update`. A failure of the check itself raises
+  `CONTROL_ERROR` instead of dying quietly.
+- **Not covered:** a setting flipped and flipped back between two runs, for a
+  plugin that reloads settings live (Meta Bind, Templater). On macOS the agent
+  reruns when a watched settings file changes; on Windows the task runs daily
+  only.
 - The workflow baseline lives at `~/.local/share/obsidian-security/integrity_state.json`.
 - `./install.sh --rebaseline` forces both to re-baseline.
 

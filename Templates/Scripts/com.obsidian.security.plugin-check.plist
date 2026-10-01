@@ -31,6 +31,22 @@
     <key>WatchPaths</key>
     <array>
         <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins</string>
+        <!-- Writes INSIDE a plugin folder do not fire the folder watch above,
+             and Templater and Meta Bind reload a changed data.json live, so
+             a setting could be flipped, used and flipped back between daily
+             runs. Watched individually: the enabled list and the settings
+             files plugin_integrity_check reads (SECURITY_SETTINGS). Not the
+             whole .obsidian folder: Obsidian rewrites workspace.json
+             constantly. -->
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/community-plugins.json</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins/obsidian-meta-bind-plugin/data.json</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins/dataview/data.json</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins/templater-obsidian/data.json</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins/quickadd/data.json</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins/obsidian-excalidraw-plugin/data.json</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins/metadata-menu/data.json</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins/obsidian-tasks-plugin/data.json</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/.obsidian/plugins/omnisearch/data.json</string>
     </array>
 
     <key>StartCalendarInterval</key>

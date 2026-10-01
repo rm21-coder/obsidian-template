@@ -553,6 +553,51 @@ if (-not $SkipTasks) {
     }
 }
 
+# Last on purpose. A baseline adopts the machine's current state as trusted,
+# so it must be taken after everything that changes a watched file: the
+# plugins (30/31), the scripts, and the task definitions (80). Taken earlier,
+# the first scheduled run reports the installer's own later steps as drift,
+# and the first thing a new user learns is to adopt an alert unread.
+#
+# Until 2026-10-01 nothing here offered a baseline at all, so a Windows
+# install's two security controls reported "no baseline" every day and
+# protected nothing. Asked, never assumed: the person must be able to say this
+# machine has not been touched since the install began. -NonInteractive, a
+# re-run with existing baselines, and -SkipTasks (no task definitions to
+# record) all leave the decision alone.
+Write-Host '== 85 security baselines =='
+$stateDir = if ($env:OBSIDIAN_SECURITY_STATE_DIR) { $env:OBSIDIAN_SECURITY_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'obsidian-security' }
+$haveBaselines = (Test-Path (Join-Path $stateDir 'plugin_allowlist.json')) -and
+                 (Test-Path (Join-Path $stateDir 'integrity_state.json'))
+$pluginCheck = Join-Path $scriptsDir 'plugin_integrity_check.py'
+$integrity   = Join-Path $scriptsDir 'integrity_monitor.py'
+if ($haveBaselines) {
+    Write-Host "  baselines already present in $stateDir; left as they are"
+} elseif ($SkipTasks) {
+    Write-Host '  skipped (-SkipTasks): the task definitions a baseline records are not registered yet'
+} else {
+    Write-Host '  The two security controls compare this machine against a recorded baseline.'
+    Write-Host '  Without one they protect nothing. Record it now only if nothing but this'
+    Write-Host '  installer has changed the vault, its plugins or its scheduled tasks since you'
+    Write-Host '  started. If unsure, answer n and set it later (docs/Windows Setup.md).'
+    $ans = Read-Answer -Question '  Record the security baselines now? (y/n)' -Default 'y' -NoPrompt:$NonInteractive
+    if ($NonInteractive -or [Console]::IsInputRedirected) {
+        Write-Host '  -NonInteractive: not recording baselines. When ready, run, in this order:'
+        Write-Host ("    {0} `"{1}`" --update" -f $venvPy, $pluginCheck)
+        Write-Host ("    {0} `"{1}`" --update" -f $venvPy, $integrity)
+    } elseif ($ans -match '^(y|yes)$') {
+        # Plugin allowlist first: it is one of the integrity monitor's trust
+        # anchors, so the integrity baseline must record its final form.
+        Invoke-Native -Warn -ErrorMessage 'plugin baseline failed' { & $venvPy $pluginCheck --update }
+        Invoke-Native -Warn -ErrorMessage 'integrity baseline failed' { & $venvPy $integrity --update }
+        Write-Host '  baselines recorded'
+    } else {
+        Write-Warning '  No baselines recorded: both security controls stay inactive until you run, in this order:'
+        Write-Host ("    {0} `"{1}`" --update" -f $venvPy, $pluginCheck)
+        Write-Host ("    {0} `"{1}`" --update" -f $venvPy, $integrity)
+    }
+}
+
 Write-Host '== 90 status =='
 Get-ScheduledTask -TaskPath '\Obsidian\*' -ErrorAction SilentlyContinue |
     Select-Object State, TaskName | Format-Table -AutoSize
