@@ -57,6 +57,12 @@ function New-TriggerFromSpec($t) {
     }
 }
 
+# Every task that did not end up as intended. Reported at the end and turned
+# into a non-zero exit: this script is how an existing install receives a fix,
+# so a silent failure here leaves the old behaviour running behind a screen of
+# "registered" lines.
+$failed = @()
+
 foreach ($job in $manifest.Jobs) {
     if ($Only -and $job.Name -ne $Only) { continue }
 
@@ -84,10 +90,35 @@ foreach ($job in $manifest.Jobs) {
     $enable   = $job.Enabled -or ($existing -and $existing.State -ne 'Disabled')
 
     if ($PSCmdlet.ShouldProcess("$folder\$taskName", 'Register scheduled task')) {
-        Register-ScheduledTask -TaskName $taskName -TaskPath $folder `
-            -Action $action -Trigger $trigger -Settings $settings -Force | Out-Null
+        # -ErrorAction Stop on each call, not the preference set at the top:
+        # the ScheduledTasks cmdlets are CDXML functions that run in their own
+        # module scope and do not see this script's $ErrorActionPreference. A
+        # denied registration was a non-terminating error, so the loop went on
+        # to print "registered" for a task it had not touched.
+        try {
+            Register-ScheduledTask -TaskName $taskName -TaskPath $folder `
+                -Action $action -Trigger $trigger -Settings $settings -Force `
+                -ErrorAction Stop | Out-Null
+            if (-not $enable) {
+                Disable-ScheduledTask -TaskName $taskName -TaskPath $folder -ErrorAction Stop | Out-Null
+            }
+        } catch {
+            Write-Warning ("NOT registered: {0} -- {1}" -f $taskName, $_.Exception.Message)
+            $failed += $taskName
+            continue
+        }
+        # Read it back. "No error" is not the claim being printed; "the task
+        # now runs this" is, so that is what gets checked.
+        $live = Get-ScheduledTask -TaskName $taskName -TaskPath "$folder\" -ErrorAction SilentlyContinue
+        $ok = $live -and $live.Actions[0].Execute -eq $python -and
+              $live.Actions[0].Arguments -eq $argString -and
+              (($live.State -eq 'Disabled') -eq (-not $enable))
+        if (-not $ok) {
+            Write-Warning ("NOT registered: {0} -- the task does not show the new definition" -f $taskName)
+            $failed += $taskName
+            continue
+        }
         if (-not $enable) {
-            Disable-ScheduledTask -TaskName $taskName -TaskPath $folder | Out-Null
             Write-Host ("  registered (DISABLED): {0}" -f $taskName)
         } elseif (-not $job.Enabled) {
             Write-Host ("  registered (ENABLED):  {0}  (kept: was enabled before this refresh)" -f $taskName)
@@ -97,5 +128,15 @@ foreach ($job in $manifest.Jobs) {
     }
 }
 Write-Host ""
-Write-Host "Done. Review:  Get-ScheduledTask -TaskPath '\Obsidian\*' | Select State,TaskName"
+if ($failed.Count -gt 0) {
+    Write-Host ("FAILED: {0} task(s) were NOT registered and still run their old definition:" -f $failed.Count) -ForegroundColor Red
+    foreach ($n in $failed) { Write-Host ("  {0}" -f $n) -ForegroundColor Red }
+    Write-Host "If the error was 'Access is denied', the existing tasks were registered from an"
+    Write-Host "elevated prompt. Re-run this script from PowerShell opened with 'Run as administrator'."
+    exit 1
+}
+Write-Host "Done. Review:  Get-ScheduledTask -TaskPath '\Obsidian\' | Select State,TaskName"
 Write-Host "Enable one:    Enable-ScheduledTask -TaskName tag-clippings -TaskPath '\Obsidian'"
+# Explicit, so a caller's $LASTEXITCODE reflects this run and not whatever
+# native command ran before it.
+exit 0

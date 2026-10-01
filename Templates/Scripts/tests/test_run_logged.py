@@ -357,3 +357,48 @@ class TestRunnerDiagnosticsSurviveWithoutStderr:
         assert rl.main(["../escape", "job.py"]) == 2
         assert "refusing job name" in capsys.readouterr().err
         assert not (localappdata / "obsidian-logs" / "run_logged.log").exists()
+
+
+class TestRegistrationFailuresAreLoud:
+    """Register-Tasks.ps1 is how an install receives a fix. It once printed
+    "registered" for 15 tasks it had been denied, and exited 0."""
+
+    @staticmethod
+    def _src() -> str:
+        return (WINDOWS / "Register-Tasks.ps1").read_text(encoding="utf-8")
+
+    def test_each_task_cmdlet_stops_on_error(self) -> None:
+        # The ScheduledTasks cmdlets ignore the script's $ErrorActionPreference
+        # (CDXML module scope); only a per-call -ErrorAction Stop reaches them.
+        src = self._src()
+        reg = src[src.index("Register-ScheduledTask -TaskName"):]
+        reg = reg[:reg.index("| Out-Null")]
+        assert "-ErrorAction Stop" in reg
+        dis = next(ln for ln in src.splitlines()
+                   if ln.strip().startswith("Disable-ScheduledTask"))
+        assert "-ErrorAction Stop" in dis
+
+    def test_success_is_printed_only_after_reading_the_task_back(self) -> None:
+        src = self._src()
+        readback = src.index("$live.Actions[0].Execute -eq $python")
+        assert "$live.Actions[0].Arguments -eq $argString" in src
+        for line in ('Write-Host ("  registered (DISABLED): {0}"',
+                     'Write-Host ("  registered (ENABLED):  {0}  (kept:',
+                     'Write-Host ("  registered (ENABLED):  {0}" -f'):
+            assert src.index(line) > readback, f"{line!r} printed before the read-back"
+
+    def test_any_failure_ends_the_run_non_zero_with_the_elevation_hint(self) -> None:
+        src = self._src()
+        tail = src[src.index("if ($failed.Count -gt 0) {"):]
+        failure_block = tail[:tail.index("exit 0")]
+        assert "exit 1" in failure_block
+        assert "Run as administrator" in tail
+        assert src.rstrip().endswith("exit 0"), (
+            "success must exit 0 explicitly, or a caller reads a stale $LASTEXITCODE")
+
+    def test_the_installer_stops_when_registration_fails(self) -> None:
+        src = (WINDOWS / "install.ps1").read_text(encoding="utf-8")
+        call = src.index("& (Join-Path $PSScriptRoot 'Register-Tasks.ps1')")
+        after = src[call:call + 300]
+        assert "if ($LASTEXITCODE -ne 0) {" in after
+        assert "throw 'scheduled-task registration failed" in after
