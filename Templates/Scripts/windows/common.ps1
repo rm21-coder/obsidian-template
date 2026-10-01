@@ -44,6 +44,22 @@ function Get-VenvPythonW {
     return (Get-VenvPython)
 }
 
+# The requirements step, shared by install.ps1 and update.ps1 so the two can
+# never install differently. When requirements become hash-pinned, this is the
+# one place the pip line changes.
+function Install-Requirements {
+    param(
+        [Parameter(Mandatory)][string]$VenvPython,
+        [Parameter(Mandatory)][string]$ScriptsDir
+    )
+    Invoke-Native -ErrorMessage 'pip upgrade failed' { & $VenvPython -m pip install --upgrade pip 1>$null }
+    $req = Join-Path $ScriptsDir 'requirements.txt'
+    if (Test-Path $req) {
+        Write-Host '  installing requirements.txt (mlx-whisper is arm64-guarded and skips on Intel) ...'
+        Invoke-Native -ErrorMessage 'dependency install failed' { & $VenvPython -m pip install -r $req }
+    }
+}
+
 function Get-SecretsFile {
     return (Join-Path $env:USERPROFILE 'dev\secrets\.env')
 }

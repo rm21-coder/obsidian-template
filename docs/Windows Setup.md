@@ -155,6 +155,70 @@ substitution is refused rather than taken literally.
 
 Full key reference: [`installers/profiles/README.md`](../installers/profiles/README.md).
 
+## Updating an existing install
+
+One command, from PowerShell in the vault:
+
+```powershell
+cd $env:USERPROFILE\Obsidian; powershell -ExecutionPolicy Bypass -File .\Templates\Scripts\windows\update.ps1
+```
+
+It runs three steps in a fixed order:
+
+1. **`git pull --ff-only`** brings in the new code.
+2. **Reinstall the requirements**, using the same pip step `install.ps1` runs.
+3. **`Register-Tasks.ps1`** re-registers every scheduled task.
+
+All three are needed:
+
+- A pull alone installs nothing into the venv. An install from before
+  2026-09-25, for example, still lacks `tzdata`, and without it the meeting
+  pipeline cannot resolve a time zone.
+- Fixes to how the jobs run reach an install only when the tasks are
+  re-registered. That includes the log wrapper and the windowless interpreter
+  that stops console pop-ups.
+
+After pulling, `update.ps1` runs the rest of the update from the version it
+just pulled, so steps 2 and 3 always use the new code. The update is safe to
+repeat.
+
+**`update.ps1` not found.** Your install predates it. Run `git pull` once,
+then the command above.
+
+**"Local changes to tracked files; not updating."** The update stops rather
+than pull over your changes. If the only file listed is
+`.obsidian/types.json`, take the upstream copy and run the update again.
+Obsidian rewrites that file when it sees new note properties, and it only
+records property types, so this is safe:
+
+```powershell
+git -C $env:USERPROFILE\Obsidian checkout -- .obsidian/types.json
+```
+
+**"Update INCOMPLETE" with a FAILED list.** Windows refused to replace some
+tasks. This usually means they were first registered from an elevated prompt.
+The code and requirements are already updated. Re-run the update from
+PowerShell opened with **Run as administrator**.
+
+**An integrity drift alert after updating.** If this machine has an integrity
+baseline, an update is expected to show up as drift: it changes watched
+scripts and every task definition. The update never adopts a new baseline
+itself. Its last lines print the commands that list the findings and the diff
+the update applied. Adopt the new state with `--update` only when every script
+finding is a file in that diff, every task finding is an `\Obsidian\` task,
+and there is no `state_dir` or `BULK_DELETE` finding. Anything else is a real
+alert.
+
+To confirm it worked:
+
+```powershell
+Get-ScheduledTask -TaskPath '\Obsidian\' | ForEach-Object { '{0,-9} {1,-22} {2}' -f $_.State, $_.TaskName, (Split-Path $_.Actions[0].Execute -Leaf) }
+```
+
+Every task should launch `pythonw.exe`, and the jobs you had enabled should
+still be `Ready`. Logs appear in `%LOCALAPPDATA%\obsidian-logs\` as each job
+next runs.
+
 ## Prerequisites
 
 **Required:**

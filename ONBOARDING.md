@@ -144,6 +144,30 @@ That writes ~74 synthetic notes (an invented company, `.example` addresses) so
 the dashboard, tagger, and views have something to act on. `--remove` takes it
 all back out cleanly.
 
+## Updating an install you already have
+
+**Windows:** one command, run by the human from PowerShell in the vault:
+
+```powershell
+cd $env:USERPROFILE\Obsidian; powershell -ExecutionPolicy Bypass -File .\Templates\Scripts\windows\update.ps1
+```
+
+It pulls the new code, reinstalls the requirements, and re-registers the
+scheduled tasks, in that order. All three are needed: a pull alone leaves new
+requirements uninstalled and old task definitions running. If `update.ps1`
+doesn't exist yet, the install predates it, so run `git pull` once first. If it
+ends with "Update INCOMPLETE", re-run it from PowerShell opened with **Run as
+administrator**. The details, including the integrity alert an update is
+expected to raise, are in "Updating an existing install" in
+`docs/Windows Setup.md`.
+
+Claude's part is the same as for the install: explain the output and check the
+result, for example that every task now launches `pythonw.exe`. Let the human
+run the update.
+
+**macOS:** there is no tested update procedure yet. Ask the maintainer before
+re-running `install.sh` over an existing install.
+
 ## When something looks broken
 
 Logs live in `~/Library/Logs/` on macOS (`meeting-pull.log`, `tag-clippings.log`,
@@ -161,9 +185,18 @@ Get-Content "$env:LOCALAPPDATA\obsidian-logs\tag-clippings.log" -Tail 50
 ```
 
 If that directory is empty or missing, the tasks were registered by an older
-version that ran scripts directly. Re-run `Register-Tasks.ps1` to pick up the
-runner. `Get-ScheduledTaskInfo -TaskName <name> -TaskPath '\Obsidian\'` still
+version that ran scripts directly. Run the Windows update (see "Updating an
+install you already have") to pick up the runner. `Get-ScheduledTaskInfo -TaskName <name> -TaskPath '\Obsidian\'` still
 gives the last run time and exit code.
+
+**Console windows flash up every few minutes (Windows).** The tasks are still
+registered with the old definition, which launched the console `python.exe`.
+Run the Windows update. Afterwards every task should launch `pythonw.exe`.
+
+**The calendar pipeline stopped working on Windows, or a log shows
+`ZoneInfoNotFoundError`.** The venv is missing `tzdata`: Windows has no
+built-in time-zone database, and the package was added to the requirements on
+2026-09-25. Run the Windows update, which reinstalls the requirements.
 
 **Every model call fails with `Connection error`.** You are off the VPN. The
 gateway is internal-only. Reconnect and re-run; the scheduled jobs will catch

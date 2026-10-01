@@ -373,12 +373,7 @@ if (-not (Test-Path $venvPy)) {
     Invoke-Native -ErrorMessage 'venv creation failed' { & $base[0] @(Get-CandPrefix $base) -m venv $venv }
     Write-Host "  created venv at $venv"
 }
-Invoke-Native -ErrorMessage 'pip upgrade failed' { & $venvPy -m pip install --upgrade pip 1>$null }
-$req = Join-Path $scriptsDir 'requirements.txt'
-if (Test-Path $req) {
-    Write-Host '  installing requirements.txt (mlx-whisper is arm64-guarded and skips on Intel) ...'
-    Invoke-Native -ErrorMessage 'dependency install failed' { & $venvPy -m pip install -r $req }
-}
+Install-Requirements -VenvPython $venvPy -ScriptsDir $scriptsDir   # shared with update.ps1
 Write-Host '  deps installed'
 
 Write-Host '== 35 ribbon order =='
