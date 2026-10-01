@@ -428,7 +428,10 @@ def test_a_failing_windows_task_gets_its_hint(monkeypatch, task):
         "triggerType": "MSFT_TaskWeeklyTrigger"}])
     [row] = md._collect_pipeline_health_windows()
     assert row["status"] == "fail"
-    assert md.pipeline_hint(md.WIN_HINT_LABELS.get(task, f"com.{task}")) in row["problems"]
+    label = md.WIN_HINT_LABELS.get(task, f"com.{task}")
+    # Exit 2 from a security control is "no baseline", which has its own hint.
+    expected = md.security_hint(label, 2) or md.pipeline_hint(label)
+    assert expected in row["problems"]
     assert not any("Library/Logs" in p for p in row["problems"])
 
 
@@ -695,3 +698,45 @@ def test_an_empty_queue_shows_no_card():
     out = _render({"pending": 0, "generated": _dt.datetime(2026, 9, 30, 5, 0),
                    "stale": False})
     assert "Classification review" not in out
+
+
+# ---------------------------------------------------------------------------
+# Findings from a colleague's Windows install, 2026-10-01.
+# ---------------------------------------------------------------------------
+
+def test_an_org_policy_refusal_is_not_diagnosed_as_an_expired_session(tmp_path):
+    """/login cannot fix a tenant policy, so the expired-session advice would
+    send the reader to the one step that is guaranteed not to work."""
+    log = tmp_path / "meeting-pull.log"
+    log.write_text(textwrap.dedent("""\
+        2026-10-01 07:54:51 meeting_pull: starting (producer=claude, attempt 1/3)
+        {"is_error":true,"api_error_status":403,"api_error_code":"oauth_not_allowed_for_organization","result":"Your organization has disabled Claude subscription access for Claude Code"}
+        2026-10-01 07:54:56 meeting_pull: producer exited 1 - no handoff written
+        """), encoding="utf-8")
+    verdict = md.cli_auth_defect(str(log))
+    assert verdict.startswith("Verified: your organization does not allow")
+    assert "/login" not in verdict
+
+
+@pytest.mark.parametrize("label,win_task", [
+    ("com.obsidian.security.integrity", "security-integrity"),
+    ("com.obsidian.security.plugin-check", "security-plugin-check"),
+])
+def test_a_missing_baseline_is_not_called_drift(label, win_task):
+    """Both controls exit 2 for "no usable baseline". The drift hint's
+    "adopt the new baseline" is wrong for it: a never-baselined machine skips
+    vetting, and one whose baseline vanished would certify the deletion."""
+    hint = md.security_hint(label, 2)
+    assert "no usable baseline" in hint
+    assert "adopt the new baseline" not in hint
+    assert "investigate before adopting anything" in hint
+    assert md.WIN_HINT_LABELS[win_task] == label
+
+
+def test_drift_still_gets_the_drift_hint():
+    assert md.security_hint("com.obsidian.security.integrity", 1) is None
+    assert "adopt the new baseline" in md.pipeline_hint("com.obsidian.security.integrity")
+
+
+def test_other_jobs_never_get_the_security_hint():
+    assert md.security_hint("com.tag-clippings", 2) is None

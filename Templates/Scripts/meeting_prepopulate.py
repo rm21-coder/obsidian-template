@@ -1259,8 +1259,10 @@ def load_config() -> dict:
     if not CONFIG_FILE.exists():
         return {}
     try:
-        return json.loads(CONFIG_FILE.read_text(encoding='utf-8'))
-    except (OSError, json.JSONDecodeError) as e:
+        # utf-8-sig: the Windows installer wrote this with a byte-order mark,
+        # which plain utf-8 keeps as U+FEFF and json.loads then rejects.
+        return json.loads(CONFIG_FILE.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError) as e:     # JSONDecodeError, UnicodeDecodeError
         log.warning('config file unreadable, ignoring: %s (%s)',
                     CONFIG_FILE, e)
         return {}

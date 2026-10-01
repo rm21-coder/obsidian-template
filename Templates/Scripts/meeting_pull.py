@@ -62,6 +62,23 @@ AUTH_FAILURE_RE = re.compile(
     r"|Unauthorized",
     re.I)
 
+# The organization does not let Claude Code sign in with a Claude subscription
+# at all (CLI: 403 oauth_not_allowed_for_organization, "Your organization has
+# disabled Claude subscription access for Claude Code"). Seen on a colleague's
+# Windows install 2026-10-01. Like an expired session it needs a human, but a
+# different one: /login cannot fix a tenant policy, so it gets its own advice.
+# Checked before AUTH_FAILURE_RE, which would otherwise give the /login advice.
+ORG_POLICY_RE = re.compile(
+    r"oauth_not_allowed_for_organization"
+    r"|disabled Claude subscription access",
+    re.I)
+
+ORG_POLICY_ADVICE = (
+    "your organization does not allow Claude Code to sign in with a Claude "
+    "subscription. Signing in again will not change that. The CLI needs an "
+    "Anthropic API key instead, or your admin must enable subscription access "
+    "for Claude Code")
+
 # Distinct from 1 so the caller can tell "needs a human" from "try again".
 EXIT_AUTH = 3
 
@@ -102,7 +119,9 @@ AUTH_MARKER = SCRIPTS_DIR / ".state" / "meeting_pull_auth_block.json"
 
 
 def auth_block_active():
-    """True if today's run already established that the CLI needs re-auth.
+    """Today's recorded auth block -- "session" or "org-policy" -- or None.
+
+    Established earlier today: the CLI needs a human before it can sign in.
 
     The later catch-up firings are worth their cost only against failures that
     a retry can clear. This makes them cheap no-ops for the one failure that a
@@ -111,20 +130,24 @@ def auth_block_active():
     be remembered.
     """
     try:
-        rec = json.loads(AUTH_MARKER.read_text())
+        rec = json.loads(AUTH_MARKER.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
-        return False
-    return rec.get("date") == _dt.date.today().isoformat()
+        return None
+    if rec.get("date") != _dt.date.today().isoformat():
+        return None
+    # Markers written before the kinds existed were all expired sessions.
+    return rec.get("kind") or "session"
 
 
-def set_auth_block(detail):
+def set_auth_block(detail, kind="session"):
     try:
         AUTH_MARKER.parent.mkdir(parents=True, exist_ok=True)
         AUTH_MARKER.write_text(json.dumps({
             "date": _dt.date.today().isoformat(),
             "at": _dt.datetime.now().isoformat(timespec="seconds"),
             "detail": detail[:300],
-        }, indent=2) + "\n")
+            "kind": kind,
+        }, indent=2) + "\n", encoding="utf-8")
     except OSError as e:
         log("could not write auth marker %s: %s" % (AUTH_MARKER, e))
 
@@ -217,9 +240,14 @@ def load_config(path):
                if sys.platform == "win32"
                else "run: ./install.sh --only 54-meeting-pull")
         die("config not found: %s (%s)" % (path, fix))
+    # utf-8-sig, not the default: on Windows the default is the ANSI code page,
+    # and the Windows installer wrote this file with a UTF-8 byte-order mark
+    # (Windows PowerShell 5.1's `Set-Content -Encoding utf8` always adds one).
+    # utf-8-sig drops a BOM if present and is plain UTF-8 otherwise, so the
+    # configs already on disk keep working after the installer is fixed.
     try:
-        config = json.loads(path.read_text())
-    except json.JSONDecodeError as exc:
+        config = json.loads(path.read_text(encoding="utf-8-sig"))
+    except ValueError as exc:      # JSONDecodeError and UnicodeDecodeError
         die("config %s is not valid JSON: %s" % (path, exc))
     missing = [k for k in REQUIRED_KEYS if not str(config.get(k, "")).strip()]
     if missing:
@@ -348,7 +376,7 @@ def render_prompt(template_path, config, config_path, out_dir):
         "OUT_DIR": str(out_dir),
         "TENANT_DOMAINS": ",".join(tenant_domains(config, config_path)),
     }
-    rendered = template_path.read_text()
+    rendered = template_path.read_text(encoding="utf-8-sig")
     for key, value in tokens.items():
         rendered = rendered.replace("{{%s}}" % key, value)
     if "{{" in rendered:
@@ -695,7 +723,13 @@ def main():
             "the later catch-up firings will run it once there is a route.")
         return EXIT_NO_NETWORK
 
-    if args.skip_if_fresh and auth_block_active():
+    block = auth_block_active() if args.skip_if_fresh else None
+    if block == "org-policy":
+        log("earlier today the Claude CLI was refused because %s. Not retrying; "
+            "re-run this without --skip-if-fresh once that has changed "
+            "(marker: %s)" % (ORG_POLICY_ADVICE, AUTH_MARKER))
+        return EXIT_AUTH
+    if block:
         log("the Claude CLI needed re-authentication earlier today and still "
             "does as far as this job knows - not retrying. Run `claude` in a "
             "terminal, sign in with /login, then re-run this without "
@@ -717,7 +751,11 @@ def main():
         import tempfile
         workdir = tempfile.mkdtemp(prefix="meeting_pull_cwd_")
         try:
+            # The CLI writes UTF-8. Without an explicit encoding, Windows
+            # decodes it in the ANSI code page: "·" arrives as "Â·", and
+            # a signature match against the CLI's words can miss.
             completed = subprocess.run(command, capture_output=True, text=True,
+                                       encoding="utf-8", errors="replace",
                                        timeout=PRODUCER_TIMEOUT_SEC, cwd=workdir)
         except subprocess.TimeoutExpired as exc:
             shutil.rmtree(workdir, ignore_errors=True)
@@ -767,6 +805,17 @@ def main():
             # Failure: keep the CLI's own words (the auth signature the
             # dashboard looks for lives here), but not an unbounded reply.
             print(transcript.rstrip()[-2000:], flush=True)
+
+        if ORG_POLICY_RE.search(transcript):
+            detail = next((ln.strip() for ln in transcript.splitlines()
+                           if ORG_POLICY_RE.search(ln)), "organization policy")
+            set_auth_block(detail[-300:], kind="org-policy")
+            notify_failure("Claude CLI sign-in is blocked by your organization. "
+                           "No meeting notes until that changes.")
+            log("FATAL: the Claude CLI was refused because %s. This is not "
+                "retryable: skipping the remaining attempts and today's later "
+                "firings." % ORG_POLICY_ADVICE)
+            return EXIT_AUTH
 
         if AUTH_FAILURE_RE.search(transcript):
             detail = next((ln.strip() for ln in transcript.splitlines()

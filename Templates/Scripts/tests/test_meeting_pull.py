@@ -254,6 +254,82 @@ class TestEndToEnd:
         assert "Please run /login" in capsys.readouterr().out
 
 
+# What the CLI printed on a colleague's Windows install, 2026-10-01, when the
+# tenant does not allow Claude Code to sign in with a subscription.
+ORG_POLICY_REPLY = json.dumps({
+    "type": "result", "subtype": "success", "is_error": True,
+    "api_error_status": 403, "api_error_code": "oauth_not_allowed_for_organization",
+    "result": "Your organization has disabled Claude subscription access for "
+              "Claude Code \u00b7 Use an Anthropic API key instead, or ask your "
+              "admin to enable access"})
+
+
+class TestWindowsFindings:
+    """Two failures found on a colleague's Windows machine, 2026-10-01."""
+
+    @pytest.fixture
+    def env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        return TestEndToEnd.env.__wrapped__(self, tmp_path, monkeypatch)
+
+    def test_a_config_written_with_a_byte_order_mark_still_loads(
+            self, env, tmp_path, allow_subprocess) -> None:
+        # Windows PowerShell 5.1's Set-Content -Encoding utf8 wrote every
+        # installer config this way; json.loads rejected it at char 0.
+        fake, run, drop, _ = env
+        (tmp_path / "meeting_pull.json").write_bytes(
+            b"\xef\xbb\xbf" + json.dumps(CONFIG).encode("utf-8"))
+        assert run(fake(_envelope('{"events": []}'))) == 0
+        assert any(drop.glob("schedule-handoff-*.v1.ready"))
+
+    def test_an_org_policy_refusal_stops_at_once_with_its_own_advice(
+            self, env, tmp_path, allow_subprocess, capsys) -> None:
+        fake, run, drop, argv_log = env
+        claude = fake(ORG_POLICY_REPLY, rc=1)
+        # --retry-delay 0: if the refusal were treated as retryable, fail in
+        # seconds rather than sleeping a minute per retry.
+        assert run(claude, "--retries", "2", "--retry-delay", "0") == mp.EXIT_AUTH
+        out = capsys.readouterr().out
+        assert "attempt 1/3" in out and "attempt 2/3" not in out, "it retried"
+        fatal = next(ln for ln in out.splitlines() if "FATAL" in ln)
+        assert "does not allow Claude Code to sign in with a Claude subscription" in fatal
+        assert "/login" not in fatal, "gave the expired-session advice for a tenant policy"
+        assert mp.auth_block_active() == "org-policy"
+
+    def test_the_org_policy_block_makes_later_firings_cheap_no_ops(
+            self, env, tmp_path, allow_subprocess, capsys) -> None:
+        fake, run, drop, argv_log = env
+        claude = fake(ORG_POLICY_REPLY, rc=1)
+        run(claude)
+        argv_log.unlink()
+        capsys.readouterr()
+        assert run(claude, "--skip-if-fresh") == mp.EXIT_AUTH
+        assert not argv_log.exists(), "a later firing started the CLI again"
+        assert "earlier today the Claude CLI was refused because" in capsys.readouterr().out
+
+    def test_a_marker_from_before_the_kinds_reads_as_an_expired_session(
+            self, env, tmp_path) -> None:
+        import datetime as _dt
+        (tmp_path / "auth.json").write_text(json.dumps(
+            {"date": _dt.date.today().isoformat(), "detail": "x"}))
+        assert mp.auth_block_active() == "session"
+
+    def test_the_cli_reply_is_decoded_as_utf8(self, env, monkeypatch,
+                                             allow_subprocess) -> None:
+        # Without encoding="utf-8", Windows decodes the reply in the ANSI code
+        # page ("\u00b7" became "\u00c2\u00b7"), which can also defeat a signature match.
+        fake, run, drop, _ = env
+        seen: list[dict] = []
+        real = mp.subprocess.run
+
+        def spy(cmd, *a, **kw):
+            seen.append(kw)
+            return real(cmd, *a, **kw)
+        monkeypatch.setattr(mp.subprocess, "run", spy)
+        run(fake(_envelope('{"events": []}')))
+        producer = seen[0]
+        assert producer.get("encoding") == "utf-8"
+        assert producer.get("errors") == "replace"
+
 class TestTheLogIsWhereTheNotificationSays:
     """The failure notification names a log file, so that file has to exist
     on the platform the notification fires on.

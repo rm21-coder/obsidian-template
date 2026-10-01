@@ -85,3 +85,8 @@ def test_install_and_update_share_one_requirements_step() -> None:
     body = body[:body.index("\n}\n")]
     assert "-m pip install --upgrade pip" in body
     assert "-m pip install -r $req" in body
+
+
+def test_a_no_op_update_does_not_claim_to_have_updated() -> None:
+    tail = UPDATE[UPDATE.index("if ($From -eq $to) {"):]
+    assert tail.index("Already at $to") < tail.index("Updated $From -> $to.")

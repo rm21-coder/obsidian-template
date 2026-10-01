@@ -114,5 +114,9 @@ if ($status -eq 'ok') {
 }
 
 Write-Host ''
-Write-Host "Updated $From -> $to." -ForegroundColor Green
+if ($From -eq $to) {
+    Write-Host "Already at $to; requirements and scheduled tasks refreshed." -ForegroundColor Green
+} else {
+    Write-Host "Updated $From -> $to." -ForegroundColor Green
+}
 exit 0

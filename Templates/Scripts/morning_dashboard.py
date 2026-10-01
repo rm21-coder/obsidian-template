@@ -625,8 +625,14 @@ PIPELINE_HINTS = {
     ),
     "com.obsidian.security.integrity": (
         "Exits non-zero when it detects file drift -- usually your own recent "
-        "script edits. Review the alert, then adopt the new baseline: "
+        "script edits. Review the alert in {log}, then adopt the new baseline: "
         "{python} integrity_monitor.py --update."
+    ),
+    "com.obsidian.security.plugin-check": (
+        "Exits non-zero when an installed plugin's files no longer match the "
+        "allowlist -- an update you installed, or tampering. The findings are "
+        "in {log}. Vet the changed plugin before "
+        "{python} plugin_integrity_check.py --update."
     ),
     "com.obsidian.vault-lint": (
         "Weekly content sweep. It runs with --exit-zero, so a non-zero status "
@@ -645,6 +651,8 @@ PIPELINE_LOGS = {
     "com.voice-cleanup":         ("voice-cleanup.err", "voice-cleanup"),
     "com.meeting-pull":          ("meeting-pull.log",  "meeting-pull"),
     "com.obsidian.vault-lint":   ("vault-lint.log",    "vault-lint"),
+    "com.obsidian.security.integrity":    ("obsidian-security.log", "security-integrity"),
+    "com.obsidian.security.plugin-check": ("obsidian-security.log", "security-plugin-check"),
 }
 
 # Labels that share another label's hint. The shipped meeting-pull plist is
@@ -658,9 +666,38 @@ PIPELINE_HINT_ALIASES = {
 # com.<task-name>. Without this the vault-lint and integrity hints never showed
 # on Windows at all.
 WIN_HINT_LABELS = {
-    "vault-lint":         "com.obsidian.vault-lint",
-    "security-integrity": "com.obsidian.security.integrity",
+    "vault-lint":            "com.obsidian.vault-lint",
+    "security-integrity":    "com.obsidian.security.integrity",
+    "security-plugin-check": "com.obsidian.security.plugin-check",
 }
+
+# Both security controls exit 2 when they have no usable baseline: none was
+# ever set up, the state is unreadable, or (plugin check) the signing key is
+# missing. That is not drift, and the drift hint's "adopt the new baseline"
+# is exactly wrong for it: on a machine that never had a baseline it skips the
+# vetting step, and on one that DID, a missing baseline may have been deleted,
+# and adopting would certify whatever the deletion hid. Reported 2026-10-01
+# from a Windows install that had never been baselined.
+SECURITY_LABELS = ("com.obsidian.security.integrity",
+                   "com.obsidian.security.plugin-check")
+NO_BASELINE_HINT = (
+    "Exit code 2: this control has no usable baseline to compare against, so "
+    "it is protecting nothing. Its own account is in {log}. If this machine "
+    "never had a baseline, setting one up is a deliberate step: vet the "
+    "current state first (docs/Security-Harness.md). If it DID have one, the "
+    "baseline has gone missing or is unreadable: investigate before adopting "
+    "anything."
+)
+
+
+def security_hint(label: str, exit_code) -> str | None:
+    """The hint for a failed security control, chosen by how it failed.
+
+    None for any other job, so callers fall back to pipeline_hint()."""
+    label = PIPELINE_HINT_ALIASES.get(label, label)
+    if label not in SECURITY_LABELS or exit_code != 2:
+        return None
+    return _fill_hint(NO_BASELINE_HINT, label)
 
 
 def pipeline_hint(label: str) -> str | None:
@@ -670,6 +707,11 @@ def pipeline_hint(label: str) -> str | None:
     hint = PIPELINE_HINTS.get(label)
     if hint is None:
         return None
+    return _fill_hint(hint, label)
+
+
+def _fill_hint(hint: str, label: str) -> str:
+    """Fill {log} and {python} in a hint for the platform this runs on."""
     mac_log, win_task = PIPELINE_LOGS.get(label, ("", ""))
     if sys.platform == "win32":
         import run_logged
@@ -928,6 +970,12 @@ _CLI_AUTH_RE = re.compile(
     r"|Unauthorized",
     re.I)
 
+# Kept in step with meeting_pull.ORG_POLICY_RE.
+_CLI_ORG_POLICY_RE = re.compile(
+    r"oauth_not_allowed_for_organization"
+    r"|disabled Claude subscription access",
+    re.I)
+
 
 def cli_auth_defect(path: str) -> str | None:
     """A CHECKED expired-Claude-CLI-session in this job's log, or None.
@@ -944,6 +992,14 @@ def cli_auth_defect(path: str) -> str | None:
     is the one diagnosis that is useless unless it names the human step.
     """
     for ln in reversed(_log_tail_lines(path)):
+        # First: the CLI's 403 for this names a tenant policy, and its text can
+        # also contain words the session patterns match. /login cannot fix it.
+        if _CLI_ORG_POLICY_RE.search(ln):
+            return ("Verified: your organization does not allow the Claude CLI "
+                    "to sign in with a Claude subscription -- the log says "
+                    f"\"{ln.strip()[:120]}\". Signing in again will not help: "
+                    "the CLI needs an Anthropic API key instead, or an admin "
+                    "must enable subscription access for Claude Code.")
         if _CLI_AUTH_RE.search(ln):
             return ("Verified: the Claude CLI's stored session has expired -- "
                     f"the log says \"{ln.strip()[:120]}\". A scheduled run "
@@ -1297,7 +1353,8 @@ def _collect_pipeline_health_windows() -> list[dict]:
         elif last_run is None and result == _WIN_TASK_NOT_RUN:
             problems.append("Has not run yet.")
 
-        hint = pipeline_hint(WIN_HINT_LABELS.get(name, f"com.{name}"))
+        hint_label = WIN_HINT_LABELS.get(name, f"com.{name}")
+        hint = security_hint(hint_label, result) or pipeline_hint(hint_label)
         if hint and status != "pass":
             problems.append(hint)
 
@@ -1550,7 +1607,7 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
                 f"until the gateway is reachable again -- usually meaning the "
                 f"VPN is down.")
 
-        hint = pipeline_hint(label)
+        hint = security_hint(label, st["exit"]) or pipeline_hint(label)
         if hint and status != "pass":
             problems.append(hint)
 
