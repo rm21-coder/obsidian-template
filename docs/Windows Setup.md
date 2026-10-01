@@ -274,7 +274,7 @@ How the Windows layer maps onto the macOS original:
 |---|---|---|
 | Scheduler | `launchd` | Task Scheduler (`Register-Tasks.ps1` + `schedules.psd1`) |
 | Job logs | `StandardOutPath` / `StandardErrorPath` in each plist, under `~/Library/Logs/` | Each task runs its script through `run_logged.py`, which appends stdout + stderr to `%LOCALAPPDATA%\obsidian-logs\<task-name>.log` (5 MB cap, one `.log.1` generation). Task Scheduler itself discards the output. |
-| Notifications | `osascript` toast | `Send-Notification.ps1` — BurntToast if installed, else a log-only fallback |
+| Notifications | `osascript` toast | `Send-Notification.ps1` — BurntToast if installed, else the built-in Windows notification API; always logged to `notifications.log` |
 | Vault path | `~/Obsidian` | `%USERPROFILE%\Obsidian` (override with `$env:OBSIDIAN_VAULT`) |
 | Runtime state | `~/.local/share/*` | `%LOCALAPPDATA%\*` |
 | State-file permissions | `chmod 0600` | `icacls`: inheritance dropped, owner + `SYSTEM` only (`chmod` alone is a no-op on Windows) |

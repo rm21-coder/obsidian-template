@@ -43,8 +43,10 @@ for the full setup guide.
 - `Install-SendTo.ps1` — registers the right-click **Send to → "Markitdown to
   Obsidian"** shortcut.
 - `sync-vault.ps1` — port of `sync-vault.sh` (RAG indexer wrapper).
-- `Send-Notification.ps1` — toast helper replacing `osascript` notifications
-  (BurntToast if installed, else a log-only fallback).
+- `Send-Notification.ps1` — toast helper replacing `osascript` notifications.
+  Logs every message to `notifications.log`, then shows a toast through
+  BurntToast if installed, otherwise through the Windows notification API
+  directly (no module needed). A toast that cannot be shown is logged.
 - `uninstall.ps1` — tears down what `install.ps1` set up; see
   `.\uninstall.ps1 -?` for flags.
 

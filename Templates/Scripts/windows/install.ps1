@@ -543,6 +543,9 @@ if ($prof) {
 if (-not $SkipTasks) {
     Write-Host '== 80 scheduled tasks (12 enabled, 3 disabled) =='
     & (Join-Path $PSScriptRoot 'Register-Tasks.ps1')
+    if ($LASTEXITCODE -ne 0) {
+        throw 'scheduled-task registration failed: see the FAILED list above'
+    }
 
     # Enabled only after Register-Tasks has created it, and only when the
     # profile asked for the producer AND the config above actually got written.
