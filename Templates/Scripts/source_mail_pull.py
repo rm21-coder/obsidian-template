@@ -10,8 +10,8 @@ Why not iCloud Drive: docs/HANDOFF-ARCHITECTURE.md already rules on this for
 meeting handoff -- a cloud-drive sync client is fragile as a transport (sync
 races, conflict copies, online-only placeholders that don't hydrate in time),
 which is why Tier B exists. The same reasoning applies here, plus iCloud Drive
-forces Apple iCloud for Windows onto any non-Mac endpoint. This module is the
-same idea as handoff_blob_pull.py with a mailbox as the relay.
+forces Apple iCloud for Windows onto any non-Mac endpoint. This module is a
+Tier B relay with a mailbox as the transport.
 
     transport (this file)  ->  ~/SourceMedia/<Type>/  ->  existing watcher
 

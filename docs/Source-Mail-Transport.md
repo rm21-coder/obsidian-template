@@ -18,8 +18,7 @@ which is exactly why Tier B exists. The same reasoning applies to source media,
 with an extra cost on Windows: iCloud Drive drop folders force Apple iCloud for
 Windows onto a machine that otherwise needs nothing from Apple.
 
-`source_mail_pull.py` is the same idea as `handoff_blob_pull.py` with a mailbox
-as the relay:
+`source_mail_pull.py` is a Tier B relay with a mailbox as the transport:
 
 ```
 iOS Shortcut ──email──► dedicated mailbox ──IMAP──► source_mail_pull.py

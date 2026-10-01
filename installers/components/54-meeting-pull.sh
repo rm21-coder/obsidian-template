@@ -111,13 +111,11 @@ config.update({
     "read_tool": read_tool,
     "out_dir": out_dir,
 })
-# Producer selection: "claude" (default, zero API setup) or "graph"
-# (direct Microsoft Graph — no LLM in the loop; see
-# docs/Meeting-Handoff-MCP-Producer.md, "Skipping the LLM entirely").
+# Producer: "claude" is the only one (the direct-Graph producer was removed
+# 2026-09-30; meeting_pull.py refuses a config that still names it).
 # Preserve an existing explicit choice on re-runs.
 config.setdefault("producer", "claude")
 # Days of lookahead beyond today: 0 = today only, 1 = today + tomorrow.
-# Both producers read this, so the window does not depend on which ran.
 # Preserve an existing explicit choice on re-runs.
 config.setdefault("lookahead_days", 1)
 # Count that lookahead in weekdays, so Friday reaches Monday rather than

@@ -6,8 +6,8 @@
   Each job's Enabled flag in the manifest is its starting state, with one
   exception on a refresh: a task that is currently enabled stays enabled, so
   re-running this never switches off a job someone turned on by hand. Jobs with
-  Enabled=$true (12 of 15) go live immediately and fire on their triggers.
-  Jobs with Enabled=$false (3 of 15) are registered but left DISABLED, since
+  Enabled=$true (12 of 14) go live immediately and fire on their triggers.
+  Jobs with Enabled=$false (2 of 14) are registered but left DISABLED, since
   each needs a per-user resource this template can't assume exists; validate
   the script by hand, then enable it deliberately:
       Enable-ScheduledTask -TaskName source-mail-pull -TaskPath '\Obsidian'

@@ -3,10 +3,10 @@
 .DESCRIPTION
   Windows counterpart to install.sh. Sets up the vault, venv, plugins, and
   registers the scheduled tasks, honouring the per-job Enabled flag in
-  schedules.psd1: 12 of the 15 jobs ship ENABLED and start running on their
-  triggers as soon as this finishes; the other 3 are registered DISABLED
+  schedules.psd1: 12 of the 14 jobs ship ENABLED and start running on their
+  triggers as soon as this finishes; the other 2 are registered DISABLED
   because each needs a per-user resource this template can't assume exists
-  (a dedicated mailbox, an Azure Blob relay, an MCP calendar connector).
+  (a dedicated mailbox, an MCP calendar connector).
   Idempotent -- safe to re-run.
 
   Run it (one command, from the repo root):
@@ -19,7 +19,7 @@
           app (winget) | 06 docker desktop (winget, early -- see note below) |
           10 vault check | 20 secrets stub | 30 community
           plugins | 31 quickadd patch | 35 ribbon order | 40 venv + deps |
-          50 llm-rag (optional) | 80 register tasks (12 enabled, 3 disabled) |
+          50 llm-rag (optional) | 80 register tasks (12 enabled, 2 disabled) |
           90 status
 
   Docker Desktop's installer requests admin elevation -- a UAC prompt with its
@@ -512,12 +512,11 @@ if ($prof) {
                 read_tool      = $mpRead
                 out_dir        = $mpOut
             } -Default @{
-                # "claude" (default) or "graph" (direct Microsoft Graph, no LLM
-                # in the loop). An explicit choice survives a re-run.
+                # "claude" is the only producer; the key stays so an existing
+                # config's explicit choice survives a re-run.
                 producer                 = 'claude'
                 # Days of lookahead beyond today, counted in weekdays so Friday
-                # reaches Monday. Both producers read it, so the window does not
-                # depend on which one ran.
+                # reaches Monday.
                 lookahead_days           = 1
                 lookahead_skips_weekends = $true
             } | Out-Null
@@ -536,7 +535,7 @@ if ($prof) {
 }
 
 if (-not $SkipTasks) {
-    Write-Host '== 80 scheduled tasks (12 enabled, 3 disabled) =='
+    Write-Host '== 80 scheduled tasks (12 enabled, 2 disabled) =='
     & (Join-Path $PSScriptRoot 'Register-Tasks.ps1')
     if ($LASTEXITCODE -ne 0) {
         throw 'scheduled-task registration failed: see the FAILED list above'
@@ -593,7 +592,7 @@ if ($SkipTasks) {
     Write-Host '.env first if you have not, or they will log errors until you do.'
     Write-Host 'Sanity-check one by hand:'
     Write-Host ("  {0} `"{1}`"" -f $venvPy, (Join-Path $scriptsDir 'tag_clippings.py'))
-    Write-Host 'The 3 disabled jobs (source-mail-pull, meeting-pull, handoff-blob-pull) each'
+    Write-Host 'The 2 disabled jobs (source-mail-pull, meeting-pull) each'
     Write-Host 'need a per-user resource first; validate the script, then enable deliberately:'
     Write-Host "  Enable-ScheduledTask -TaskName source-mail-pull -TaskPath '\Obsidian\'"
 }

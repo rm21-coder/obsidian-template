@@ -261,9 +261,8 @@ def last_day_of_window(first, lookahead, skip_weekends):
 def window_days(config, first=None):
     """Resolve the pull window to (first_day, last_day), both inclusive dates.
 
-    Shared by BOTH producers -- meeting_pull.py renders these into the prompt,
-    graph_calendar_fetch.py turns them into a Graph calendarView range -- so
-    the window cannot come to depend on which producer happened to run.
+    Computed here and rendered into the prompt, so the window is fixed by
+    the config rather than left to the session's reading of the calendar.
 
     Raises ValueError rather than exiting, so each caller can report the
     problem in its own voice.
@@ -663,39 +662,28 @@ def main():
     config = load_config(config_path)
     out_dir = resolve_out_dir(args, config)
 
-    # Producer selection. "claude" (default) drives a headless Claude CLI
-    # session against the M365 MCP connector — zero custom API setup, the
-    # original path. "graph" calls Microsoft Graph directly via
-    # graph_calendar_fetch.py — no LLM tokens, a 2-second HTTP call that
-    # fits inside any wake window, but needs a one-time device-code
-    # sign-in (graph_calendar_fetch.py --auth). Both feed the identical
-    # deterministic transform; retries/skip-if-fresh/notify below apply
-    # to either.
+    # "claude" is the only producer: a headless Claude CLI session against
+    # the M365 MCP connector. The key is still read so that a config naming
+    # the removed direct-Graph producer fails loud here rather than quietly
+    # running a different producer than the one it asks for.
     producer = str(config.get("producer") or "claude").strip().lower()
-
     if producer == "graph":
-        fetcher = SCRIPTS_DIR / "graph_calendar_fetch.py"
-        producer_cmd = [sys.executable, str(fetcher),
-                        "--config", str(config_path),
-                        "--out-dir", str(out_dir)]
-        if args.dry_run:
-            log("dry run - would invoke: %s" % " ".join(producer_cmd))
-            log("drop folder: %s" % out_dir)
-            return 0
-    elif producer == "claude":
-        prompt = render_prompt(template_path, config, config_path, out_dir)
-        tools = allowed_tools(config)
-        if args.dry_run:
-            log("dry run - would invoke: claude -p <prompt> --restricted "
-                "--permission-mode dontAsk --allowedTools %r --disallowedTools "
-                "<%d tools> --output-format json" % (
-                    tools, len(disallowed_tools(config).split())))
-            log("drop folder: %s" % out_dir)
-            print(prompt)
-            return 0
-        producer_cmd = None  # built below, after skip-if-fresh
-    else:
-        die("config 'producer' must be 'claude' or 'graph', not %r" % producer)
+        die("the 'graph' producer (graph_calendar_fetch.py) was removed from "
+            "the template on 2026-09-30. Set \"producer\": \"claude\" in %s, "
+            "or delete the key." % config_path)
+    if producer != "claude":
+        die("config 'producer' must be 'claude', not %r" % producer)
+
+    prompt = render_prompt(template_path, config, config_path, out_dir)
+    tools = allowed_tools(config)
+    if args.dry_run:
+        log("dry run - would invoke: claude -p <prompt> --restricted "
+            "--permission-mode dontAsk --allowedTools %r --disallowedTools "
+            "<%d tools> --output-format json" % (
+                tools, len(disallowed_tools(config).split())))
+        log("drop folder: %s" % out_dir)
+        print(prompt)
+        return 0
 
     if args.skip_if_fresh and handoff_exists_for_today(out_dir):
         log("today's handoff already exists in %s - nothing to do" % out_dir)
@@ -715,10 +703,8 @@ def main():
         return EXIT_AUTH
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    if producer == "claude":
-        claude = find_claude(args.claude)
-        producer_cmd = producer_command(claude, prompt, tools, disallowed_tools(config))
-    command = keep_awake(producer_cmd)
+    claude = find_claude(args.claude)
+    command = keep_awake(producer_command(claude, prompt, tools, disallowed_tools(config)))
 
     attempts = max(1, args.retries + 1)
     for attempt in range(1, attempts + 1):
@@ -750,7 +736,7 @@ def main():
         shutil.rmtree(workdir, ignore_errors=True)
         transcript = (completed.stdout or "") + (completed.stderr or "")
 
-        if completed.returncode == 0 and producer == "claude":
+        if completed.returncode == 0:
             # The session returned; now this script does what the session used
             # to do with Bash and Write. Its reply is NOT echoed to the log:
             # it contains every meeting body.
@@ -777,17 +763,10 @@ def main():
             log("done")
             return 0
 
-        if transcript.strip() and producer == "claude":
+        if transcript.strip():
             # Failure: keep the CLI's own words (the auth signature the
             # dashboard looks for lives here), but not an unbounded reply.
             print(transcript.rstrip()[-2000:], flush=True)
-        elif transcript.strip():
-            print(transcript.rstrip(), flush=True)
-
-        if completed.returncode == 0:
-            clear_auth_block()
-            log("done")
-            return 0
 
         if AUTH_FAILURE_RE.search(transcript):
             detail = next((ln.strip() for ln in transcript.splitlines()
@@ -807,8 +786,8 @@ def main():
             return EXIT_AUTH
 
         log("producer exited %d - no handoff written" % completed.returncode)
-        # A handoff can exist despite a non-zero exit -- for the graph producer,
-        # which runs the transform itself, or from an earlier attempt today.
+        # A handoff can exist despite a non-zero exit, from an earlier attempt
+        # today.
         # Re-pulling would be harmless but wasteful.
         if handoff_exists_for_today(out_dir):
             log("today's handoff is present anyway - treating as success")

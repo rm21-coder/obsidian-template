@@ -52,12 +52,12 @@ then call scripts directly, e.g. `.\Templates\Scripts\windows\install.ps1`.)
 - Patch QuickAdd's folder-picker fall-through and apply the canonical ribbon
   icon order
 - Create a per-vault Python venv and install `requirements.txt`
-- Register all 15 scheduled jobs in Task Scheduler under `\Obsidian\` — 13
+- Register all 14 scheduled jobs in Task Scheduler under `\Obsidian\` — 12
   ship **enabled** by default (validated end-to-end on a clean Windows 11
   install) and begin firing on their triggers as soon as the installer
-  finishes, the other 3 ship **disabled** because they each need a per-user
-  resource this template can't assume exists (a dedicated mailbox, an Azure
-  Blob relay, or an MCP calendar connector) — see
+  finishes, the other 2 ship **disabled** because they each need a per-user
+  resource this template can't assume exists (a dedicated mailbox or an MCP
+  calendar connector) — see
   [Scheduled jobs](#scheduled-jobs) below
 - Print a final status table of every registered task
 
@@ -300,16 +300,16 @@ seeds the `LLM_*`/`CLASSIFIER_*` config it reads.
 
 ## Scheduled jobs
 
-All 15 jobs are registered by `Register-Tasks.ps1` under the Task Scheduler
-path `\Obsidian\`, from the manifest in `schedules.psd1`. 13 ship **enabled**
+All 14 jobs are registered by `Register-Tasks.ps1` under the Task Scheduler
+path `\Obsidian\`, from the manifest in `schedules.psd1`. 12 ship **enabled**
 by default — each was validated end-to-end on a clean Windows 11 install by
 running its script by hand before its task was enabled. Because they are
 enabled at registration time, they start firing as soon as `install.ps1`
 finishes, so fill in `.env` first or expect logged errors until you do. The
-other 3 ship
+other 2 ship
 **disabled** because each needs a per-user resource this template can't
-assume exists (a dedicated mailbox, an Azure Blob relay, or an MCP calendar
-connector); set up the prerequisite, validate the script by hand, then
+assume exists (a dedicated mailbox or an MCP calendar connector); set up the
+prerequisite, validate the script by hand, then
 `Enable-ScheduledTask -TaskName <name> -TaskPath '\Obsidian\'`.
 
 | Task | Script | Trigger | Default | Notes |
@@ -322,7 +322,6 @@ connector); set up the prerequisite, validate the script by hand, then
 | `meeting-prep` | `meeting_prep.py` | every 5 min | enabled | Inserts/refreshes open follow-up task callouts into today's individual meeting notes already in the vault. Gated to weekday business hours; a no-op the rest of the time. |
 | `meeting-prepopulate` | `meeting_prepopulate.py` | every 30 min | enabled | Reads a schedule-handoff JSON from a local drop folder via a pluggable source (`drop` or `mcp`) — see [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md). The producer side is yours to build; the consumer runs cleanly and reports "no handoffs to process" until it's wired up. |
 | `meeting-pull` | `meeting_pull.py` | weekdays 5:00 AM | **disabled** | Producer side of meeting pre-population: shells out to the Claude CLI over an MCP calendar connector. Exercised end-to-end on macOS only — needs the Claude CLI on `PATH` and a registered MCP calendar connector before it can even reach its own config; validate with `python meeting_pull.py --dry-run` first. |
-| `handoff-blob-pull` | `handoff_blob_pull.py` | every 5 min | **disabled** | Tier B handoff relay: pulls meeting-handoff sets from Azure Blob Storage via SAS-authenticated REST — see [`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md). Fails loud (exit 1, clear message) until `HANDOFF_BLOB_ACCOUNT_URL`, `HANDOFF_BLOB_CONTAINER`, and `HANDOFF_BLOB_SAS` are set in `.env` — leave disabled until you have real Azure Blob credentials. |
 | `group-photos` | `run_group_photos.py` | daily 2:00 AM | enabled | Runs `Z_attachments/insert_group_placeholders.py` then `refresh_groups.py` in sequence, mirroring the macOS `insert && refresh` pipeline. |
 | `rag-sync` | `obsidian-rag-sync.py` | daily 3:00 AM | enabled | Pushes the vault into Open WebUI's Knowledge collection. Needs `-WithRAG` set up first — safe to leave enabled otherwise, since it detects a missing/unconfigured stack and skips cleanly. |
 | `security-plugin-check` | `plugin_integrity_check.py` | daily 6:30 AM | enabled | Community-plugin code integrity, HMAC-signed baseline (DPAPI-backed key on Windows). Run once with `--update` to set the initial baseline before relying on its output. |
@@ -358,8 +357,7 @@ exactly as it follows the macOS symlink).
 
 **No TCC/Full-Disk-Access scaffolding needed on either platform:** the
 meeting-prepopulate consumer only ever reads a plain local drop folder (fed
-directly or via a relay — see
-[`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md)), never a
+directly or via a relay), never a
 TCC-protected cloud-sync mount, so there's nothing scoped-access-wrapper-like
 to port. Scripts just run with the user's own permissions.
 
@@ -564,11 +562,6 @@ x64 box that can offload to a discrete GPU.
   contract, same as the equivalent macOS feature. A cloud-drive-sync-client
   transport (e.g. OneDrive) is deliberately not implemented — see
   `HANDOFF-ARCHITECTURE.md`'s Tier A note for why.
-- **`handoff_blob_pull.py`** (the Azure Blob Tier B relay) fails loud with a
-  clear message until `HANDOFF_BLOB_ACCOUNT_URL`, `HANDOFF_BLOB_CONTAINER`,
-  and `HANDOFF_BLOB_SAS` are set — see
-  [`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md). Not
-  validated against a real Azure Blob Storage account on Windows yet.
 - **QuickAdd's folder-picker patch** rewrites a minified call in `main.js`.
   It matches structurally rather than by a fixed string (the fall-through is
   the only `getOrCreateFolder` call whose first argument is its own

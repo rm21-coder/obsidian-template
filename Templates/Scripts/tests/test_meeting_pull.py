@@ -226,6 +226,26 @@ class TestEndToEnd:
         assert run(fake(_envelope('{"events": []}'))) == 0
         assert any(drop.glob("schedule-handoff-*.v1.ready"))
 
+    def test_a_config_naming_the_removed_graph_producer_is_refused(
+            self, env, tmp_path, allow_subprocess, capsys) -> None:
+        """graph_calendar_fetch.py left the template on 2026-09-30. A config
+        still asking for it must stop and say so, not quietly run claude."""
+        fake, run, drop, argv_log = env
+        (tmp_path / "meeting_pull.json").write_text(json.dumps({**CONFIG, "producer": "graph"}))
+        with pytest.raises(SystemExit) as exc:
+            run(fake(_envelope(json.dumps({"events": [EVENT]}))))
+        assert exc.value.code == 1
+        assert "'graph' producer (graph_calendar_fetch.py) was removed" in capsys.readouterr().out
+        assert not argv_log.exists(), "the claude session ran anyway"
+        assert not any(drop.glob("schedule-handoff-*"))
+
+    def test_an_explicit_claude_producer_still_runs(self, env, tmp_path,
+                                                    allow_subprocess) -> None:
+        fake, run, drop, _ = env
+        (tmp_path / "meeting_pull.json").write_text(json.dumps({**CONFIG, "producer": "claude"}))
+        assert run(fake(_envelope('{"events": []}'))) == 0
+        assert any(drop.glob("schedule-handoff-*.v1.ready"))
+
     def test_auth_failure_is_still_recognised(self, env, allow_subprocess,
                                               capsys) -> None:
         fake, run, drop, _ = env

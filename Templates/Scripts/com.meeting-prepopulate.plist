@@ -5,8 +5,8 @@
 
   Watches a local drop folder (Templates/Scripts/HandoffDrop by default) for
   schedule handoff payloads (JSON + .ready sentinel), delivered there directly
-  by your producer or via a relay (e.g. the Azure Blob Tier B relay - see
-  docs/Azure-Blob-Handoff-Relay.md). Fires on WatchPaths events, a
+  by your producer or via a relay (see docs/HANDOFF-ARCHITECTURE.md).
+  Fires on WatchPaths events, a
   Sunday-21:00 belt-and-suspenders timer, and a 30-minute StartInterval poll.
 
   Because this is a plain local folder (not a cloud-sync mount), no Full Disk
