@@ -68,6 +68,8 @@ except ImportError:
 # with OBSIDIAN_VAULT for testing.
 _vault = Path(os.environ.get("OBSIDIAN_VAULT", str(Path.home() / "Obsidian"))).expanduser()
 sys.path.insert(0, str(_vault / "Templates" / "Scripts"))
+import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+
 try:
     from markitdown_cleanup import clean as cleanup_clean
 except ImportError:
@@ -150,7 +152,7 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
 
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(body, encoding="utf-8")
+        out.write_text(templater_guard.neutralize(body), encoding="utf-8")
     except Exception as e:
         return False, f"{src.name}: write failed: {e}"
 

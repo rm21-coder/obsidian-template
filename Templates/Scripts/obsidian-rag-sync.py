@@ -117,6 +117,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import classification_tier  # noqa: E402
+import templater_guard  # noqa: E402
 
 try:
     from dotenv import load_dotenv
@@ -684,7 +685,9 @@ def write_run_report(start_time: datetime, summary: dict, dry_run: bool) -> Path
         lines.append(f"- Completed: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append("")
 
-        target.write_text("\n".join(lines), encoding="utf-8")
+        # Server errors and file names are echoed here; keep a "<%" in one
+        # from running as Templater code in reading view.
+        target.write_text(templater_guard.neutralize("\n".join(lines)), encoding="utf-8")
         log.info(f"run report written to {target.relative_to(VAULT_PATH)}")
         return target
     except Exception as exc:

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import os
 import sys
+import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+
 import time
 import argparse
 import subprocess
@@ -177,7 +179,7 @@ tags: []
 
     # Save to Creations
     note_path = creations / f"{timestamp}.md"
-    note_path.write_text(note_content, encoding="utf-8")
+    note_path.write_text(templater_guard.neutralize(note_content), encoding="utf-8")
     log.info("Created note: %s", note_path.name)
 
     # Remove the raw input file

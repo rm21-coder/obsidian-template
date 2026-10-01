@@ -54,6 +54,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+
 import textwrap
 import urllib.error
 import urllib.request
@@ -537,7 +539,7 @@ def process_video(url: str, *, out_dir: Path, model: str,
 
     frontmatter = build_frontmatter(info, suggested, description)
     out_dir.mkdir(parents=True, exist_ok=True)
-    note_path.write_text(frontmatter + "\n" + body, encoding="utf-8")
+    note_path.write_text(templater_guard.neutralize(frontmatter + "\n" + body), encoding="utf-8")
     log(f"wrote {note_path}", verbose=verbose)
     return note_path
 

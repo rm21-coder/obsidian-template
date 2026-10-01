@@ -70,6 +70,10 @@ import zipfile
 from datetime import date
 from pathlib import Path
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+
 
 # ─── Frontmatter ─────────────────────────────────────────────────────────────
 
@@ -470,6 +474,8 @@ def _main() -> int:
 
     raw = args.file.read_text(encoding="utf-8")
     cleaned, summary = clean(raw, src_for_cleanup, args.attachments_dir)
+    # A converted document is text from outside the vault.
+    cleaned = templater_guard.neutralize(cleaned)
 
     if args.in_place:
         args.file.write_text(cleaned, encoding="utf-8")

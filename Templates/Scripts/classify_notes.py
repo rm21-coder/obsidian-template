@@ -64,6 +64,8 @@ import json
 import os
 import re
 import sys
+import templater_guard  # noqa: E402
+
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -350,6 +352,8 @@ def yaml_quote(value: str) -> str:
     flat = flat.replace('"', "'").replace("\\", "/")
     flat = flat.lstrip("-?,&*!|>%@`' ").strip()
     flat = " ".join(flat.split())
+    # Model output about a note's content, which can be a clipped page.
+    flat = templater_guard.neutralize(flat)
     return '"' + flat + '"'
 
 

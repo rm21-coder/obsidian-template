@@ -19,6 +19,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+
 from datetime import datetime
 from pathlib import Path
 
@@ -67,7 +69,7 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
 
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(body, encoding="utf-8")
+        out.write_text(templater_guard.neutralize(body), encoding="utf-8")
     except OSError as e:
         return False, f"{src.name}: write failed: {e}"
 

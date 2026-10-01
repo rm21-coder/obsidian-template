@@ -46,6 +46,9 @@ except Exception:
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import script_lock  # noqa: E402  (needs the path insert above)
 import handoff_source as hs  # noqa: E402
+# Invite text, attendee names and locations are written into new notes; none
+# of it may run as Templater code (see templater_guard).
+import templater_guard  # noqa: E402
 
 # ============================================================
 # Paths and constants
@@ -1005,7 +1008,7 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
     current = fm_match.group(1).strip()
     if current:
         return False  # already populated, never overwrite
-    email = _yaml_email(email)
+    email = templater_guard.neutralize(_yaml_email(email) or '')
     if not email:
         return False
     new_line = f'{target_field}: {email}'
@@ -1205,7 +1208,7 @@ def resolve_or_create_person(attendee: dict, contact_by_email: dict,
     if not dry_run:
         target_dir.mkdir(parents=True, exist_ok=True)
         try:
-            path.write_text(content, encoding='utf-8')
+            path.write_text(templater_guard.neutralize(content), encoding='utf-8')
         except OSError as exc:
             # A stub that cannot be written is skipped, never raised: an
             # exception here withheld the handoff's ack, so the same invite
@@ -1709,7 +1712,7 @@ Recurrence: **{_yaml_text(recur_human)}**
     log.info('  CREATE-SERIES-ROOT %s', path.name)
     if not dry_run:
         path.parent.mkdir(exist_ok=True, parents=True)
-        path.write_text(content, encoding='utf-8')
+        path.write_text(templater_guard.neutralize(content), encoding='utf-8')
 
 
 # ============================================================
@@ -2099,7 +2102,7 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                      ', NEEDS-ATTENDEES' if needs_attendees else '')
             if not dry_run:
                 MEETINGS_DIR.mkdir(parents=True, exist_ok=True)
-                path.write_text(content, encoding='utf-8')
+                path.write_text(templater_guard.neutralize(content), encoding='utf-8')
             counters['meeting-file-written'] += 1
 
             if uid:

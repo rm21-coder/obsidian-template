@@ -26,6 +26,8 @@ Setup:
 
 import os
 import sys
+import templater_guard  # noqa: E402
+
 import json
 import re
 import argparse
@@ -247,7 +249,12 @@ def log_promotion_candidate(tag: str, source_file: Path):
             "| Date | Source file | Proposed tag |\n|---|---|---|\n",
             encoding="utf-8",
         )
-    line = f"| {datetime.now().strftime('%Y-%m-%d %H:%M')} | {source_file.name} | `{tag}` |\n"
+    # The tag is model output about a clipped page, and the file name is the
+    # page's title: neither may break the table or run as Templater code.
+    safe_tag = str(tag).replace("`", "'").replace("|", "/").replace("\n", " ")
+    safe_name = source_file.name.replace("|", "/").replace("\n", " ")
+    line = templater_guard.neutralize(
+        f"| {datetime.now().strftime('%Y-%m-%d %H:%M')} | {safe_name} | `{safe_tag}` |\n")
     with PROMOTION_CANDIDATES_FILE.open("a", encoding="utf-8") as f:
         f.write(line)
 
