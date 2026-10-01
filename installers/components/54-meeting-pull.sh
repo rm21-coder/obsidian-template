@@ -17,6 +17,11 @@
 
 set -euo pipefail
 
+# install_plist_and_load lives here. Every other agent component sources it;
+# this one did not, so the final step exited 127 (command not found) after the
+# config had already been written, and the agent was never installed.
+source "$REPO_ROOT/installers/lib/plist.sh"
+
 VAULT="$HOME/Obsidian"
 SCRIPTS="$VAULT/Templates/Scripts"
 RUNNER="$SCRIPTS/meeting_pull.py"

@@ -185,6 +185,30 @@ The orchestrator + 28 component installers live under `installers/`. The origina
 - [`docs/Windows Setup.md`](docs/Windows%20Setup.md) — the full Windows guide: quick start, prerequisites, scheduled jobs, architecture, RAG setup, uninstall
 - [`docs/Demo-Content.md`](docs/Demo-Content.md) — the synthetic dataset: what ships, how to seed the dated half, and how to remove all of it
 
+## Update an existing install
+
+### macOS
+
+```bash
+cd ~/Obsidian && ./update.sh              # --dry-run to see what would change
+```
+
+Pulls, reinstalls the requirements, re-renders and reloads only the scheduled
+jobs this machine already has where their template changed (the old copy is
+backed up), reinstalls plugins only if their pins moved, and reports the
+security controls without adopting a baseline. Don't re-run `install.sh` to
+update: it does not remember what you declined, so `--auto` would add every
+component.
+
+### Windows
+
+```powershell
+cd $env:USERPROFILE\Obsidian; powershell -ExecutionPolicy Bypass -File .\Templates\Scripts\windows\update.ps1
+```
+
+Pulls, reinstalls the requirements, and re-registers the scheduled tasks. See
+"Updating an existing install" in [`docs/Windows Setup.md`](docs/Windows%20Setup.md).
+
 ## Uninstall
 
 ### macOS

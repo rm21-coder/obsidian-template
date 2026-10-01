@@ -3,7 +3,7 @@
 <!--
   Meeting Pre-Population LaunchAgent
 
-  Watches a local drop folder (Templates/Scripts/HandoffDrop by default) for
+  Watches a local drop folder (~/MeetingIngest, outside the vault) for
   schedule handoff payloads (JSON + .ready sentinel), delivered there directly
   by your producer or via a relay (see docs/HANDOFF-ARCHITECTURE.md).
   Fires on WatchPaths events, a
@@ -35,7 +35,7 @@
 
     <key>WatchPaths</key>
     <array>
-        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/HandoffDrop</string>
+        <string>/Users/YOUR_USERNAME/MeetingIngest</string>
     </array>
 
     <key>StartCalendarInterval</key>

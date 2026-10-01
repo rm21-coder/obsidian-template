@@ -165,8 +165,29 @@ Claude's part is the same as for the install: explain the output and check the
 result, for example that every task now launches `pythonw.exe`. Let the human
 run the update.
 
-**macOS:** there is no tested update procedure yet. Ask the maintainer before
-re-running `install.sh` over an existing install.
+**macOS:** one command, run by the human from the vault:
+
+```bash
+cd ~/Obsidian && ./update.sh
+```
+
+Do not re-run `install.sh` to update. It doesn't record which components you
+declined, so `--auto` would add all of them, including the local LLM stack, and
+interactive mode asks every question again. `update.sh` changes only what this
+machine already has:
+
+1. It pulls, and runs the rest of the update from the code it just pulled.
+2. It reinstalls the requirements.
+3. It re-renders and reloads only the scheduled jobs whose template changed,
+   prints the diff, and backs up the old copy to
+   `~/Library/Logs/obsidian-template-update/`.
+4. It reinstalls the plugins only if their pins moved.
+5. It reports the two security controls, without adopting a baseline.
+
+A job that is new upstream, or that you declined, is listed with the
+`./install.sh --only <component>` command that adds it. `./update.sh --dry-run`
+shows all of this and changes nothing. The repo must be the vault: `~/Obsidian`
+is the clone, or a symlink to it.
 
 ## When something looks broken
 
