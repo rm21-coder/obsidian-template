@@ -8,6 +8,7 @@ an "assert not exported" test and is useless.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -655,3 +656,250 @@ def test_double_bom_frontmatter_is_read(vault: Path, text: str):
 def test_parser_disagreements_are_unreadable(vault: Path, fm: str):
     p = vault / "Knowledge" / "R.md"; p.write_text(f"---\n{fm}\n---\nbody\n", encoding="utf-8")
     _assert_restricted_blocks(D.evaluate([p], "public", unclassified_as="public")[0])
+
+
+# ---------------------------------------------------------------------------
+# Meta Bind (2026-10-01). Two adversarial rounds broke every attempt to read
+# its syntax from the source, so the control is its rendering scope: its own
+# excludedFolders setting. Outside the scope its constructs are inert; inside
+# it any trace -- or raw <code> -- is non-overridable. Every body below is a
+# bypass one of those rounds demonstrated against an earlier version.
+# ---------------------------------------------------------------------------
+
+import time  # noqa: E402
+
+MB_EXCLUDED = ["Clippings", "Knowledge", "People", "Templates"]   # Actions renders
+
+
+def _mb_settings(vault: Path, **over) -> Path:
+    d = vault / ".obsidian" / "plugins" / D.MB_PLUGIN_ID
+    d.mkdir(parents=True, exist_ok=True)
+    data = {"enableJs": False, "excludedFolders": MB_EXCLUDED, **over}
+    (d / "data.json").write_text(json.dumps(data), encoding="utf-8")
+    return d / "data.json"
+
+
+def _gate(vault: Path, exported: Path, audience: str = "cleared") -> dict:
+    return next(r for r in D.evaluate([exported], D.AUDIENCES[audience])
+                if r["path"] == exported)
+
+
+def _mb_reason(result: dict) -> bool:
+    return any("where Meta Bind renders" in r for r in result["reasons"])
+
+
+@pytest.fixture
+def mb_vault(vault: Path) -> Path:
+    note(vault, "Secret", body="phone: 555-0100", tier="restricted", folder="People")
+    note(vault, "Vault Key", tier="restricted", folder="People")
+    note(vault, "Key", tier="public")
+    note(vault, "Wrapper", body="![[People/Secret]]", tier="public")
+    _mb_settings(vault)
+    return vault
+
+
+# Meta Bind's embed and button blocks ignore excludedFolders (round 3): they
+# render in every folder, so they are non-overridable wherever they are.
+BLOCK_FORMS = {
+    "md link in an embed block": "```meta-bind-embed\n[x](People/Secret.md)\n```",
+    "internal embed language": "```meta-bind-embed-internal-1\n[[People/Secret]]\n```",
+    "fence closed early by an alias": "````meta-bind-embed\n[[People/Secret|```]]\n````",
+    "unclosed fence past 20k": "```meta-bind-embed\n" + "\n" * 20001 + "[[People/Secret]]",
+    "flow-style JS action": "```meta-bind-button\nactions: [{\"type\": \"inlineJS\", \"code\": \"1\"}]\n```",
+    "escaped info string": "```meta\\-bind-embed\n[[People/Secret]]\n```",
+    "entity in info string": "```meta&#45;bind-embed\n[[People/Secret]]\n```",
+    "embed of a note that embeds": "```meta-bind-embed\n[[Wrapper]]\n```",
+    "md link with a space": "```meta-bind-embed\n[x](People/Vault Key.md)\n```",
+}
+
+# Inline fields honour excludedFolders: inert outside the scope.
+INLINE_FORMS = {
+    "escaped embed in a VIEW": "`VIEW[!\\[\\[People/Secret\\]\\]{title}][text(renderMarkdown)]`",
+    "double-backtick inline code": "``VIEW[`{People/Secret#phone}]``",
+    "raw <code> element": "<code>VIEW[{People/Secret#phone}]</code>",
+    "path split across lines": "`VIEW[{People/Vault\nKey#serial}]`",
+    "global memory relay": "`VIEW[{globalMemory^leak}]`",
+    "comment inside the keyword": "<code>VI<!-- -->EW[{People/Secret#phone}]</code>",
+    "empty tag inside the keyword": "<code>VI<span></span>EW[{People/Secret#phone}]</code>",
+    "emphasis inside the keyword": "<code>VI*E*W[{People/Secret#phone}]</code>",
+    "escaped # in the target": "<code>VIEW[{People/Secret\\#phone}]</code>",
+    "name built from properties": "`VIEW[!\\[\\[People/Sec{b}\\]\\]][text(renderMarkdown)]`",
+    "a query assembling a field": '`= "`VI" + "EW[{People/Sec" + "ret#phone}]`"`',
+    "a tasks query (renders other notes' text)": "```tasks\nnot done\n```",
+}
+
+
+@pytest.mark.parametrize("folder", ["Actions", "Clippings"])
+@pytest.mark.parametrize("body", list(BLOCK_FORMS.values()), ids=list(BLOCK_FORMS))
+def test_a_meta_bind_block_is_non_overridable_in_every_folder(mb_vault: Path, body: str, folder: str):
+    page = note(mb_vault, "Page", body=f"x\n\n{body}\n", folder=folder)
+    result = _gate(mb_vault, page)
+    assert result["blocked"] and result["restricted"], result["reasons"]
+    assert any("Meta Bind block" in r for r in result["reasons"]), result["reasons"]
+
+
+@pytest.mark.parametrize("body", list(INLINE_FORMS.values()), ids=list(INLINE_FORMS))
+def test_inside_meta_binds_scope_every_inline_form_is_non_overridable(mb_vault: Path, body: str):
+    page = note(mb_vault, "Page", body=f"x\n\n{body}\n", folder="Actions")
+    result = _gate(mb_vault, page)
+    assert result["blocked"] and result["restricted"] and _mb_reason(result), result["reasons"]
+
+
+@pytest.mark.parametrize("body", list(INLINE_FORMS.values()), ids=list(INLINE_FORMS))
+def test_outside_its_scope_an_inline_form_renders_nothing(mb_vault: Path, body: str):
+    clip = note(mb_vault, "Clip", body=f"x\n\n{body}\n", folder="Clippings")
+    assert not _mb_reason(_gate(mb_vault, clip))
+
+
+def test_a_canvas_card_is_checked_with_the_canvas_path(mb_vault: Path):
+    """Canvas text cards render with the canvas's own path; a root-level
+    canvas is in no excluded folder."""
+    (mb_vault / "Board.canvas").write_text(json.dumps({"nodes": [
+        {"id": "1", "type": "text", "text": "`\u0056IEW[{People/Secret#phone}]`"}]}),
+        encoding="utf-8")
+    host = note(mb_vault, "Host", body="![[Board.canvas]]", folder="Actions")
+    assert _gate(mb_vault, host)["restricted"]
+    direct = D.evaluate([mb_vault / "Board.canvas"], D.AUDIENCES["cleared"], unclassified_as="public")[0]
+    assert direct["restricted"], direct["reasons"]
+
+
+def test_a_path_typed_in_another_case_is_judged_as_spelled_on_disk(vault: Path):
+    """Meta Bind's own default excludes lowercase "templates", which does not
+    match the real Templates/ folder, so it renders there."""
+    _mb_settings(vault, excludedFolders=["templates"])
+    real = note(vault, "T", body="`VIEW[{x}]`", folder="Templates")
+    typed = vault / "templates" / "T.md"
+    if not typed.exists():
+        pytest.skip("case-sensitive filesystem")
+    assert D.evaluate([typed], D.AUDIENCES["cleared"])[0]["restricted"]
+    assert D.evaluate([real], D.AUDIENCES["cleared"])[0]["restricted"]
+
+
+def test_a_folder_counts_as_excluded_only_when_every_normalisation_agrees():
+    """Which Unicode form Obsidian hands Meta Bind is unknown, so a folder whose
+    name differs between forms is never treated as excluded -- the cautious
+    side. Plain-ASCII names are unaffected."""
+    assert D._in_meta_bind_scope("Cafe\u0301/x.md", ["Caf\u00e9"])
+    assert D._in_meta_bind_scope("Caf\u00e9/x.md", ["Caf\u00e9"])
+    assert not D._in_meta_bind_scope("Clippings/x.md", ["Clippings"])
+
+
+def test_an_in_scope_note_embedded_from_outside_still_counts(mb_vault: Path):
+    note(mb_vault, "Fields", body="`VIEW[{People/Secret#phone}]`", folder="Actions")
+    host = note(mb_vault, "Host", body="![[Actions/Fields]]", folder="Clippings")
+    assert _gate(mb_vault, host)["restricted"]
+
+
+def test_everything_an_in_scope_note_embeds_counts(mb_vault: Path):
+    note(mb_vault, "Far", body="`VIEW[{People/Secret#phone}]`", folder="Clippings")
+    host = note(mb_vault, "Host", body="![[Clippings/Far]]", folder="Actions")
+    assert _gate(mb_vault, host)["restricted"]
+
+
+@pytest.mark.parametrize("settings", [
+    "missing", "garbage", "javascript on", "folders not a list", "fifo",
+])
+def test_unreadable_or_unsafe_settings_put_the_whole_vault_in_scope(mb_vault: Path, settings: str):
+    f = mb_vault / ".obsidian" / "plugins" / D.MB_PLUGIN_ID / "data.json"
+    if settings == "missing":
+        f.unlink()
+    elif settings == "garbage":
+        f.write_text("{nope")
+    elif settings == "javascript on":
+        _mb_settings(mb_vault, enableJs=True)
+    elif settings == "folders not a list":
+        _mb_settings(mb_vault, excludedFolders="Clippings")
+    elif settings == "fifo":
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("no FIFOs on this platform")
+        f.unlink()
+        os.mkfifo(f)
+    clip = note(mb_vault, "Clip", body="`VIEW[{People/Secret#phone}]`", folder="Clippings")
+    assert _gate(mb_vault, clip)["restricted"]
+
+
+def test_deeply_nested_settings_never_crash_the_gate(mb_vault: Path):
+    """Python 3.9 (launchd's) raises RecursionError on this; 3.12+ parses it as
+    Meta Bind's JSON.parse does. Either is safe -- the original Clippings
+    exclusion, or the whole vault in scope -- as long as nothing raises."""
+    f = mb_vault / ".obsidian" / "plugins" / D.MB_PLUGIN_ID / "data.json"
+    f.write_text('{"enableJs": false, "excludedFolders": ["Clippings"], "pad": '
+                 + "[" * 100000 + "]" * 100000 + "}")
+    assert D.meta_bind_scope(mb_vault) in (None, ["Clippings"])
+    clip = note(mb_vault, "Clip", body="`VIEW[{People/Secret#phone}]`", folder="Actions")
+    assert _gate(mb_vault, clip)["restricted"]
+
+
+def test_without_the_plugin_nothing_renders(vault: Path):
+    clip = note(vault, "Clip", body="`VIEW[{People/Secret#phone}]`", folder="Actions")
+    assert not _mb_reason(_gate(vault, clip))
+
+
+def test_the_scope_mirrors_meta_binds_prefix_rule(mb_vault: Path):
+    """Meta Bind excludes by startsWith on the file path, so "Clippings" also
+    covers "Clippings2/..."; mirrored exactly, in both directions."""
+    assert not D._in_meta_bind_scope("Clippings2/x.md", MB_EXCLUDED)
+    assert D._in_meta_bind_scope("Actions/x.md", MB_EXCLUDED)
+
+
+def test_prose_that_merely_resembles_a_field_is_not_meta_bind(mb_vault: Path):
+    plain = note(mb_vault, "Plain", body="It ships multimodal input[^4]; see the view.\n\n[^4]: x",
+                 folder="Actions")
+    assert not _gate(mb_vault, plain, "public")["blocked"]
+
+
+def test_a_huge_in_scope_note_is_judged_quickly(mb_vault: Path):
+    """The name-extraction version took ~35 minutes on a 652 KB note."""
+    big = note(mb_vault, "Big", body="`VIEW[x]` " + ("a [b " * 130000), folder="Actions")
+    t0 = time.monotonic()
+    assert _gate(mb_vault, big)["restricted"]
+    assert time.monotonic() - t0 < 10
+
+
+# Round 4 of the review.
+
+@pytest.mark.parametrize("folder", ["Actions", "Clippings"])
+@pytest.mark.parametrize("body", [
+    '<%+ tp.file.include("[[People/Secret]]") %>',
+    '<%+ tp.file.include("[[People/Sec" + "ret]]") %>',
+    "<%*+ tR += await app.vault.read(app.vault.getAbstractFileByPath('People/Secret.md')) %>",
+    "<%- ~+ x %>",
+], ids=["include", "split name", "javascript", "whitespace control"])
+def test_a_templater_dynamic_command_is_non_overridable_anywhere(mb_vault: Path, body: str, folder: str):
+    """Templater runs <%+ %> in every rendered note, from a post-processor no
+    setting or folder limits."""
+    page = note(mb_vault, "Page", body=body, folder=folder)
+    result = _gate(mb_vault, page)
+    assert result["restricted"] and any("Templater dynamic command" in r for r in result["reasons"])
+
+
+def test_an_ordinary_templater_command_is_not_dynamic(mb_vault: Path):
+    page = note(mb_vault, "Page", body="<% tp.date.now() %> and <%* tR += 1 %>", folder="Clippings")
+    assert not any("Templater dynamic" in r for r in _gate(mb_vault, page, "public")["reasons"])
+
+
+def test_a_query_anywhere_counts_list_items_that_carry_fields(mb_vault: Path):
+    """Tasks renders a task under the task's own path: an excluded host's query
+    shows an in-scope task's field where Meta Bind is active."""
+    note(mb_vault, "A", body="- [ ] call back `VIEW[{People/Secret#phone}]`", folder="Actions")
+    host = note(mb_vault, "E", body="```tasks\nnot done\n```", folder="Clippings")
+    assert _gate(mb_vault, host)["restricted"]
+
+
+def test_a_query_with_no_field_carrying_list_items_stays_overridable(mb_vault: Path):
+    note(mb_vault, "A", body="- [ ] call back tomorrow", folder="Actions")
+    host = note(mb_vault, "E", body="```tasks\nnot done\n```", folder="Clippings")
+    result = _gate(mb_vault, host)
+    assert result["blocked"] and not result["restricted"], result["reasons"]
+
+
+def test_a_folder_query_over_many_notes_stays_fast(mb_vault: Path):
+    """_true_case listed a directory per closure note: quadratic (44 s at 8k)."""
+    big = mb_vault / "Bulk"
+    big.mkdir()
+    for i in range(4000):
+        (big / f"n{i}.md").write_text("---\nclassification: public\n---\nx\n", encoding="utf-8")
+    host = note(mb_vault, "Host", body='```dataview\nLIST FROM "Bulk"\n```', folder="Clippings")
+    t0 = time.monotonic()
+    _gate(mb_vault, host)
+    assert time.monotonic() - t0 < 15
