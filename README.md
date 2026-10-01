@@ -169,7 +169,7 @@ Open WebUI) are in [`docs/Windows Setup.md`](docs/Windows%20Setup.md).
 
 ### Underlying mechanics
 
-The orchestrator + 28 component installers live under `installers/`. The original per-feature manual setup is preserved in the docs/ guides if you want to understand or override what the installer is doing:
+The orchestrator + 29 component installers live under `installers/`. The original per-feature manual setup is preserved in the docs/ guides if you want to understand or override what the installer is doing:
 
 - [`docs/Obsidian Configuration Guide.md`](docs/Obsidian%20Configuration%20Guide.md) — plugin settings, template details, troubleshooting
 - [`docs/Semantic Auto-Tagger Setup.md`](docs/Semantic%20Auto-Tagger%20Setup.md) — design rules, taxonomy allowlist, on-demand prompts

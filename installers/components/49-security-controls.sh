@@ -23,37 +23,20 @@ for f in plugin_integrity_check.py integrity_monitor.py; do
         exit 1
     fi
 done
-ok "  all 3 scripts present"
+ok "  both scripts present"
 
 info "Creating state directory..."
 mkdir -p "$STATE_DIR" "$LOG_DIR"
 chmod 0700 "$STATE_DIR"
 ok "  $STATE_DIR (mode 0700)"
 
-info "Installing 3 LaunchAgents..."
+info "Installing 2 LaunchAgents..."
 install_plist_and_load Templates/Scripts/com.obsidian.security.plugin-check.plist com.obsidian.security.plugin-check
 install_plist_and_load Templates/Scripts/com.obsidian.security.integrity.plist     com.obsidian.security.integrity
 
-info "Establishing baselines..."
-NEEDS_BASELINE=0
-if [[ ! -f "$STATE_DIR/plugin_allowlist.json" || "${REBASELINE:-0}" -eq 1 ]]; then NEEDS_BASELINE=1; fi
-if [[ ! -f "$STATE_DIR/integrity_state.json" || "${REBASELINE:-0}" -eq 1 ]]; then NEEDS_BASELINE=1; fi
-
-if [[ "$NEEDS_BASELINE" -eq 1 ]]; then
-    if [[ "${INTERACTIVE:-1}" -eq 1 ]]; then
-        if confirm "Establish security baselines now (one-time)?" Y; then
-            /usr/bin/python3 "$SECDIR/plugin_integrity_check.py" --update || warn "  plugin baseline returned non-zero"
-            /usr/bin/python3 "$SECDIR/integrity_monitor.py"      --update || warn "  integrity baseline returned non-zero"
-            ok "  baselines established"
-        else
-            warn "  baselines not established; controls will alert on first run"
-        fi
-    else
-        info "  --auto: skipping baseline; run 'plugin_integrity_check.py --update' + 'integrity_monitor.py --update' manually"
-    fi
-else
-    ok "  baselines already present at $STATE_DIR"
-fi
+# Baselines are offered by 88-security-baselines, after every component that
+# installs an agent: recorded here, they went stale before the install ended.
+info "Baselines: offered at the end of the install (88-security-baselines)."
 
 # Log rotation (newsyslog)
 NEWSYSLOG="/etc/newsyslog.d/obsidian-security.conf"
