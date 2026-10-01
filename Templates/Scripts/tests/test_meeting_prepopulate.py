@@ -52,3 +52,18 @@ class TestRescheduleFences:
         regression instead: the two fence names must be module attributes."""
         for name in ("RESCHEDULE_FENCE_START", "RESCHEDULE_FENCE_END"):
             assert hasattr(mp, name)
+
+
+def test_a_config_written_with_a_byte_order_mark_is_read_not_ignored(
+        tmp_path, monkeypatch):
+    """The Windows installer wrote meeting_prepopulate.json with a UTF-8 BOM
+    (Windows PowerShell 5.1's Set-Content -Encoding utf8). Read as plain
+    utf-8 the BOM survives as U+FEFF, json.loads rejects it, and load_config()
+    fell back to {} -- silently dropping admin_emails and every other setting."""
+    import json
+    cfg = tmp_path / "meeting_prepopulate.json"
+    cfg.write_bytes(b"\xef\xbb\xbf" + json.dumps(
+        {"admin_emails": ["Assistant@Example.edu"]}).encode("utf-8"))
+    monkeypatch.setattr(mp, "CONFIG_FILE", cfg)
+    assert mp.load_config() == {"admin_emails": ["Assistant@Example.edu"]}
+    assert mp.load_admin_emails() == {"assistant@example.edu"}

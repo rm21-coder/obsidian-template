@@ -242,7 +242,7 @@ Write-Host '== 20 secrets =='
 $secrets = Get-SecretsFile
 if (-not (Test-Path $secrets)) {
     New-Item -ItemType Directory -Force -Path (Split-Path $secrets) | Out-Null
-    @('# Obsidian automation secrets - DO NOT COMMIT',
+    $stub = @('# Obsidian automation secrets - DO NOT COMMIT',
       '# Anthropic (tagger, voice-cleanup): https://console.anthropic.com/settings/keys',
       'ANTHROPIC_API_KEY=',
       '# Institutional AI gateway (optional). Uncomment both to route every',
@@ -255,8 +255,8 @@ if (-not (Test-Path $secrets)) {
       '# RAG sync (obsidian-rag-sync): the LOCAL Open WebUI (Docker container on',
       '# port 3000, installed by setup-rag.ps1 / install.ps1 -WithRAG).',
       'OPEN_WEBUI_URL=http://localhost:3000',
-      'OPEN_WEBUI_API_KEY=','OBSIDIAN_COLLECTION_ID=') |
-        Set-Content -Path $secrets -Encoding utf8
+      'OPEN_WEBUI_API_KEY=','OBSIDIAN_COLLECTION_ID=')
+    Set-Utf8Content -LiteralPath $secrets -Value $stub   # no BOM: python-dotenv reads it
     Write-Host "  created stub $secrets - fill in your keys."
 } else { Write-Host "  secrets present: $secrets" }
 

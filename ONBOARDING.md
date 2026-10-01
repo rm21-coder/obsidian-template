@@ -210,6 +210,20 @@ connector. Run `claude mcp list` and confirm a Microsoft 365 entry exists, then
 **"Claude CLI sign-in expired."** The pull detects this and says so rather than
 retrying. Run `claude`, then `/login`, and let the catch-up firing handle it.
 
+**"Your organization does not allow Claude Code to sign in with a Claude
+subscription."** The pull detects this too and stops retrying, but signing in
+again will not fix it: it is a tenant policy (the CLI's error code is
+`oauth_not_allowed_for_organization`). The calendar pull needs either an
+Anthropic API key for the CLI or an admin who enables subscription access for
+Claude Code. Which of those is acceptable is a question for whoever runs your
+Claude rollout, not something to work around locally.
+
+**`meeting_pull` says its config "is not valid JSON" at line 1, column 1
+(Windows).** The installer used to write `meeting_pull.json` and
+`meeting_prepopulate.json` with a UTF-8 byte-order mark. Run the Windows update:
+the scripts now read those files whether or not the mark is there, and the
+installer no longer writes it.
+
 **The pull says the API host is not reachable.** It is gating on having a
 network route — usually Wi-Fi hasn't come up yet after a sleep. It is not an
 error; later catch-up runs handle it.

@@ -55,7 +55,7 @@ function Install-Requirements {
     Invoke-Native -ErrorMessage 'pip upgrade failed' { & $VenvPython -m pip install --upgrade pip 1>$null }
     $req = Join-Path $ScriptsDir 'requirements.txt'
     if (Test-Path $req) {
-        Write-Host '  installing requirements.txt (mlx-whisper is arm64-guarded and skips on Intel) ...'
+        Write-Host '  installing requirements.txt (packages marked for another platform are skipped) ...'
         Invoke-Native -ErrorMessage 'dependency install failed' { & $VenvPython -m pip install -r $req }
     }
 }
@@ -327,6 +327,24 @@ function Read-Answer {
 # already there without -Force. Also replaces a COMMENTED placeholder for the
 # same key (the stub install.ps1 writes ships `#LLM_BASE_URL=...`), so a
 # profile-driven run does not leave both a comment and a live line behind.
+# Write text files as UTF-8 WITHOUT a byte-order mark. Windows PowerShell 5.1's
+# `Set-Content -Encoding utf8` always prepends one (EF BB BF), and Python's
+# json.loads rejects it: every meeting_pull.json and meeting_prepopulate.json
+# this installer wrote carried one, so meeting_pull failed on every run and
+# meeting_prepopulate silently fell back to defaults. Use this for every file a
+# Python script reads.
+function Set-Utf8Content {
+    param(
+        [Parameter(Mandatory)][string]$LiteralPath,
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Value
+    )
+    # .NET resolves a relative path against the process directory, not the
+    # PowerShell location; resolve it the PowerShell way first.
+    $full = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($LiteralPath)
+    $text = ($Value -join "`r`n") + "`r`n"
+    [System.IO.File]::WriteAllText($full, $text, (New-Object System.Text.UTF8Encoding $false))
+}
+
 function Set-EnvValue {
     param(
         [Parameter(Mandatory)][string]$Key,
@@ -350,7 +368,7 @@ function Set-EnvValue {
     # Drop every live AND commented line for this key, then append one.
     $kept = $lines | Where-Object { $_ -notmatch ("^\s*#?\s*{0}\s*=" -f [regex]::Escape($Key)) }
     $out  = @($kept) + @("{0}={1}" -f $Key, $Value)
-    Set-Content -LiteralPath $Path -Value $out -Encoding utf8
+    Set-Utf8Content -LiteralPath $Path -Value $out
     Write-Host "  set: $Key in $Path"
 }
 
@@ -386,8 +404,7 @@ function Merge-JsonConfig {
     if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     # -InputObject, not the pipeline: piping a collection into ConvertTo-Json
     # unrolls it, which is how a one-element array turns into a bare scalar.
-    ConvertTo-Json -InputObject $config -Depth 8 |
-        Set-Content -LiteralPath $Path -Encoding utf8
+    Set-Utf8Content -LiteralPath $Path -Value (ConvertTo-Json -InputObject $config -Depth 8)
     return $config
 }
 
