@@ -52,6 +52,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import unicodedata
 import urllib.parse
@@ -132,6 +133,47 @@ _HTML_EMBED_RE = re.compile(
 _QUOTED_RE = re.compile(r"\"([^\"\n]{1,300})\"|'([^'\n]{1,300})'")
 _QUERY_TOKEN_RE = re.compile(r"\b(?:file|path)\s*:\s*(\"[^\"\n]+\"|\S+)", re.I)
 _INLINE_QUERY_RE = re.compile(r"`\$?=[^`\n]+`")
+
+# Meta Bind (obsidian-meta-bind-plugin) -- decided 2026-10-01 after two
+# adversarial rounds broke both attempts to read it from the source.
+#
+# Its fields display and edit any note's frontmatter, render values as
+# markdown, and its embed blocks render whole notes; it finds fields in the
+# RENDERED text of any <code> element, so HTML comments, empty tags, emphasis
+# and escapes can hide a field from any reading of the source, and it can
+# build a note's name out of property values. The gate cannot model that.
+#
+# So the control is where Meta Bind is allowed to render at all: its own
+# excludedFolders setting (watched by plugin_integrity_check). Outside that
+# scope Meta Bind renders nothing and its constructs are inert. Inside it, any
+# trace of Meta Bind, or any raw <code> element, makes the export
+# NON-overridable: the operator cannot see everything it could render either.
+# Unreadable settings, or enableJs on, put the whole vault in scope.
+#
+# Round 3 of the review: only Meta Bind's inline fields and its plain
+# `meta-bind` block honour excludedFolders. Its embed blocks (meta-bind-embed,
+# -embed-internal-1..8) and button blocks render in EVERY folder, and an embed
+# renders a whole note. So any meta-bind block blocks wherever it is; only the
+# inline forms depend on the scope.
+MB_PLUGIN_ID = "obsidian-meta-bind-plugin"
+_MB_FIELD_RE = re.compile(r"\b(?:INPUT|VIEW|BUTTON)\[")
+_MB_BLOCK_RE = re.compile(r"meta-bind", re.I)
+_RAW_CODE_RE = re.compile(r"<\s*code\b", re.I)
+# Linear patterns only: a note can be hundreds of KB.
+_MD_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
+_MB_SETTINGS_MAX = 2 * 1024 * 1024
+
+# Templater runs "dynamic" commands -- <%+ %>, and <%*+ %> as JavaScript -- in
+# the rendered text of EVERY note shown in reading view, from a post-processor
+# no setting or folder limits (review round 4). tp.file.include renders any
+# other note, under a name the source need not spell out. Non-overridable
+# wherever it appears. Same opening the plugin matches: <% then optional - or
+# _, whitespace, optional * or ~, then +.
+_TEMPLATER_DYNAMIC_RE = re.compile(r"<%[-_]?\s*[*~]?\+")
+# A list item, task or not: Tasks renders task lines -- and, in tree layout,
+# their child items -- under the TASK's own file path (or none), not the
+# host's, so the host's scope says nothing about them.
+_LIST_ITEM_RE = re.compile(r"(?m)^[ \t>]*(?:[-*+]|\d+[.)])[ \t]+.*$")
 
 
 def _read(path: Path) -> str:
@@ -371,6 +413,118 @@ def _query_blocks(text: str) -> list[str]:
     return blocks
 
 
+def _decoded(text: str) -> str:
+    """The text after the decoding CommonMark applies outside code spans --
+    entities and backslash escapes, which can hide a name (meta&#45;bind,
+    meta\\-bind)."""
+    return _MD_ESCAPE_RE.sub(r"\1", html.unescape(text))
+
+
+def _meta_bind_block(text: str) -> bool:
+    """A Meta Bind block of any kind: rendered whatever the scope says."""
+    return bool(_MB_BLOCK_RE.search(text) or _MB_BLOCK_RE.search(_decoded(text)))
+
+
+def _meta_bind_inline(text: str) -> bool:
+    """Anything that can put a Meta Bind field into a note's rendered output
+    where the scope allows it: an inline field; any raw <code> element (Meta
+    Bind scans the rendered text of <code>, which comments, empty tags and
+    emphasis change invisibly); and any query, which renders other notes'
+    text -- a Tasks query in Actions/To-Do shows task lines, code spans
+    included, from any note."""
+    return bool(_RAW_CODE_RE.search(text)
+                or _MB_FIELD_RE.search(text) or _MB_FIELD_RE.search(_decoded(text))
+                or _QUERY_FENCE_RE.search(text) or _INLINE_QUERY_RE.search(text))
+
+
+_LISTDIR_CACHE: dict[Path, list[str]] = {}
+_LIST_FIELD_CACHE: dict[str, list[str]] = {}
+
+
+def _list_items_with_fields() -> list[str]:
+    """Vault notes with a list item carrying a Meta Bind field or raw <code>:
+    what a Tasks query anywhere can render where Meta Bind is active.
+    Computed once per evaluate(), and only when some closure has a query."""
+    if "v" not in _LIST_FIELD_CACHE:
+        hits: list[str] = []
+        for f in sorted(VAULT_ROOT.rglob("*.md")):
+            if any(part.startswith(".") for part in f.relative_to(VAULT_ROOT).parts):
+                continue
+            try:
+                t = _read(f)
+            except (OSError, UnicodeDecodeError):
+                continue
+            for line in _LIST_ITEM_RE.findall(t):
+                if (_RAW_CODE_RE.search(line) or _MB_FIELD_RE.search(line)
+                        or _MB_FIELD_RE.search(_decoded(line))):
+                    hits.append(_rel(f))
+                    break
+        _LIST_FIELD_CACHE["v"] = hits
+    return _LIST_FIELD_CACHE["v"]
+
+
+def _true_case(p: Path) -> Path:
+    """`p` with each component spelled as it is on disk. APFS and NTFS are
+    case-insensitive, so "templates/x.md" opens Templates/x.md; Meta Bind
+    sees the real spelling, and the scope test must too."""
+    try:
+        rel = p.relative_to(VAULT_ROOT)
+    except ValueError:
+        return p
+    cur = VAULT_ROOT
+    for part in rel.parts:
+        names = _LISTDIR_CACHE.get(cur)
+        if names is None:
+            try:
+                names = os.listdir(cur)
+            except OSError:
+                return p
+            _LISTDIR_CACHE[cur] = names
+        if part not in names:
+            key = unicodedata.normalize("NFC", part).casefold()
+            hits = [n for n in names if unicodedata.normalize("NFC", n).casefold() == key]
+            part = hits[0] if len(hits) == 1 else part
+        cur = cur / part
+    return cur
+
+
+def meta_bind_scope(root: Path) -> list[str] | None:
+    """Folders Meta Bind will NOT render in, or None when it may render
+    anywhere (installed, but settings unreadable, or JavaScript on). An empty
+    list from a vault without the plugin means "renders nowhere" -- see
+    _in_meta_bind_scope."""
+    plugin = root / ".obsidian" / "plugins" / MB_PLUGIN_ID
+    if not plugin.is_dir():
+        return ["\x00not-installed"]
+    path = plugin / "data.json"
+    try:
+        st = path.lstat()
+        if not stat.S_ISREG(st.st_mode) or st.st_size > _MB_SETTINGS_MAX:
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:      # absent, unreadable, deep nesting, bad encoding
+        return None
+    if not isinstance(data, dict) or data.get("enableJs") is not False:
+        return None
+    folders = data.get("excludedFolders")
+    if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+        return None
+    return folders
+
+
+def _in_meta_bind_scope(rel: str, scope: list[str] | None) -> bool:
+    """Meta Bind's own test: excluded when the file path startsWith() any
+    excluded folder (meta-bind isExcludedFromRendering)."""
+    if scope is None:
+        return True
+    if scope == ["\x00not-installed"]:
+        return False
+    # Excluded only when every normalisation of the path agrees: which form
+    # Obsidian hands Meta Bind is not something the gate can know.
+    forms = {rel, unicodedata.normalize("NFC", rel), unicodedata.normalize("NFD", rel)}
+    return not any(all(r.startswith(f) for r in forms) for f in scope)
+
+
 def _wiki_target(inner: str) -> str:
     # "\|" is the pipe Obsidian requires inside a table; it separates the
     # alias just like "|" does. It used to be read as part of the target,
@@ -436,7 +590,7 @@ def _canvas_references(path: Path) -> tuple[list[tuple[str, Path]], list[str]]:
     return files, texts
 
 
-def embed_closure(path: Path, index: VaultIndex
+def embed_closure(path: Path, index: VaultIndex, canvases: list | None = None
                   ) -> tuple[list[Path], list[str], list[str], list[str], list[str]]:
     """Everything whose content renders into `path`, recursively.
 
@@ -529,6 +683,9 @@ def embed_closure(path: Path, index: VaultIndex
         for r in refs:
             reach(r, current, depth)
     notes = sorted(p for p in seen | leaves if p.name.lower().endswith(".md"))
+    if canvases is not None:
+        canvases.extend(sorted(p for p in seen | {path}
+                               if p.name.lower().endswith(".canvas")))
     return notes, sorted(set(unresolved)), media, dynamic, incomplete
 
 
@@ -543,20 +700,61 @@ def evaluate(paths: list[Path], ceiling: str,
              unclassified_as: str | None = None) -> list[dict]:
     """Judge each note and everything it transcludes against the ceiling."""
     _TIER_CACHE.clear()
+    _LISTDIR_CACHE.clear()
+    _LIST_FIELD_CACHE.clear()
     index = _index_vault()
+    mb_scope = meta_bind_scope(VAULT_ROOT)
     limit = TIER_RANK[ceiling]
     results: list[dict] = []
 
     for path in paths:
         declared, unknown, err = _tier_detail(path)
         tier = declared or (None if (unknown or err) else unclassified_as)
-        embedded, unresolved, media, dynamic, incomplete = embed_closure(path, index)
+        canvases: list[Path] = []
+        embedded, unresolved, media, dynamic, incomplete = embed_closure(path, index, canvases)
         if err:
             incomplete.insert(0, f"note itself is unreadable ({err})")
         if unknown:
             # Even beside a recognised value: YAML, PyYAML and Obsidian may
             # each read a different one (round 2 of the review).
             incomplete.insert(0, f"note declares an unrecognised tier `{unknown[0]}`")
+
+        # Meta Bind: what it displays cannot be read from the source, so not
+        # even an override may release it. Blocks render in every folder;
+        # inline forms only inside its scope, and a note rendered inside an
+        # in-scope host is in scope with it. Canvases are checked too: their
+        # text cards render with the canvas's own path.
+        host_in_scope = _in_meta_bind_scope(_rel(_true_case(path)), mb_scope)
+        for n in [path, *embedded, *canvases]:
+            try:
+                mb_text = _read(n)
+            except (OSError, UnicodeDecodeError):
+                continue                    # reported as unreadable elsewhere
+            if n.name.lower().endswith(".canvas"):
+                try:
+                    mb_text += "\n" + "\n".join(_canvas_references(n)[1])
+                except ValueError:
+                    pass                    # reported as unparseable elsewhere
+            n_rel = _rel(_true_case(n))
+            if (_TEMPLATER_DYNAMIC_RE.search(mb_text)
+                    or _TEMPLATER_DYNAMIC_RE.search(_decoded(mb_text))):
+                incomplete.append(f"{n_rel} contains a Templater dynamic command "
+                                  "(<%+ %>), which runs when the note is shown and "
+                                  "can render any other note; what it would display "
+                                  "cannot be evaluated")
+            if _meta_bind_block(mb_text):
+                incomplete.append(f"{n_rel} contains a Meta Bind block, which "
+                                  "renders other notes in every folder; what it "
+                                  "would display cannot be evaluated")
+            elif ((host_in_scope or _in_meta_bind_scope(n_rel, mb_scope))
+                  and _meta_bind_inline(mb_text)):
+                where = ("Meta Bind's settings could not be read or allow JavaScript"
+                         if mb_scope is None else
+                         "this folder is not in Meta Bind's excluded folders")
+                incomplete.append(f"{n_rel} can show Meta Bind fields (an inline "
+                                  "field, raw <code>, or a query) where Meta Bind "
+                                  f"renders ({where}); what it would display "
+                                  "cannot be evaluated")
 
         reasons: list[str] = []
         worst = tier
@@ -590,6 +788,14 @@ def evaluate(paths: list[Path], ceiling: str,
                            "vault — the gate cannot confirm what it shows")
         for d in dict.fromkeys(dynamic):
             reasons.append(f"dynamic content: {d}")
+        if dynamic and mb_scope != ["\x00not-installed"]:
+            carriers = _list_items_with_fields()
+            if carriers:
+                incomplete.append(
+                    "a query here can render list items from other notes under "
+                    "their own paths, and " + ", ".join(carriers[:3])
+                    + (" and others" if len(carriers) > 3 else "")
+                    + " carry Meta Bind fields or raw <code> in list items")
         for gap in incomplete:
             reasons.append(f"could not evaluate: {gap}")
 
