@@ -20,24 +20,26 @@ if [[ ! -f "$SRC_PY" ]]; then
 fi
 
 # ---- venv for markitdown + PySide6 -----------------------------------------
+# Installed only from requirements-dropper.lock (hash-pinned, wheels only),
+# which is locked for Homebrew python3.13 on Apple Silicon and nothing else.
 info "Setting up Markitdown Dropper venv at $DROPPER_VENV..."
-if [[ -x "$DROPPER_VENV/bin/python3" ]]; then
+if [[ -x "$DROPPER_VENV/bin/python3" ]] \
+        && [[ "$("$DROPPER_VENV/bin/python3" -c 'import sys; print(sys.version_info[1])' 2>/dev/null)" == "13" ]]; then
     ok "  venv already exists"
 else
-    # The dropper expects python3.13 specifically per its build script.
-    PY=""
-    for c in /opt/homebrew/bin/python3.13 /usr/local/bin/python3.13 /opt/homebrew/bin/python3 /usr/local/bin/python3; do
-        [[ -x "$c" ]] && PY="$c" && break
-    done
-    if [[ -z "$PY" ]]; then
-        err "  no python3.13 found; brew install python@3.13 first"
+    if [[ -e "$DROPPER_VENV" ]]; then
+        err "  $DROPPER_VENV exists but is not a Python 3.13 venv; remove it and re-run"
+        exit 1
+    fi
+    PY=/opt/homebrew/bin/python3.13
+    if [[ ! -x "$PY" ]]; then
+        err "  $PY not found; brew install python@3.13 first"
         exit 1
     fi
     "$PY" -m venv "$DROPPER_VENV"
     ok "  created: $DROPPER_VENV"
 fi
-"$DROPPER_VENV/bin/pip" install --upgrade pip >/dev/null
-"$DROPPER_VENV/bin/pip" install 'markitdown[all]' PySide6
+install_requirements "$DROPPER_VENV/bin/python3" "$VAULT/Templates/Scripts/requirements-dropper.txt" requirements-dropper.lock
 
 # ---- compile the .app -------------------------------------------------------
 mkdir -p "$INSTALL_DIR"

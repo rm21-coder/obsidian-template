@@ -1,0 +1,6 @@
+# Markitdown Dropper (macOS app): its own venv, built by
+# installers/components/43-markitdown-dropper.sh on Homebrew python3.13.
+# Installed only through requirements-dropper.lock -- edit this file, then
+# run python3 installers/lib/lock_requirements.py and commit both.
+markitdown[all]
+PySide6

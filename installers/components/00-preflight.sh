@@ -12,13 +12,26 @@ if ! is_macos; then
     exit 1
 fi
 ok "  $(sw_vers -productName) $(sw_vers -productVersion)"
+# The Python dependencies install only as hash-pinned wheels
+# (Templates/Scripts/requirements.lock), and some of them publish wheels for
+# macOS 14 and later only.
+if [[ "$(sw_vers -productVersion | cut -d. -f1)" -lt 14 ]]; then
+    err "  macOS 14 (Sonoma) or later is required: the pinned dependencies ship no wheels for older releases."
+    exit 1
+fi
 
 info "Architecture check..."
 ARCH="$(uname -m)"
-if is_arm64; then
+# The hardware, not this shell: a Rosetta terminal reports x86_64 on an
+# Apple Silicon Mac. install_requirements checks the venv's own interpreter.
+if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == "1" ]]; then
+    ARCH="arm64"
     ok "  $ARCH (Apple Silicon)"
 else
-    warn "  $ARCH (Intel) - podcast component will be skipped automatically"
+    # onnxruntime, which markitdown needs, no longer publishes Intel-Mac
+    # wheels, so the pinned dependency set cannot install here.
+    err "  $ARCH (Intel) is not supported: the pinned dependencies ship no Intel-Mac wheels."
+    exit 1
 fi
 
 info "Disk space check..."

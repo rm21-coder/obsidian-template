@@ -79,7 +79,7 @@ cp Templates/Scripts/voice_cleanup_config.yaml.example \
 # 2) Create the per-vault venv and install dependencies
 cd ~/Obsidian/Templates/Scripts
 /opt/homebrew/bin/python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install --require-hashes --no-deps --only-binary :all: -r requirements.lock
 
 # 3) Edit the plist (replace YOUR_USERNAME) and load
 sed -i '' "s/YOUR_USERNAME/$USER/g" com.voice-cleanup.plist

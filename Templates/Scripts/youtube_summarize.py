@@ -572,8 +572,8 @@ def main(argv: list[str]) -> int:
     try:
         import yt_dlp  # noqa: F401
     except ImportError:
-        die("yt-dlp not installed. It ships in requirements.txt; run: "
-            f"{sys.executable} -m pip install yt-dlp")
+        die("yt-dlp not installed. It ships in requirements.lock; re-run the "
+            "installer (or update), which installs the lock hash-checked into the venv.")
 
     out_dir = Path(os.path.expanduser(args.out)).resolve()
 

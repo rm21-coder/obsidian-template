@@ -116,20 +116,24 @@ function Confirm-Optional([string]$Question) {
     return ((Read-Host "$Question [y/N]").Trim() -match '^(y|yes)$')
 }
 
-# Resolve a base Python 3.10+ interpreter, preferring the 'py' launcher.
+# Resolve a base Python 3.10+ interpreter (3.12+ on ARM64), preferring the 'py' launcher.
 # Uses `--version` (parsed by regex) rather than a `-c` probe: PowerShell 5.1
 # mangles embedded double-quotes when passing args to native exes, which broke
 # the old `python -c 'print("%d.%d"...)'` check.
 function Resolve-BasePython {
-    foreach ($cand in @(@('py','-3'), @('python'), @('python3'))) {
+    # A supported version explicitly first: bare 'py -3' takes the newest
+    # installed, which may be past the lock's ceiling.
+    foreach ($cand in @(@('py','-3.13'), @('py','-3.12'), @('py','-3.14'), @('py','-3.11'), @('py','-3.10'), @('py','-3'), @('python'), @('python3'))) {
         $exe = $cand[0]
         if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
         try {
             $prefix = Get-CandPrefix $cand
             $out = (& $exe @prefix '--version' 2>&1) | Out-String
-            if ($out -match '(\d+)\.(\d+)(?:\.\d+)?') {
+            # Anchored, and only on success: py's "Requested Python version
+            # (3.13) is not installed" also contains a version number.
+            if ($LASTEXITCODE -eq 0 -and $out -match '^\s*Python (\d+)\.(\d+)') {
                 $maj = [int]$Matches[1]; $min = [int]$Matches[2]
-                if ($maj -gt 3 -or ($maj -eq 3 -and $min -ge 10)) {
+                if ($maj -eq 3 -and $min -ge (Get-MinPythonMinor) -and $min -le (Get-MaxPythonMinor)) {
                     return ,$cand   # array: exe + any prefix args
                 }
             }
@@ -141,7 +145,10 @@ function Resolve-BasePython {
 Write-Host '== 00 preflight =='
 $base = Resolve-BasePython
 if (-not $base) {
-    throw "No Python 3.10+ found. Install it (winget install Python.Python.3.12) and re-run. The scripts use PEP 604 unions, so 3.10 is the floor."
+    if (Test-ArmWindows) {
+        throw "No Python 3.12-3.14 found. Install it (winget install Python.Python.3.12) and re-run. On ARM64 Windows 3.12 is the floor: the pinned dependencies ship no ARM64 wheels for 3.11."
+    }
+    throw "No Python 3.10-3.14 found. Install it (winget install Python.Python.3.12) and re-run. The scripts use PEP 604 unions, so 3.10 is the floor."
 }
 Write-Host ("  base python: {0}" -f ($base -join ' '))
 

@@ -9,7 +9,8 @@ Usage:
     python3 Templates/Scripts/voice_cleanup.py --once       # process and exit
 
 Setup:
-    1. pip install -r Templates/Scripts/requirements.txt
+    1. Run the installer: it installs Templates/Scripts/requirements.lock
+       (hash-checked) into the venv
     2. Create an iOS Shortcut (see docs/Voice Note to Obsidian Guide.md)
     3. Edit the config section below to match your paths
     4. Set ANTHROPIC_API_KEY in ~/dev/secrets/.env (or your preferred location).
@@ -17,7 +18,7 @@ Setup:
        and LLM_API_KEY_NAME — see Templates/Scripts/llm_endpoint.py.
 
 Requires:
-    pip install anthropic pyyaml python-dotenv
+    anthropic, pyyaml, python-dotenv (all in requirements.lock)
 """
 
 from __future__ import annotations

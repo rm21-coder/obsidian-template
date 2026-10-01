@@ -144,7 +144,7 @@ want() {   # want <pass>
             local files; files="$(changed_files)"
             [[ -z "$files" ]] && return 1
             case "$1" in
-                sca)     grep -qE 'requirements\.txt|\.lock$'      <<<"$files" ;;
+                sca)     grep -qE 'requirements(-dropper)?\.(txt|lock)|lock_requirements\.py|lock_extras\.py|installers/lib/common\.sh|windows/common\.ps1' <<<"$files" ;;
                 sast)    grep -qE '\.py$'                          <<<"$files" ;;
                 shell)   grep -qE '\.sh$'                          <<<"$files" ;;
                 secrets) return 0 ;;
@@ -164,20 +164,49 @@ _say "artifacts: $OUT"
 # ---------------------------------------------------------------------------
 if want sca; then
     expect sca
-    _head "SCA - pip-audit"
+    _head "SCA - pip-audit + requirements lock"
+    # Audit what installs: every release pinned in requirements.lock, on every
+    # platform. pip-audit evaluates markers against this machine and takes one
+    # version per package per file, so the lock is split marker-free into sets.
     if ! have pip-audit; then
         skip_missing sca pip-audit "pipx install pip-audit"
+    elif ! sets="$(python3 installers/lib/lock_requirements.py --audit-sets "$OUT/pins" 2>"$OUT/pip-audit.log")"; then
+        record sca FAIL "could not read requirements.lock - see pip-audit.log"
+        _say "  FAIL: could not build the audit sets from requirements.lock."
     else
-        if pip-audit -r Templates/Scripts/requirements.txt --strict \
-                --progress-spinner off -f json -o "$OUT/pip-audit.json" \
-                >"$OUT/pip-audit.log" 2>&1; then
-            n="$(python3 -c "import json;d=json.load(open('$OUT/pip-audit.json'));print(len(d.get('dependencies',[])))" 2>/dev/null || echo '?')"
-            record sca PASS "$n packages, 0 vulnerabilities"
-            _say "  PASS: $n packages audited, no known vulnerabilities."
+        n=0; vuln=0; k=0
+        while IFS= read -r f; do
+            [[ -n "$f" ]] || continue
+            k=$((k + 1))
+            if ! pip-audit -r "$f" --no-deps --disable-pip --strict \
+                    --progress-spinner off -f json -o "$OUT/pip-audit-$k.json" \
+                    >>"$OUT/pip-audit.log" 2>&1; then
+                vuln=1
+            fi
+            c="$(python3 -c "import json,sys;print(len(json.load(open(sys.argv[1])).get('dependencies',[])))" "$OUT/pip-audit-$k.json" 2>/dev/null || echo 0)"
+            n=$((n + c))
+        done <<<"$sets"
+        if [[ "$k" -eq 0 || "$n" -eq 0 ]]; then
+            record sca FAIL "pip-audit audited nothing - see pip-audit.log"
+            _say "  FAIL: no packages were audited."
+        elif [[ "$vuln" -ne 0 ]]; then
+            record sca FAIL "see pip-audit-*.json"
+            _say "  FAIL: vulnerable dependencies (or an audit error). See pip-audit-*.json / pip-audit.log"
         else
-            record sca FAIL "see pip-audit.json"
-            _say "  FAIL: vulnerable dependencies. See pip-audit.json"
+            record sca PASS "$n pinned releases, 0 vulnerabilities"
+            _say "  PASS: $n pinned releases audited, no known vulnerabilities."
         fi
+    fi
+    # The lock must match requirements.txt, hash every pin, and have a wheel
+    # for every supported platform/Python (installs refuse source builds).
+    if ! have uv && [[ ! -x "$HOME/.local/bin/uv" ]]; then
+        skip_missing sca uv "pipx install uv"
+    elif python3 installers/lib/lock_requirements.py --check >"$OUT/lock-check.log" 2>&1; then
+        record sca PASS "locks: $(grep -c '^OK:' "$OUT/lock-check.log") verified (hashes match the index, wheels for every target)"
+        _say "  PASS: $(grep '^OK:' "$OUT/lock-check.log" | tr '\n' ' ')"
+    else
+        record sca FAIL "requirements.lock - see lock-check.log"
+        _say "  FAIL: requirements.lock check. See lock-check.log"
     fi
 fi
 

@@ -41,7 +41,7 @@ then call scripts directly, e.g. `.\Templates\Scripts\windows\install.ps1`.)
 
 `install.ps1` runs straight through and will:
 
-- Check for Python 3.10+ and run the classification audit (refuses to
+- Check for Python 3.10-3.14 (3.12-3.14 on ARM64) and run the classification audit (refuses to
   install if the repo somehow carries non-public content)
 - Install Obsidian via `winget` if it isn't already present
 - Link `%USERPROFILE%\Obsidian` to wherever you cloned the repo, via a
@@ -51,7 +51,9 @@ then call scripts directly, e.g. `.\Templates\Scripts\windows\install.ps1`.)
   `.obsidian\plugins\`
 - Patch QuickAdd's folder-picker fall-through and apply the canonical ribbon
   icon order
-- Create a per-vault Python venv and install `requirements.txt`
+- Create a per-vault Python venv and install `requirements.lock`: every
+  package at a locked release, each file checked against its SHA256, wheels
+  only (see `requirements.lock` in the README)
 - Register all 14 scheduled jobs in Task Scheduler under `\Obsidian\` — 12
   ship **enabled** by default (validated end-to-end on a clean Windows 11
   install) and begin firing on their triggers as soon as the installer
@@ -234,7 +236,13 @@ next runs.
   parsing mid-file, and the script simply never runs.
 - **Python 3.10+** — installed automatically by `install.ps1` if missing
   (`winget install Python.Python.3.12`); the scripts use PEP 604 `X | None`
-  unions, so 3.10 is the floor
+  unions, so 3.10 is the floor. **On ARM64 the floor is 3.12**: dependencies
+  install from wheels only, and `pyyaml` publishes no `win_arm64` wheel for
+  3.11. **3.14 is the ceiling** everywhere: the lock is resolved and
+  wheel-checked up to 3.14, and a newer Python has no wheels yet for its
+  compiled packages. `install.ps1` looks for 3.13, 3.12 and 3.14 before
+  whatever `py -3` picks, and both it and `update.ps1` refuse an interpreter
+  outside the range and say how to fix it
 - **`winget`** — ships with modern Windows; used to install Obsidian, Ollama,
   and Docker Desktop
 - **API keys** (collected in `.env` after install): **Anthropic** (or your institutional gateway)
@@ -448,8 +456,8 @@ by hand.
 Validated on Windows 11 ARM64 (Snapdragon-class) with **native ARM64 Python
 3.12**. `install.ps1` runs clean end-to-end, every scheduled job registers and
 runs, and Obsidian ships a native Windows-arm64 build. Every dependency in
-`requirements.txt` resolves to a native `win_arm64` wheel with no source
-builds — including `onnxruntime` and `magika`, the two heaviest compiled ones.
+`requirements.lock` has a native `win_arm64` wheel for 3.12 and later, and
+installs refuse source builds — including `onnxruntime` and `magika`, the two heaviest compiled ones.
 
 **Podcast transcription uses a different backend here.** `ctranslate2`, the
 compiled backend behind `faster-whisper`, publishes no `win_arm64` wheel *and

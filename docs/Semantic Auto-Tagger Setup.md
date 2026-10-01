@@ -50,7 +50,7 @@ Full prerequisite list, install steps, and post-migration restoration are in [[L
 # 1) Per-vault venv with the script's dependencies
 cd ~/Obsidian/Templates/Scripts
 /opt/homebrew/bin/python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install --require-hashes --no-deps --only-binary :all: -r requirements.lock
 
 # 2) Anthropic key in ~/dev/secrets/.env
 mkdir -p ~/dev/secrets
@@ -160,8 +160,9 @@ Setup adds two things to Section 2:
 ```bash
 # embedding model for the local pre-rank
 ollama pull nomic-embed-text
-# the RAG script also needs requests
-~/Obsidian/Templates/Scripts/.venv/bin/pip install requests
+# requests, which the RAG script also needs, is already in requirements.lock;
+# if the venv lacks it, reinstall the lock (or just re-run the installer)
+~/Obsidian/Templates/Scripts/.venv/bin/pip install --require-hashes --no-deps --only-binary :all: --force-reinstall -r ~/Obsidian/Templates/Scripts/requirements.lock
 ```
 
 Glosses live in `tag_glosses.py` (ships with a small example). A gloss is the words a *note about that topic* would use — `FinancialReporting → "chargeback, cost recovery, internal pricing"` — which is what lets the embedding step rank the right tags. Tags without a gloss fall back to an auto-derived one (the de-CamelCased name).

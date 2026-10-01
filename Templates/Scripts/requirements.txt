@@ -28,7 +28,7 @@ faster-whisper; platform_machine != "ARM64"
 
 # mlx-whisper is Apple-Silicon-only (podcast_transcribe.py uses it there);
 # faster-whisper covers every other platform. Guarded so non-arm64 skips it.
-mlx-whisper; platform_machine == "arm64"
+mlx-whisper; sys_platform == "darwin" and platform_machine == "arm64"
 
 # ONNX Runtime backend for podcast_transcribe.py (whisper_onnx.py) — the third
 # and last-resort transcription backend, and the only local one available on

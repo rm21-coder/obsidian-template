@@ -83,8 +83,8 @@ def test_install_and_update_share_one_requirements_step() -> None:
             f"{name} runs its own pip line again; the two can drift apart")
     body = COMMON[COMMON.index("function Install-Requirements"):]
     body = body[:body.index("\n}\n")]
-    assert "-m pip install --upgrade pip" in body
-    assert "-m pip install -r $req" in body
+    assert "--upgrade pip" not in body
+    assert "--require-hashes --no-deps --only-binary ':all:' --force-reinstall -r $lock" in body
 
 
 def test_a_no_op_update_does_not_claim_to_have_updated() -> None:

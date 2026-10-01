@@ -34,7 +34,7 @@ Before either agent will run successfully, the host Mac needs:
    ```bash
    cd ~/Obsidian/Templates/Scripts
    /opt/homebrew/bin/python3 -m venv .venv
-   .venv/bin/pip install -r requirements.txt
+   .venv/bin/pip install --require-hashes --no-deps --only-binary :all: -r requirements.lock
    ```
 
 3. **Required secrets in `~/dev/secrets/.env`**:
@@ -137,7 +137,7 @@ Drains `~/SourceMedia/PodcastInput/` — audio files, or link files holding an e
    ```bash
    brew install ffmpeg
    cd ~/Obsidian/Templates/Scripts
-   .venv/bin/pip install -r requirements.txt   # faster-whisper, plus mlx-whisper on Apple Silicon
+   .venv/bin/pip install --require-hashes --no-deps --only-binary :all: -r requirements.lock   # faster-whisper, plus mlx-whisper on Apple Silicon
    ```
 
    Backends are tried in order: MLX Whisper (Apple Silicon GPU), faster-whisper (CPU), then ONNX Runtime. The first run downloads a model (~1.5 GB for `large-v3-turbo`).
@@ -245,7 +245,7 @@ launchctl list | grep -v com.apple
 cd ~/Obsidian/Templates/Scripts
 rm -rf .venv
 /opt/homebrew/bin/python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/pip install --require-hashes --no-deps --only-binary :all: -r requirements.lock
 
 # 3) Confirm the secrets file is there and has the right keys
 ls ~/dev/secrets/.env
