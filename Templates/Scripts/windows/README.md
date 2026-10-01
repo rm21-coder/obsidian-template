@@ -47,6 +47,9 @@ for the full setup guide.
   Logs every message to `notifications.log`, then shows a toast through
   BurntToast if installed, otherwise through the Windows notification API
   directly (no module needed). A toast that cannot be shown is logged.
+- `update.ps1` — brings an existing install up to date in one command: pull,
+  reinstall requirements, re-register tasks. See "Updating an existing
+  install" in `docs/Windows Setup.md`.
 - `uninstall.ps1` — tears down what `install.ps1` set up; see
   `.\uninstall.ps1 -?` for flags.
 
