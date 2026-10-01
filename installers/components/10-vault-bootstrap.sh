@@ -66,6 +66,5 @@ else
 fi
 
 info "Installing requirements.txt into the venv..."
-"$VENV_PY" -m pip install --upgrade pip >/dev/null
-"$VENV_PY" -m pip install -r "$VAULT/Templates/Scripts/requirements.txt"
+install_requirements "$VENV_PY" "$VAULT/Templates/Scripts/requirements.txt"   # shared with update.sh
 ok "  requirements installed"

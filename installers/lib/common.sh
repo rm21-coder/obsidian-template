@@ -260,6 +260,15 @@ run() {
     fi
 }
 
+# ---- requirements: shared by 10-vault-bootstrap and update.sh ---------------
+# One definition, so an install and an update can never install differently,
+# and so requirement hash-pinning changes one place when it lands.
+install_requirements() {
+    local venv_py="$1" req="$2"
+    "$venv_py" -m pip install --upgrade pip >/dev/null
+    "$venv_py" -m pip install -r "$req"
+}
+
 # ---- safer overwrite: refuse to clobber newer files at dst ------------------
 safe_install_file() {
     local src="$1" dst="$2"
