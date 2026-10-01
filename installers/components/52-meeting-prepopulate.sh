@@ -3,8 +3,7 @@
 # side).
 #
 # Wires up the consumer LaunchAgent that reads schedule-handoff JSON your
-# producer delivers into a local drop folder - directly, or via a relay (e.g.
-# the Azure Blob Tier B relay, see docs/Azure-Blob-Handoff-Relay.md) - and
+# producer delivers into a local drop folder - directly, or via a relay - and
 # turns it into Obsidian meeting notes + People stubs.
 #
 # OFF by default, because it requires something an installer cannot do for
@@ -111,7 +110,6 @@ info "       $HANDOFF"
 info "     Recommended: a Claude Code session with an MCP connector to your"
 info "     calendar system (no relay needed) - docs/Meeting-Handoff-MCP-Producer.md"
 info "     Otherwise, write your own producer and deliver it directly or via a"
-info "     relay - see docs/Azure-Blob-Handoff-Relay.md for a worked Azure Blob"
-info "     Storage relay. Full JSON contract: docs/Meeting-Pre-Population.md"
+info "     relay. Full JSON contract: docs/Meeting-Pre-Population.md"
 
 ok "meeting-prepopulate component complete"

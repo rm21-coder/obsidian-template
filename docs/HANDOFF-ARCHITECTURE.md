@@ -27,10 +27,10 @@ online-only placeholders that don't hydrate in time). None of that fragility
 should be visible to the consumer or to the people you distribute this to.
 Pin to the contract, not to any one producer's sync client — this repo's
 recommended producer (Tier B below) writes the signed drop straight into the
-local drop folder from an MCP-connector session (or LLM-free via a direct
-Graph call, `graph_calendar_fetch.py`), with an Azure Blob Storage relay as
-the optional variant when producer and vault are on different machines,
-precisely to avoid that fragility.
+local drop folder from an MCP-connector session, precisely to avoid that
+fragility. When producer and vault are on different machines, any relay into
+that folder works; the template no longer ships one (the Azure Blob relay was
+removed 2026-09-30).
 
 ## 2. The Handoff Contract (schema v1)
 
@@ -118,10 +118,10 @@ with a **relay-scoped** credential — never tenant credentials, no sync client.
 Works over any relay: rsync/SFTP pull, object-store with a short-lived SAS, or a
 manually imported signed file. This is the recommended posture for an unmanaged
 endpoint that must not authenticate to the tenant.
-Reference: `DropFolderSource` in `handoff_source.py`. A worked object-store
-implementation — Azure Blob Storage, a Power Automate pusher, and
-`handoff_blob_pull.py` as the puller — is documented end to end in
-[`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md).
+Reference: `DropFolderSource` in `handoff_source.py`. A worked Azure Blob
+Storage relay (`handoff_blob_pull.py`) shipped here until 2026-09-30; it was
+removed because it was never the recommended path and carried its own SAS
+credential and network surface.
 
 **Recommended producer for this tier:** rather than building a Cowork/Graph
 job or Power Automate flow, a Claude Code session with an off-the-shelf MCP

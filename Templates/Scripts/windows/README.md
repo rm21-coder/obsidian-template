@@ -91,8 +91,6 @@ once, then `.\Templates\Scripts\windows\install.ps1` with no wrapper needed.
   *is* valid UTF-8 PowerShell; only 5.1 executing it as ANSI breaks. Use `--`
   and `|` instead. Enforced by
   `Templates/Scripts/tests/test_static.py::TestPowerShellEncoding`.
-- `graph_calendar_fetch.py` as a scheduled producer is still unvalidated on
-  Windows. Treat the first run as such, same drill as above.
 - Every native-command call site in `install.ps1` / `setup-rag.ps1` goes
   through `Invoke-Native` (`common.ps1`), which judges success by exit code
   alone — the installer is safe to log with `*>&1 | Tee-Object` or any other

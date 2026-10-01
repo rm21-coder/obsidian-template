@@ -234,7 +234,7 @@ class TestEveryTaskRunsThroughTheWrapper:
 
     def test_every_manifest_name_is_a_valid_log_name(self) -> None:
         names = _manifest_names()
-        assert len(names) == 15, names
+        assert len(names) == 14, names  # handoff-blob-pull removed 2026-09-30
         bad = [n for n in names if not rl._JOB_NAME.match(n)]
         assert not bad, f"run_logged.py would refuse these task names: {bad}"
 

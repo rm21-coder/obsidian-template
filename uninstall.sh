@@ -126,8 +126,10 @@ LABELS=(
     com.obsidian.source-mail-pull
     com.obsidian.podcast-watch
     com.morning-dashboard
-    com.obsidian.handoff-blob-pull
     com.obsidian.classify
+    # Retired 2026-09-30 with the Azure Blob relay; still removed so an
+    # older install that loaded it is cleaned up.
+    com.obsidian.handoff-blob-pull
 )
 
 # Log basenames the agents write under ~/Library/Logs (.log and .err).

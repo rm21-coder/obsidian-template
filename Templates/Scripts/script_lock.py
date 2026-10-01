@@ -4,7 +4,8 @@ script_lock.py — one single-instance file lock, shared by every scheduled job.
 
 Four scripts each grew their own copy of the same ~25-line acquire_lock:
 podcast_watch, source_mail_pull, handoff_blob_pull and meeting_prepopulate.
-(There was a fifth, clip_article, retired 2026-08-18.) The copies had drifted
+(There was a fifth, clip_article, retired 2026-08-18; handoff_blob_pull was
+removed with the Azure Blob relay on 2026-09-30.) The copies had drifted
 in ways that mattered:
 
   - Two opened the lock file "a+", two opened it 'w'. A truncating open of a
@@ -78,10 +79,9 @@ def acquire(name: str, *,
     proceeds unprotected. Contention itself is not warned about here -- it is
     normal, and the caller is better placed to phrase it.
 
-    `dir` overrides where the lock file lives. Needed because two callers
-    (meeting_prepopulate, handoff_blob_pull) resolve their scripts directory
-    through MEETING_PREPOP_SCRIPTS_DIR, so their lock has always followed that
-    env var. Defaulting to this module's own directory instead would quietly
+    `dir` overrides where the lock file lives. Needed because
+    meeting_prepopulate resolves its scripts directory through
+    MEETING_PREPOP_SCRIPTS_DIR, so its lock has always followed that env var. Defaulting to this module's own directory instead would quietly
     merge two deliberately separate installs onto one lock -- or, worse, split
     one install across two if the env var is set for some invocations only.
 

@@ -46,8 +46,8 @@ class TestAcquire:
 
     def test_dir_override_keeps_relocated_installs_separate(
             self, tmp_path: Path) -> None:
-        """meeting_prepopulate and handoff_blob_pull resolve their lock dir
-        through MEETING_PREPOP_SCRIPTS_DIR. Two installs under different roots
+        """meeting_prepopulate resolves its lock dir through
+        MEETING_PREPOP_SCRIPTS_DIR. Two installs under different roots
         must not contend, and one install must not split across two locks."""
         other = tmp_path / "other"
         other.mkdir()

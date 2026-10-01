@@ -7,9 +7,8 @@ Docs: docs/Meeting-Pre-Population.md — feature overview, configuration,
       and the JSON handoff contract a producer must implement.
 
 Triggered by launchd `WatchPaths` on the local handoff-drop folder (populated
-by handoff_blob_pull.py — see docs/HANDOFF-ARCHITECTURE.md and
-docs/Azure-Blob-Handoff-Relay.md — or any other drop-folder relay), plus a
-Sunday 21:00 belt-and-suspenders timer.
+by meeting_pull.py or any other drop-folder relay — see
+docs/HANDOFF-ARCHITECTURE.md), plus a Sunday 21:00 belt-and-suspenders timer.
 
 Manual usage:
     /usr/bin/python3 ~/Obsidian/Templates/Scripts/meeting_prepopulate.py                   # process all .ready
@@ -72,10 +71,9 @@ SCRIPTS_DIR = _path_env(
     'MEETING_PREPOP_SCRIPTS_DIR',
     HOME / 'Obsidian' / 'Templates' / 'Scripts')
 
-# Local handoff-drop folder. Populated by handoff_blob_pull.py (the Azure
-# Blob Tier B relay) or any other drop-folder relay (rsync, SFTP, manual
-# import) - see docs/HANDOFF-ARCHITECTURE.md and
-# docs/Azure-Blob-Handoff-Relay.md. Override with MEETING_PREPOP_HANDOFF_DIR.
+# Local handoff-drop folder. Populated by meeting_pull.py or any other
+# drop-folder relay (rsync, SFTP, manual import) - see
+# docs/HANDOFF-ARCHITECTURE.md. Override with MEETING_PREPOP_HANDOFF_DIR.
 # ~/MeetingIngest rather than a folder under the vault: the drop folder sits OUTSIDE the vault on purpose: raw handoff JSON is
 # ingest staging, not content, and a folder under Templates/Scripts/ would be
 # carried to every device by Obsidian Sync and walked by every vault scan.
@@ -2147,8 +2145,8 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
 
 def select_handoff_source() -> 'hs.HandoffSource':
     """Pick the transport from MEETING_PREPOP_SOURCE (default 'drop'):
-      drop : generic signed-drop folder (relay / SFTP / manual import) - this
-             is what handoff_blob_pull.py's Azure Blob Tier B relay feeds
+      drop : generic signed-drop folder (meeting_pull.py / relay / SFTP /
+             manual import)
       mcp  : tenant MCP server (stub until the endpoint is wired)
     Signing: set HANDOFF_HMAC_KEY[_FILE] to verify producer authenticity;
     HANDOFF_REQUIRE_SIGNATURE=1 makes a missing/invalid signature fatal."""
@@ -2158,8 +2156,7 @@ def select_handoff_source() -> 'hs.HandoffSource':
         'HANDOFF_REQUIRE_SIGNATURE', '').strip().lower() in ('1', 'true', 'yes')
 
     if mode in ('', 'drop', 'folder'):
-        # Auto-create, matching handoff_blob_pull.py's own LOCAL_DIR.mkdir():
-        # an empty folder discovers as "no handoffs" (exit 0), same as before
+        # Auto-create: an empty folder discovers as "no handoffs" (exit 0), same as before
         # any producer has ever run, rather than DropFolderSource.discover()
         # raising because the folder doesn't exist yet.
         HANDOFF_DIR.mkdir(parents=True, exist_ok=True)

@@ -52,8 +52,8 @@ python3 -c "import numpy" 2>/dev/null || missing+=("numpy")
 python3 -c "import yaml" 2>/dev/null || missing+=("pyyaml")
 python3 -c "import dotenv" 2>/dev/null || missing+=("python-dotenv")
 python3 -c "import requests" 2>/dev/null || missing+=("requests")
-# defusedxml: podcast_transcribe and handoff_blob_pull import it at module scope
-# to parse untrusted XML safely (bandit B314, closed 2026-09-25).
+# defusedxml: podcast_transcribe imports it at module scope to parse
+# untrusted XML safely (bandit B314, closed 2026-09-25).
 python3 -c "import defusedxml" 2>/dev/null || missing+=("defusedxml")
 
 if [ ${#missing[@]} -gt 0 ]; then

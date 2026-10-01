@@ -577,7 +577,6 @@ PIPELINE_NAMES = {
     "com.obsidian.security.integrity":   "File integrity monitor",
     "com.obsidian.security.plugin-check": "Plugin integrity check",
     "com.obsidian.vault-lint":           "Vault lint (weekly)",
-    "com.obsidian.handoff-blob-pull":    "Handoff blob relay",
     # Pre-rename labels, kept so an install that predates the namespaced
     # labels still gets friendly names:
     "com.meeting-prep":                  "Meeting prep",

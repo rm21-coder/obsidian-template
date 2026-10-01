@@ -24,10 +24,9 @@ going into that drop folder gets made:
 
 - No cloud-drive sync client (Tier A) and its sync-timing fragility.
 - No relay needed at all when the session runs on the same machine as the
-  vault — it writes directly into the drop folder, so
-  [`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md)'s relay is
-  optional, only useful if your MCP session runs somewhere that *can't*
-  reach the drop folder directly.
+  vault — it writes directly into the drop folder. A relay is only useful
+  if your MCP session runs somewhere that *can't* reach the drop folder
+  directly, and the template no longer ships one (see below).
 - **Not** the same thing as Tier C / `MEETING_PREPOP_SOURCE=mcp`
   (`MCPSource` in `handoff_source.py`). That's a still-unbuilt concept: a
   purpose-built MCP *server* the consumer calls directly
@@ -155,9 +154,8 @@ as solo blocks, and a genuine weekend commitment is one you would want the note
 for anyway. Set `"lookahead_skips_weekends": false` to count literal calendar
 days instead.
 
-Both producers resolve the window through the same `window_days()` in
-`meeting_pull.py` — `graph_calendar_fetch.py` imports it rather than
-recomputing — so the vault does not depend on which one ran.
+The window is resolved by `window_days()` in `meeting_pull.py` and rendered
+into the prompt, so it is fixed by the config rather than by the session.
 
 Producer and consumer stay decoupled through the drop folder: the runner never
 calls `meeting_prepopulate.py`. Either half can be rescheduled, replaced, or
@@ -279,38 +277,31 @@ file and run the transform itself. That made a crafted invite a
 prompt-injection path to a shell running as you, at 05:00, unattended.
 Microsoft M-DASH flagged it (CWE-749).
 
-## Skipping the LLM entirely: the direct Graph producer
+## Removed 2026-09-30: the direct Graph producer and the Azure Blob relay
 
-The producer's work is deterministic — the Claude session in the recommended
-path exists only to reach the M365 MCP connector. If you are comfortable with
-a one-time Microsoft sign-in, `graph_calendar_fetch.py` calls Microsoft Graph
-directly and feeds the identical transform:
+Two optional alternatives used to ship alongside this producer:
+`graph_calendar_fetch.py` (`"producer": "graph"`, a direct Microsoft Graph
+call with a device-code sign-in) and `handoff_blob_pull.py` (a Tier B relay
+pulling handoff sets from Azure Blob Storage). Neither was the recommended
+path, and each carried its own credential — a Graph refresh token, a Blob
+SAS — and its own network surface, so keeping them meant keeping findings
+open against code that most installs never ran. Both were removed.
 
-- **Zero LLM tokens** per run, versus a full headless session daily.
-- **A ~2-second HTTP call** — fits inside any laptop wake window, so the
-  sleep-mid-session failure class disappears.
-- **No Claude CLI dependency** for the 05:00 job (auth expiry, MCP tool-name
-  drift, org tool-approval policy all stop mattering here).
+If you had either configured:
 
-Setup:
+- A `meeting_pull.json` that still says `"producer": "graph"` now stops with
+  an error naming the removal, rather than quietly running a different
+  producer. Set it to `"claude"` or delete the key.
+- The Graph refresh token is still in your keystore. Remove it with
+  `python3 -c "import secret_store; secret_store.delete_secret('GRAPH_REFRESH_TOKEN')"`
+  from `Templates/Scripts/`, and revoke the app's consent in your Microsoft
+  account if you want the grant gone server-side too.
+- The relay's LaunchAgent is `com.obsidian.handoff-blob-pull`; `uninstall.sh`
+  still removes it. On Windows, `Unregister-Tasks.ps1` removes every task
+  under `\Obsidian\`. Delete the Blob container's SAS on the Azure side.
 
-```bash
-# one-time, interactive: device-code sign-in, delegated Calendars.Read only
-python3 ~/Obsidian/Templates/Scripts/graph_calendar_fetch.py --auth
-```
-
-Then set `"producer": "graph"` in `.config/meeting_pull.json`. The scheduled
-`meeting_pull.py` (LaunchAgent / Windows task) picks the new path up on its
-next firing — retries, `--skip-if-fresh`, and failure notifications all apply
-unchanged. The refresh token lives in the platform keystore (macOS Keychain /
-Windows DPAPI) via `secret_store.py`, never in a file.
-
-By default this signs in through Microsoft's pre-registered public
-"Graph Command Line Tools" client. If your tenant blocks that client, register
-your own public-client app (delegated `Calendars.Read` + `offline_access`),
-and set `"graph_client_id"` (and optionally `"graph_auth_tenant"`) in the
-config. Bonus over the MCP path: this producer works cross-platform with
-nothing but python3 — Windows needs no Claude CLI at all.
+The handoff contract and `DropFolderSource` are unchanged, so any relay you
+build yourself still feeds the consumer the same way.
 
 ## Known gaps vs. a Graph/Cowork-based producer
 

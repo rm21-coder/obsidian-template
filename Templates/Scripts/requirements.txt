@@ -9,13 +9,12 @@ requests
 # faster-whisper: podcast_transcribe.py off Apple Silicon (CPU transcription).
 yt-dlp
 markitdown
-# defusedxml: safe XML parsing for untrusted podcast RSS and the relay's
-# container listing. Already installed as a markitdown dependency; declared
+# defusedxml: safe XML parsing for untrusted podcast RSS. Already installed as a markitdown dependency; declared
 # because the scripts now import it directly.
 defusedxml
 # tzdata: Windows ships no IANA time-zone database, and zoneinfo reads only
 # that or this package. Without it the whole meeting pipeline (meeting_pull,
-# meeting_prepopulate, mcp_meeting_transform, graph_calendar_fetch) failed to
+# meeting_prepopulate, mcp_meeting_transform) failed to
 # resolve the configured zone -- which install.ps1 itself writes -- while the
 # 'UTC' fallback kept working. Found on the Windows ARM64 laptop, 2026-09-25.
 tzdata; sys_platform == "win32"

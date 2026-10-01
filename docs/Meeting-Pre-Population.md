@@ -34,10 +34,9 @@ This feature works with any calendar system that can produce the contract —
 it is not locked to any one tenant or vendor.
 
 The consumer's transport is pluggable (`MEETING_PREPOP_SOURCE`): the default
-`drop` reads a plain local folder, fed by whatever relay you like — see
-[`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md) for a worked
-Azure Blob Storage relay (`handoff_blob_pull.py`) that needs no cloud-sync
-client and no special filesystem permissions on the consumer side; `mcp` is a
+`drop` reads a plain local folder, fed directly by the recommended producer
+([`Meeting-Handoff-MCP-Producer.md`](Meeting-Handoff-MCP-Producer.md)) or by
+whatever relay you build; `mcp` is a
 stub for a future tenant MCP endpoint. See
 [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md) for the full tier
 comparison, including why a cloud-drive-sync-client transport (Tier A) is
@@ -53,7 +52,7 @@ reference implementation.
   default). No special filesystem permissions needed; it's a plain vault
   subfolder.
 - **A producer** that writes the contract below into that folder (directly,
-  or via a relay — see [`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md)).
+  or via a relay you build).
 
 ## Install
 
@@ -88,7 +87,7 @@ LaunchAgent's `EnvironmentVariables` block or your shell:
 | `MEETING_PREPOP_GROUPS_DIR` | `<vault>/Groups` | Group rosters, used for group-vs-individual classification. |
 | `MEETING_PREPOP_SCRIPTS_DIR` | `<vault>/Templates/Scripts` | Home for the logs, lock, state, and config sub-folders. |
 | `MEETING_PREPOP_LOG_DIR` | `<scripts>/logs` | Log directory. |
-| `MEETING_PREPOP_SOURCE` | `drop` | Transport: `drop` (plain local folder, this doc — see [`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md) for a worked relay into it), or `mcp` (stub). |
+| `MEETING_PREPOP_SOURCE` | `drop` | Transport: `drop` (plain local folder, this doc), or `mcp` (stub). |
 
 Optional JSON config at `<scripts>/.config/meeting_prepopulate.json`:
 
@@ -274,9 +273,7 @@ every attendee email you want resolved to a rich People note.
 
 - **Agent runs but nothing happens / scan finds zero files** → confirm your
   producer or relay is actually delivering the `.json`/`.json.sha256`/`.ready`
-  trio into `MEETING_PREPOP_HANDOFF_DIR`. If you're using the Azure Blob
-  relay, see its own troubleshooting section in
-  [`Azure-Blob-Handoff-Relay.md`](Azure-Blob-Handoff-Relay.md).
+  trio into `MEETING_PREPOP_HANDOFF_DIR`.
 - **Times are off by hours** → your producer's timezone handling; see
   `treat_start_as_utc` above.
 - **Logs** → `~/Library/Logs/meeting-prepopulate.log` (launchd stdout) and
