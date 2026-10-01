@@ -13,7 +13,8 @@ Usage:
     python3 tag_clippings.py --file "path"     # Tag a specific file
 
 Setup:
-    1. pip install anthropic pyyaml python-dotenv
+    1. Run the installer: anthropic, pyyaml and python-dotenv come from
+       requirements.lock, installed hash-checked into the venv
     2. Set ANTHROPIC_API_KEY in your environment, or create a .env file.
        To route through an institutional AI gateway instead of a personal
        Anthropic key, set LLM_BASE_URL and LLM_API_KEY_NAME — see

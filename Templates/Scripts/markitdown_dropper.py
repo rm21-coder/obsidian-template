@@ -49,7 +49,7 @@ try:
 except ImportError:
     sys.stderr.write(
         "PySide6 not installed.\n"
-        "Run:  ~/.markitdown-dropper-venv/bin/pip install PySide6\n"
+        "Re-run the installer: it builds this venv from requirements-dropper.lock.\n"
     )
     sys.exit(1)
 
@@ -58,7 +58,7 @@ try:
 except ImportError:
     sys.stderr.write(
         "markitdown not installed.\n"
-        "Run:  ~/.markitdown-dropper-venv/bin/pip install markitdown\n"
+        "Re-run the installer: it builds this venv from requirements-dropper.lock.\n"
     )
     sys.exit(1)
 

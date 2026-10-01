@@ -88,8 +88,16 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
 - **Python:** a shared venv at `Templates/Scripts/.venv`. Needs **3.10+**
   (code uses PEP 604 `X | None` unions). macOS uses Homebrew python, NOT
   `/usr/bin/python3` (that is 3.9). Windows uses python.org / winget python.
-  Deps: `requirements.txt` (install ALL of it — `requests` is required by the
-  RAG sync). `mlx-whisper` is Apple-Silicon-only and is guarded out elsewhere.
+  Deps: `requirements.txt` says what is needed (ALL of it — `requests` is
+  required by the RAG sync); `requirements.lock` is what installs — every
+  package at a locked release with its SHA256, written by
+  `installers/lib/lock_requirements.py` (needs `uv`); `requirements-dropper.*`
+  is the same pair for the Markitdown Dropper venv. Edit the `.txt`, re-lock,
+  commit both; never hand-edit a lock, never `pip install` outside one (a test
+  in `test_requirements_lock.py` scans every installer and script for that).
+  `mlx-whisper` is Apple-Silicon-only and is guarded out elsewhere. Floors the
+  lock implies: macOS 14+ on Apple Silicon (no Intel), Python 3.10-3.14
+  (3.12-3.14 on Windows ARM64).
 - **Secrets/state:** secrets in `dev/secrets/.env`; runtime state under
   `~/.local/share/...` (macOS) / `%LOCALAPPDATA%\...` (Windows).
 
@@ -112,7 +120,7 @@ This repository runs five security passes. They are configuration, not a
 ritual: the point is that they run when the code changes rather than when
 someone remembers.
 
-    sca      pip-audit          triggered by requirements.txt / lockfile
+    sca      pip-audit + lock   triggered by requirements.txt / .lock / lock tool
     sast     semgrep + bandit   triggered by any .py
     shell    shellcheck         triggered by any .sh
     secrets  gitleaks           triggered by any tracked file

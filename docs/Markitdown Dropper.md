@@ -24,7 +24,7 @@ Drag any supported file (Word, Excel, PowerPoint, PDF, HTML, audio, image, etc.)
 - `markitdown_dropper.py` — the PySide6 GUI app (place in `/Applications/` or any always-accessible folder)
 - `Markitdown Dropper.command` — double-click launcher that creates and maintains the venv
 - `Templates/Scripts/markitdown_cleanup.py` — post-conversion cleanup module (imported by the dropper)
-- `~/.markitdown-dropper-venv/` — isolated Python 3.13 environment with `markitdown[all]` and `PySide6`
+- `~/.markitdown-dropper-venv/` — isolated Python 3.13 environment with `markitdown[all]` and `PySide6`, installed only from `Templates/Scripts/requirements-dropper.lock` (every package hash-checked, wheels only)
 - `~/.markitdown_dropper.json` — saved destination folder
 
 ## Cleanup pass
@@ -88,18 +88,23 @@ Then:
 
 1. Copy `Templates/Scripts/markitdown_cleanup.py` from this vault to `~/Obsidian/Templates/Scripts/markitdown_cleanup.py` (the dropper's launcher inserts `~/Obsidian/Templates/Scripts/` on `sys.path` so the module is importable).
 2. Place `markitdown_dropper.py` and `Markitdown Dropper.command` together in a stable folder — `/Applications/` (or any always-accessible folder). They must live next to each other; the launcher resolves the script via `dirname`.
-3. Double-click `Markitdown Dropper.command`. The first launch builds the venv and installs `markitdown[all]` plus `PySide6` (~30–60 seconds). Subsequent launches take a few seconds because markitdown loads its [magika](https://github.com/google/magika) ONNX model once at startup; after that, drops are near-instant.
+3. Build the venv from the lock (the installer's component 43 does exactly this):
+
+   ```bash
+   /opt/homebrew/bin/python3.13 -m venv ~/.markitdown-dropper-venv
+   ~/.markitdown-dropper-venv/bin/python3 -m pip install --require-hashes --no-deps --only-binary :all: -r ~/Obsidian/Templates/Scripts/requirements-dropper.lock
+   ```
+
+   Then double-click `Markitdown Dropper.command`. It no longer installs anything itself; if it still runs `pip install`, replace it with the app the installer builds. Subsequent launches take a few seconds because markitdown loads its [magika](https://github.com/google/magika) ONNX model once at startup; after that, drops are near-instant.
 4. On first launch the app prompts for the destination folder — point it at this vault's `Creations/` folder. The choice persists in `~/.markitdown_dropper.json`.
 
 A Terminal window stays open behind the app while it's running — that's the launcher process. Closing it quits the app.
 
 ## Updating markitdown
 
-```bash
-~/.markitdown-dropper-venv/bin/pip install --upgrade 'markitdown[all]'
-```
+Not with `pip install --upgrade`: that would fetch whatever PyPI holds, unchecked. A maintainer moves the pins (`python3 installers/lib/lock_requirements.py --upgrade`, review the diff, commit); then re-run the installer, or update, which reinstalls the venv from `requirements-dropper.lock`.
 
-The `[all]` extra pulls converters for every supported format. Plain `pip install markitdown` installs only a slim core and will throw `MissingDependencyException` for files like `.docx`.
+The `[all]` extra in `requirements-dropper.txt` pulls converters for every supported format. A plain `markitdown` installs only a slim core and will throw `MissingDependencyException` for files like `.docx`.
 
 ## Restart the dropper after cleanup-module updates
 

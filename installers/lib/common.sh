@@ -261,12 +261,59 @@ run() {
 }
 
 # ---- requirements: shared by 10-vault-bootstrap and update.sh ---------------
-# One definition, so an install and an update can never install differently,
-# and so requirement hash-pinning changes one place when it lands.
+# One definition, so an install and an update can never install differently.
+#
+# Installs requirements.lock, never requirements.txt: every package at the
+# release a maintainer locked, each file checked against its SHA256
+# (--require-hashes), nothing the lock does not name (--no-deps), and no
+# source builds (--only-binary), whose build tools pip would fetch unhashed.
+# --force-reinstall: pip skips a package already at the locked version
+# without checking its files, so a venv built before the lock (or edited
+# since) would keep whatever bytes it has. Reinstalling re-checks every one.
+# pip itself is not upgraded: that would be an unpinned fetch ahead of the
+# pinned ones, and the venv's bundled pip handles all of this.
+#
+# The lock has wheels for Apple Silicon and Python 3.10-3.14 only; the venv's
+# own interpreter is what counts (a Rosetta shell or an Intel Homebrew python
+# on an Apple Silicon Mac would otherwise pass the preflight and fail in pip).
+LOCK_PYTHON_MIN=10
+LOCK_PYTHON_MAX=14
+# install_requirements <venv python> <file in the same folder as the lock> [lock name]
 install_requirements() {
-    local venv_py="$1" req="$2"
-    "$venv_py" -m pip install --upgrade pip >/dev/null
-    "$venv_py" -m pip install -r "$req"
+    local venv_py="$1" lock
+    lock="$(dirname "$2")/${3:-requirements.lock}"
+    if [[ ! -f "$lock" ]]; then
+        err "  $lock is missing; refusing to install unpinned requirements"
+        return 1
+    fi
+    local probe machine minor
+    # "<machine> <minor> <gil|nogil>": a free-threaded build has no wheels here.
+    probe="$("$venv_py" -c 'import platform, sys, sysconfig; print(platform.machine(), sys.version_info[1], "nogil" if sysconfig.get_config_var("Py_GIL_DISABLED") else "gil")' 2>/dev/null | tail -1)" || probe=""
+    local gil
+    read -r machine minor gil <<<"$probe"
+    if [[ "$machine" != "arm64" ]]; then
+        err "  $venv_py is not an Apple Silicon interpreter (${machine:-unknown}); the pinned dependencies ship no wheels for it."
+        err "  Rebuild the venv with Homebrew's /opt/homebrew/bin/python3.13."
+        return 1
+    fi
+    if [[ "$gil" != "gil" ]]; then
+        err "  $venv_py is a free-threaded (no-GIL) Python; the pinned dependencies ship no wheels for it."
+        err "  Rebuild the venv with Homebrew's /opt/homebrew/bin/python3.13."
+        return 1
+    fi
+    if [[ ! "$minor" =~ ^[0-9]+$ ]] || (( minor < LOCK_PYTHON_MIN || minor > LOCK_PYTHON_MAX )); then
+        err "  $venv_py is Python 3.${minor:-?}; the pinned dependencies need 3.${LOCK_PYTHON_MIN}-3.${LOCK_PYTHON_MAX}."
+        err "  Rebuild the venv with Homebrew's /opt/homebrew/bin/python3.13."
+        return 1
+    fi
+    "$venv_py" -m pip install --disable-pip-version-check --require-hashes --no-deps \
+        --only-binary :all: --force-reinstall -r "$lock" || return 1
+    local extra
+    extra="$("$venv_py" "$(dirname "$lock")/lock_extras.py" "$lock" | tr '\n' ' ')" || true
+    if [[ -n "${extra// /}" ]]; then
+        warn "  installed but not in $(basename "$lock") (never hash-checked, not audited): $extra"
+        warn "  delete $(dirname "$(dirname "$venv_py")") and re-run the installer to clear them"
+    fi
 }
 
 # ---- safer overwrite: refuse to clobber newer files at dst ------------------

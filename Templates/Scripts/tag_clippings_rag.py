@@ -31,7 +31,8 @@ Usage:
     python3 Templates/Scripts/tag_clippings_rag.py --rollback ~/.local/state/obsidian-template/rollback/tag_rag_manifest_*.json
 
 Setup:
-    1. pip install anthropic pyyaml python-dotenv requests
+    1. Run the installer: anthropic, pyyaml, python-dotenv and requests come
+       from requirements.lock, installed hash-checked into the venv
     2. Ollama running locally with an embedding model: ollama pull nomic-embed-text
     3. ANTHROPIC_API_KEY in your environment or ~/dev/secrets/.env (see below),
        or LLM_BASE_URL + LLM_API_KEY_NAME to route through an institutional
@@ -86,7 +87,7 @@ import requests
 try:
     import yaml
 except ImportError:
-    sys.exit("pip install pyyaml")
+    sys.exit("pyyaml missing: re-run the installer (installs requirements.lock)")
 
 from dotenv import load_dotenv
 load_dotenv(Path.home() / "dev" / "secrets" / ".env")   # edit to match your secrets
@@ -405,7 +406,7 @@ def main():
     except llm_endpoint.EndpointError as exc:
         sys.exit(f"Error: {exc}")
     except ImportError:
-        sys.exit("pip install anthropic")
+        sys.exit("anthropic missing: re-run the installer (installs requirements.lock)")
     print(f"Endpoint: {llm_endpoint.describe()}")
 
     tags = [t for t in parse_taxonomy(TAXONOMY_FILE) if t not in ADMIN_TAGS]

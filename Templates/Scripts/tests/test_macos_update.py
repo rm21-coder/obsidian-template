@@ -123,6 +123,8 @@ def scratch(tmp_path):
     scripts.mkdir(parents=True)
     for p in (REPO / "Templates" / "Scripts").glob("*.plist"):
         shutil.copy2(p, scripts / p.name)
+    for name in ("requirements.txt", "requirements.lock"):
+        shutil.copy2(REPO / "Templates" / "Scripts" / name, scripts / name)
     (vault / ".obsidian").mkdir()
     (vault / ".obsidian" / "types.json").write_text("{}\n")
     env = {**os.environ, "HOME": str(home), "USER": "tester",
@@ -246,7 +248,9 @@ def test_an_update_rewrites_only_the_changed_job_and_keeps_the_old_copy(
     (stubs / "launchctl").chmod(0o755)
     venv_py = vault / "Templates" / "Scripts" / ".venv" / "bin" / "python3"
     venv_py.unlink()
-    venv_py.write_text(f'#!/bin/sh\necho "venv-python $*" >> "{calls}"\n')
+    venv_py.write_text('#!/bin/sh\n'
+                       'if [ "$1" = "-c" ]; then echo "arm64 13 gil"; exit 0; fi\n'   # install_requirements' interpreter probe
+                       f'echo "venv-python $*" >> "{calls}"\n')
     venv_py.chmod(0o755)
     old_voice = (la / "com.voice-cleanup.plist").read_bytes()
     old_tag = (la / "com.tag-clippings.plist").read_bytes()
@@ -266,7 +270,10 @@ def test_an_update_rewrites_only_the_changed_job_and_keeps_the_old_copy(
     assert not (backup / "com.tag-clippings.plist").exists()
 
     log = calls.read_text()
-    assert "venv-python -m pip install -r" in log
+    pip = [ln for ln in log.splitlines() if ln.startswith("venv-python -m pip")]
+    assert len(pip) == 1, pip
+    assert "--require-hashes --no-deps --only-binary :all: --force-reinstall -r" in pip[0]
+    assert pip[0].endswith("/Templates/Scripts/requirements.lock")
     loads = [ln for ln in log.splitlines() if ln.startswith("launchctl load")]
     assert loads == [f"launchctl load {la}/com.voice-cleanup.plist"], log
     assert not (la / "com.obsidian-rag-sync.plist").exists(), "an update installed a declined job"

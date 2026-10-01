@@ -7,9 +7,8 @@
 #                          ~/SourceMedia/PodcastInput/ into Clippings/
 #
 # Backends are tried in order by podcast_transcribe.py: MLX Whisper (Apple
-# Silicon GPU), faster-whisper (CPU), ONNX Runtime. Only the MLX half is
-# arm64-only, so an Intel Mac still gets a working pipeline through
-# faster-whisper — which is why this component no longer returns early there.
+# Silicon GPU), faster-whisper (CPU), ONNX Runtime. The installer runs on
+# Apple Silicon only (00-preflight), so MLX is always the first choice.
 
 set -euo pipefail
 source "$REPO_ROOT/installers/lib/plist.sh"
@@ -29,27 +28,16 @@ info "Ensuring ffmpeg is installed..."
 brew_install_if_missing ffmpeg "" ffmpeg
 
 # ---- transcription backend -------------------------------------------------
-if is_arm64; then
-    info "Verifying mlx-whisper is in the per-vault venv..."
-    if "$PY" -c "import mlx_whisper" 2>/dev/null; then
-        ok "  mlx-whisper present"
-    else
-        info "  installing mlx-whisper into per-vault venv (one-time, ~1.5GB model on first run)..."
-        "$SCRIPTS/.venv/bin/pip" install mlx-whisper
-    fi
+# mlx-whisper is in requirements.lock (Apple Silicon), installed hash-checked
+# by 10-vault-bootstrap. Check rather than install: a pip install here would
+# fetch it unhashed, and a missing backend means the venv itself is broken.
+info "Verifying mlx-whisper is in the per-vault venv..."
+if "$PY" -c "import mlx_whisper" 2>/dev/null; then
+    ok "  mlx-whisper present"
 else
-    # mlx-whisper is Apple-Silicon-only. faster-whisper ships in
-    # requirements.txt and is installed by 10-vault-bootstrap; check rather
-    # than install so a genuinely broken venv is reported here instead of
-    # surfacing later as a slow, confusing transcription failure.
-    info "Intel Mac; MLX is unavailable. Checking the faster-whisper fallback..."
-    if "$PY" -c "import faster_whisper" 2>/dev/null; then
-        ok "  faster-whisper present (CPU transcription)"
-    else
-        warn "  faster-whisper missing - re-run 10-vault-bootstrap or:"
-        warn "    '$SCRIPTS/.venv/bin/pip' install faster-whisper"
-        warn "  installing the watcher anyway; it will fail until a backend exists"
-    fi
+    warn "  mlx-whisper does not import - re-run the installer (10-vault-bootstrap"
+    warn "  reinstalls the venv from requirements.lock); installing the watcher anyway,"
+    warn "  it will fail until a backend imports"
 fi
 
 # ---- drop folder -----------------------------------------------------------

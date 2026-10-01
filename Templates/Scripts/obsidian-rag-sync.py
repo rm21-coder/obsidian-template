@@ -96,7 +96,8 @@ Usage:
     python3 obsidian-rag-sync.py --allow-bulk-delete    # explicit consent for large deletes
 
 Requirements:
-    pip install --break-system-packages requests python-dotenv
+    requests, python-dotenv (in requirements.lock; the installer installs it
+    hash-checked into the venv)
 """
 
 from __future__ import annotations

@@ -38,10 +38,10 @@ Requires:
     - Python 3.10+
     - ffmpeg on PATH:  brew install ffmpeg  /  winget install Gyan.FFmpeg
     - one transcription backend:
-        Apple Silicon : pip3 install --break-system-packages mlx-whisper
-        elsewhere     : faster-whisper (ships in requirements.txt), or
-                        onnxruntime + tokenizers + huggingface-hub for the
-                        ONNX backend, which is what Windows ARM64 uses
+        Apple Silicon : mlx-whisper; elsewhere faster-whisper, or onnxruntime
+                        + tokenizers + huggingface-hub for the ONNX backend
+                        (what Windows ARM64 uses). All are in requirements.lock,
+                        which the installer installs hash-checked into the venv
 
 Exit codes:
     0  success
@@ -422,8 +422,8 @@ def _transcribe_faster_whisper(audio_path: Path, *, model: str, verbose: bool,
     try:
         from faster_whisper import WhisperModel
     except ImportError:
-        die("faster-whisper not installed. It ships in requirements.txt; run:\n"
-            f"    {sys.executable} -m pip install faster-whisper")
+        die("faster-whisper not installed. It ships in requirements.lock; re-run the\n"
+            "installer (or update), which installs the lock hash-checked into the venv.")
 
     # MLX repo ids (e.g. 'mlx-community/whisper-large-v3-turbo') aren't valid
     # faster-whisper sizes; fall back to a CPU-friendly default. Override with

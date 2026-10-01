@@ -109,10 +109,25 @@ main() {
     # ---- 2. requirements ----------------------------------------------------
     info "== 2/6 requirements =="
     if [[ "$DRY_RUN" -eq 1 ]]; then
-        info "  dry run: would run pip install -r Templates/Scripts/requirements.txt"
+        info "  dry run: would install Templates/Scripts/requirements.lock (hash-checked)"
     else
         install_requirements "$VENV_PY" "$VAULT/Templates/Scripts/requirements.txt"
         ok "  requirements installed"
+        # The Markitdown Dropper app keeps its own venv (component 43), locked
+        # for Python 3.13 only. An older install may have built it on another
+        # Python; say so and carry on -- the app is optional, the update isn't.
+        local dpy="$HOME/.markitdown-dropper-venv/bin/python3"
+        if [[ -x "$dpy" ]]; then
+            if [[ "$("$dpy" -c 'import sys; print(sys.version_info[1])' 2>/dev/null)" != "13" ]]; then
+                warn "  Markitdown Dropper venv is not Python 3.13; not refreshed. Remove"
+                warn "  ~/.markitdown-dropper-venv and re-run ./install.sh to rebuild it from its lock."
+            elif install_requirements "$dpy" "$VAULT/Templates/Scripts/requirements-dropper.txt" \
+                    requirements-dropper.lock; then
+                ok "  Markitdown Dropper requirements installed"
+            else
+                warn "  Markitdown Dropper requirements did not install; the app may not start"
+            fi
+        fi
     fi
 
     # ---- 3. scheduled jobs ----------------------------------------------------

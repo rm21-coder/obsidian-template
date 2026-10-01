@@ -44,19 +44,65 @@ function Get-VenvPythonW {
     return (Get-VenvPython)
 }
 
+# The lowest Python 3 minor version that can install requirements.lock here.
+# 3.10 is the floor everywhere (the scripts use PEP 604 unions); on Windows
+# ARM64 it is 3.12, because pyyaml publishes no win_arm64 wheel for 3.11 and
+# the lock installs wheels only.
+function Test-ArmWindows {
+    return ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64')
+}
+function Get-MinPythonMinor {
+    if (Test-ArmWindows) { return 12 } else { return 10 }
+}
+# ... and the highest: the lock is resolved and wheel-checked up to 3.14
+# (TARGETS in installers/lib/lock_requirements.py). A newer Python has no
+# wheels for the compiled packages yet, so pip would refuse.
+function Get-MaxPythonMinor { return 14 }
+
 # The requirements step, shared by install.ps1 and update.ps1 so the two can
-# never install differently. When requirements become hash-pinned, this is the
-# one place the pip line changes.
+# never install differently.
+#
+# Installs requirements.lock, never requirements.txt: every package at the
+# release a maintainer locked, each file checked against its SHA256
+# (--require-hashes), nothing the lock does not name (--no-deps), and no
+# source builds (--only-binary), whose build tools pip would fetch unhashed.
+# pip itself is not upgraded: that would be an unpinned fetch ahead of the
+# pinned ones, and the venv's bundled pip handles all of this.
 function Install-Requirements {
     param(
         [Parameter(Mandatory)][string]$VenvPython,
         [Parameter(Mandatory)][string]$ScriptsDir
     )
-    Invoke-Native -ErrorMessage 'pip upgrade failed' { & $VenvPython -m pip install --upgrade pip 1>$null }
-    $req = Join-Path $ScriptsDir 'requirements.txt'
-    if (Test-Path $req) {
-        Write-Host '  installing requirements.txt (packages marked for another platform are skipped) ...'
-        Invoke-Native -ErrorMessage 'dependency install failed' { & $VenvPython -m pip install -r $req }
+    $lock = Join-Path $ScriptsDir 'requirements.lock'
+    if (-not (Test-Path $lock)) {
+        throw "$lock is missing; refusing to install unpinned requirements"
+    }
+    # An existing venv may predate the floor (3.12 on ARM64) or exceed the
+    # ceiling; say so plainly rather than let pip report a missing wheel.
+    $ver = ((& $VenvPython --version 2>&1) | Out-String)
+    if ($ver -match '3\.(\d+)') {
+        $minor = [int]$Matches[1]
+        if ($minor -lt (Get-MinPythonMinor) -or $minor -gt (Get-MaxPythonMinor)) {
+            throw "The venv runs Python $($ver.Trim()); the pinned dependencies need 3.$(Get-MinPythonMinor) to 3.$(Get-MaxPythonMinor) here. Install Python 3.12 (winget install Python.Python.3.12), delete $(Split-Path (Split-Path $VenvPython)), and re-run install.ps1."
+        }
+    }
+    # --force-reinstall: pip skips a package already at the locked version
+    # without checking its files, so a venv built before the lock would keep
+    # whatever bytes it has. Reinstalling re-checks every one.
+    Write-Host '  installing requirements.lock (hash-checked; packages marked for another platform are skipped) ...'
+    Invoke-Native -ErrorMessage 'dependency install failed (a hash mismatch or a missing wheel is a refusal, not a glitch)' {
+        & $VenvPython -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary ':all:' --force-reinstall -r $lock
+    }
+    # The lock does not remove what it no longer names; say so.
+    $extras = Join-Path $ScriptsDir 'lock_extras.py'
+    if (Test-Path $extras) {
+        # Through Invoke-Native: under 'Stop', stray stderr from a native
+        # command would otherwise end update.ps1 after a good install.
+        $names = @(Invoke-Native -Warn -ErrorMessage 'listing packages outside the lock failed' { & $VenvPython $extras $lock } | Where-Object { $_ })
+        if ($names.Count -gt 0) {
+            Write-Warning ("installed but not in requirements.lock (never hash-checked, not audited): " + ($names -join ' '))
+            Write-Warning ("delete $(Split-Path (Split-Path $VenvPython)) and re-run install.ps1 to clear them")
+        }
     }
 }
 
