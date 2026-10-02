@@ -267,9 +267,17 @@ run() {
 # release a maintainer locked, each file checked against its SHA256
 # (--require-hashes), nothing the lock does not name (--no-deps), and no
 # source builds (--only-binary), whose build tools pip would fetch unhashed.
-# --force-reinstall: pip skips a package already at the locked version
-# without checking its files, so a venv built before the lock (or edited
-# since) would keep whatever bytes it has. Reinstalling re-checks every one.
+# --force-reinstall, but only when the lock is new to this venv: pip skips a
+# package already at the locked version without checking its files, so a
+# venv built before the lock would keep whatever bytes it had. So the first
+# install from a lock, and the first after the lock changes, reinstall every
+# package; the lock's SHA256 is then recorded in the venv
+# (<venv>/<lock name>.sha256), and later runs with the same lock install only
+# what is missing or at the wrong version -- each of those hash-checked too.
+# Reinstalling everything every time took 4-5 minutes per update on x64
+# Windows (2026-10-02) to guard against an edit inside the venv, which anyone
+# able to make it could do worse than. Delete the .sha256 file to force a
+# full reinstall.
 # pip itself is not upgraded: that would be an unpinned fetch ahead of the
 # pinned ones, and the venv's bundled pip handles all of this.
 #
@@ -306,8 +314,20 @@ install_requirements() {
         err "  Rebuild the venv with Homebrew's /opt/homebrew/bin/python3.13."
         return 1
     fi
+    local stamp want have="" reinstall=()
+    stamp="$(dirname "$(dirname "$venv_py")")/$(basename "$lock").sha256"
+    want="$(shasum -a 256 "$lock" | cut -d' ' -f1)"
+    [[ -f "$stamp" ]] && have="$(tr -d '[:space:]' < "$stamp")"
+    if [[ -n "$want" && "$have" == "$want" ]]; then
+        info "  $(basename "$lock") unchanged since this venv's last install: installing only what is missing"
+    else
+        info "  $(basename "$lock") is new to this venv: reinstalling every package from it"
+        reinstall=(--force-reinstall)
+    fi
     "$venv_py" -m pip install --disable-pip-version-check --require-hashes --no-deps \
-        --only-binary :all: --force-reinstall -r "$lock" || return 1
+        --only-binary :all: ${reinstall[@]+"${reinstall[@]}"} -r "$lock" || return 1
+    # Only after pip succeeded: a failed install retries in full next time.
+    [[ -n "$want" ]] && printf '%s\n' "$want" > "$stamp"
     local extra
     extra="$("$venv_py" "$(dirname "$lock")/lock_extras.py" "$lock" | tr '\n' ' ')" || true
     if [[ -n "${extra// /}" ]]; then
