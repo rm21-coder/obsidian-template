@@ -137,9 +137,9 @@ What a profile does here:
   `meeting-pull` task (which otherwise ships disabled, since it needs a Claude
   CLI and an approved MCP calendar connector). Per-person answers — display
   name, email, assistant's address — arrive as editable prompt defaults.
-- **Says what it cannot do.** `PROFILE_DASHBOARD_ACTIONS` is macOS-only (it
-  registers a URL-scheme handler app); the run reports that rather than
-  silently ignoring the key.
+- **Turns on the dashboard buttons.** `PROFILE_DASHBOARD_ACTIONS=1` registers
+  the `obsidian-dashboard://` handler without asking (see
+  [`Dashboard-Actions.md`](Dashboard-Actions.md#windows)).
 
 Two cautions. Under `-NonInteractive` the profile *is* the consent for the
 opt-in jobs — that is the only way an unattended run installs them — but a
@@ -294,14 +294,8 @@ Add these to `%USERPROFILE%\dev\secrets\.env` (created as a stub by
 
 ## Not on Windows (yet)
 
-The Morning Dashboard's action buttons are macOS-only: they rely on a URL-
-scheme handler app (`DashboardActions.app`, component `57-dashboard-actions`)
-that has no Windows counterpart. The dashboard detects this and simply
-renders without the button bar — everything the buttons do can be run
-directly (`python meeting_pull.py`, `python obsidian-rag-sync.py`, etc.).
-
 The nightly classification assistant (`classify_notes.py`, macOS agent
-`com.obsidian.classify`) is also not yet a Windows scheduled task. The
+`com.obsidian.classify`) is not yet a Windows scheduled task. The
 script itself is cross-platform — run it manually or register your own
 task if you want nightly classification on Windows; `install.ps1` already
 seeds the `LLM_*`/`CLASSIFIER_*` config it reads.

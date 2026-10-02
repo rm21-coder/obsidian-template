@@ -42,6 +42,13 @@ for the full setup guide.
   Open WebUI in Docker); called by `install.ps1 -WithRAG` or standalone.
 - `Install-SendTo.ps1` — registers the right-click **Send to → "Markitdown to
   Obsidian"** shortcut.
+- `Install-DashboardActions.ps1` — makes the Morning Dashboard's three buttons
+  work (`-Remove` undoes it): registers the `obsidian-dashboard://` URL scheme
+  for the current user, pointing at `dashboard_action.py`.
+- `dashboard_action.py` — the handler that scheme runs. Accepts only
+  `pull-meetings`, `refresh-dashboard` and `refresh-rag`, runs each job the
+  way its scheduled task does (through `run_logged.py`, no console), reports
+  a disabled job as not set up, and toasts the result.
 - `sync-vault.ps1` — port of `sync-vault.sh` (RAG indexer wrapper).
 - `Send-Notification.ps1` — toast helper replacing `osascript` notifications.
   Logs every message to `notifications.log`, then shows a toast through

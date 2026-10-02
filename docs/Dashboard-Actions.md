@@ -2,7 +2,7 @@
 classification: public
 ---
 
-# Dashboard Action Buttons (Optional, macOS)
+# Dashboard Action Buttons (Optional)
 
 The Morning Dashboard is a static `file://` HTML page — a browser will never
 let a page spawn local processes, so its action buttons can't simply run
@@ -10,10 +10,13 @@ scripts. Instead each button links to a custom URL scheme:
 
     obsidian-dashboard://run/<action>
 
-and a tiny helper app, **DashboardActions.app**, registers that scheme and
-dispatches to `Templates/Scripts/dashboard_actions.sh`.
+which something on the machine has to answer. On macOS a tiny helper app,
+**DashboardActions.app**, registers that scheme and dispatches to
+`Templates/Scripts/dashboard_actions.sh`. On Windows a per-user registry key
+points it at `Templates/Scripts/windows/dashboard_action.py` (see
+[Windows](#windows) below).
 
-## Install
+## Install (macOS)
 
 Opt-in installer component (it registers a URL-scheme handler system-wide,
 so it asks first):
@@ -34,9 +37,58 @@ registers it with Launch Services. Re-run it any time the `.applescript`
 changes. If your vault is not at `~/Obsidian`, edit `scriptsDir` in the
 `.applescript` first.
 
-The dashboard only renders the buttons when the handler app exists —
-without it (and on Windows, where no handler exists yet) the dashboard is
-identical minus the button bar, so nothing else depends on this component.
+The dashboard only renders the buttons when a handler exists — without one
+the dashboard is identical minus the button bar, so nothing else depends on
+this component.
+
+## Windows
+
+Also opt-in: `install.ps1` asks, or follows `PROFILE_DASHBOARD_ACTIONS` in an
+install profile, and an unattended run without a profile declines. To opt in
+later, or to undo it:
+
+```powershell
+cd $env:USERPROFILE\Obsidian; powershell -ExecutionPolicy Bypass -File .\Templates\Scripts\windows\Install-DashboardActions.ps1
+```
+
+(add `-Remove` to undo). It writes
+`HKCU\Software\Classes\obsidian-dashboard` — the current user only, no
+elevation — whose command runs `dashboard_action.py` with the venv's
+`pythonw.exe`. `update.ps1` refreshes the key if it exists and never adds it;
+`uninstall.ps1` removes it.
+
+The handler accepts exactly the three actions below and reads nothing else
+from the URL. Each runs the job the way its scheduled task does — through
+`run_logged.py`, appending to `%LOCALAPPDATA%\obsidian-logs\<task>.log`, with
+no console window — so a click and a scheduled run leave the same log.
+Differences from macOS:
+
+- **Each action follows its scheduled task.** If the task is disabled (the
+  meeting pull ships disabled until a profile enables it) or missing, the
+  click is reported as not set up rather than run. If the task is running
+  right now, it is reported as already running.
+- **Pull meetings pulls now:** it drops the scheduled task's
+  `--skip-if-fresh`.
+- **Every action waits for its job** and then toasts *Finished* or *Failed
+  (exit N)* with the log to read, rather than toasting at start only. A second
+  click while the first is still running is reported, not run twice.
+- **Repetition is bounded**, because any web page can fire the scheme, not
+  just the dashboard. A job runs once at a time: the click takes the same
+  per-job lock `run_logged.py` takes for a scheduled run, so a click and a
+  scheduled run never overlap. Each action then waits a cooldown before it
+  will run again from the dashboard (10 minutes for Pull meetings, 2 for the
+  others). Each run has a time limit, so a hung job cannot block later
+  clicks. Pull meetings also honours today's recorded sign-in refusal, the
+  same guard the scheduled pull applies.
+- Every click, refused ones included, is logged to
+  `%LOCALAPPDATA%\obsidian-logs\dashboard-actions.log`, along with any failure of
+  the handler itself.
+
+The browser asks before each launch whether the page may open the handler
+(it names Python, the program it starts, not the dashboard). On a `file://`
+page it may not offer "always allow", so expect the prompt on every click.
+Only accept it on the dashboard: the same prompt on any other page is that
+page asking to start a dashboard job.
 
 ## Actions
 
@@ -80,8 +132,9 @@ milliseconds; for a backgrounded action, the "Finished" notification means
 
 ## Troubleshooting
 
-- **Buttons missing from the dashboard** — the handler app isn't installed
-  (see above), or you're on Windows.
+- **Buttons missing from the dashboard** — the handler isn't installed (see
+  above). On Windows: `Test-Path HKCU:\Software\Classes\obsidian-dashboard`.
+  The buttons appear only on a dashboard rendered after it was installed.
 - **A click does nothing, no notification** — check that exactly one app
   owns the scheme: `open 'obsidian-dashboard://run/refresh-dashboard'` from
   Terminal should launch it. Re-run the builder to re-register.

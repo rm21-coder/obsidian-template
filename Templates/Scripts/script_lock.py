@@ -47,6 +47,7 @@ older copy still excludes a newer one during a partial deploy.
 """
 from __future__ import annotations
 
+import errno
 import sys
 from pathlib import Path
 from typing import Callable, IO
@@ -88,32 +89,54 @@ def acquire(name: str, *,
     Opened "a+" rather than "w" deliberately; see the module docstring for why
     truncation breaks the guard on Windows.
     """
+    handle, error = try_acquire(name, dir=dir)
+    if error and warn:
+        warn(error)
+    if handle is not None and _fcntl is None and _msvcrt is None and warn:
+        warn("no file-locking primitive available; running without a "
+             "single-instance guard")
+    return handle
+
+
+# What msvcrt.locking raises when another process holds the byte: EACCES
+# (and EDEADLOCK, its other spelling). Anything else is not contention.
+_BUSY_ERRNOS = {errno.EACCES, getattr(errno, "EDEADLOCK", errno.EDEADLK), errno.EDEADLK}
+
+
+def try_acquire(name: str, *, dir: Path | None = None) -> tuple[IO | None, str | None]:
+    """Take the lock for `name`, telling the two kinds of None apart.
+
+        (handle, None)   taken
+        (None, None)     another run holds it
+        (None, reason)   the lock could not be attempted at all
+
+    acquire() reports the last two alike, which suits a job that would rather
+    skip than run unguarded. A caller that runs every scheduled job
+    (run_logged.py) must not read a broken lock directory as "already
+    running": that would skip every job, silently, with a success code.
+    """
     target = lock_path(name, dir=dir)
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
-        if warn:
-            warn(f"could not create lock directory {target.parent}")
-        return None
+        return None, f"could not create lock directory {target.parent}"
     try:
         handle = open(target, "a+")
     except OSError:
         # Can't even open the lock file. Report contention rather than running
         # unguarded: whatever is wrong with the directory won't be fixed by
         # two copies of the job discovering it simultaneously.
-        if warn:
-            warn(f"could not open lock file {target}")
-        return None
+        return None, f"could not open lock file {target}"
 
     if _fcntl is not None:
         try:
             _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX | _fcntl.LOCK_NB)
         except BlockingIOError:
             handle.close()
-            return None
-        except OSError:
+            return None, None
+        except OSError as exc:
             handle.close()
-            return None
+            return None, f"could not lock {target}: {exc}"
     elif _msvcrt is not None:
         try:
             # Ensure at least one byte exists before locking a one-byte range.
@@ -127,14 +150,12 @@ def acquire(name: str, *,
                 handle.flush()
             handle.seek(0)
             _msvcrt.locking(handle.fileno(), _msvcrt.LK_NBLCK, 1)
-        except OSError:
+        except OSError as exc:
             handle.close()
-            return None
-    else:
-        if warn:
-            warn("no file-locking primitive available; running without a "
-                 "single-instance guard")
-    return handle
+            if exc.errno in _BUSY_ERRNOS:
+                return None, None
+            return None, f"could not lock {target}: {exc}"
+    return handle, None
 
 
 def acquire_or_exit(name: str, *,

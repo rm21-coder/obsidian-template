@@ -1885,13 +1885,41 @@ footer { color: var(--muted); font-size: 11px; margin-top: 32px; text-align: rig
 """
 
 
+def _windows_dashboard_handler() -> Path | None:
+    """The handler the obsidian-dashboard:// registry key runs, if the key
+    runs an interpreter that exists on THIS vault's dashboard_action.py --
+    not merely some file of that name, or a second clone's, whose clicks
+    would run that other clone's jobs."""
+    try:
+        import winreg  # type: ignore[import-not-found]
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Classes\obsidian-dashboard\shell\open\command") as k:
+            command, _ = winreg.QueryValueEx(k, "")
+    except (ImportError, OSError):
+        return None
+    parts = re.findall(r'"([^"]+)"', command or "")
+    if len(parts) < 2:
+        return None
+    interpreter, handler = Path(parts[0]), Path(parts[1])
+    ours = Path(__file__).resolve().parent / "windows" / "dashboard_action.py"
+    try:
+        same = handler.resolve() == ours and ours.is_file()
+    except OSError:
+        return None
+    return handler if same and interpreter.is_file() else None
+
+
 def dashboard_actions_available() -> bool:
     """True when the obsidian-dashboard:// URL-scheme handler is installed.
 
-    The action buttons are links to a custom URL scheme; without the
-    handler app (built by build_dashboard_actions_app.sh / installer
-    component 57-dashboard-actions) they are dead clicks, so the bar is
-    simply not rendered. macOS-only — no Windows handler exists yet."""
+    The action buttons are links to a custom URL scheme; without a handler
+    they are dead clicks, so the bar is simply not rendered. On macOS the
+    handler is DashboardActions.app (build_dashboard_actions_app.sh /
+    installer component 57-dashboard-actions); on Windows it is the
+    per-user registry key Register-DashboardActions writes, pointing at
+    windows/dashboard_action.py."""
+    if sys.platform == "win32":
+        return _windows_dashboard_handler() is not None
     if sys.platform != "darwin":
         return False
     candidates = (

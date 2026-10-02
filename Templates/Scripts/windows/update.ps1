@@ -84,6 +84,14 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# The dashboard buttons' handler is opt-in (Install-DashboardActions.ps1), so
+# an update only refreshes one that is already registered -- picking up a
+# moved venv -- and never adds it.
+if (Test-Path -LiteralPath $DashboardSchemeKey) {
+    Write-Host '== dashboard buttons =='
+    Register-DashboardActions -ScriptsDir $scriptsDir
+}
+
 $to = (Invoke-Native -ErrorMessage 'git rev-parse failed' { git -C $vault rev-parse --short HEAD }).Trim()
 
 # Report only. Adopting a new baseline is a decision for the person reading
