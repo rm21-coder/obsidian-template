@@ -148,6 +148,58 @@ function Install-Requirements {
     }
 }
 
+# The Morning Dashboard's buttons are obsidian-dashboard://run/<action> links:
+# a file:// page cannot start a program, so the browser hands the link to
+# whatever the scheme is registered to. That is a per-user registry key -- no
+# elevation -- pointing at windows\dashboard_action.py under the venv's
+# pythonw.exe, which accepts exactly three actions. Shared by install.ps1 and
+# update.ps1 (so existing installs get the buttons on their next update);
+# uninstall.ps1 removes it. morning_dashboard.py draws the buttons only when
+# this key points at a handler that exists.
+$DashboardSchemeKey = 'HKCU:\Software\Classes\obsidian-dashboard'
+
+function Register-DashboardActions {
+    param([Parameter(Mandatory)][string]$ScriptsDir)
+    $pyw = Join-Path $ScriptsDir '.venv\Scripts\pythonw.exe'
+    $handler = Join-Path $ScriptsDir 'windows\dashboard_action.py'
+    if (-not (Test-Path -LiteralPath $pyw) -or -not (Test-Path -LiteralPath $handler)) {
+        Write-Warning "  dashboard buttons not registered: need $pyw and $handler"
+        return
+    }
+    $command = '"{0}" "{1}" "%1"' -f $pyw, $handler
+    # Optional, so a failure warns rather than ending an install or update
+    # that has otherwise succeeded; the dashboard then simply has no buttons.
+    try {
+        # Start from nothing: an existing key may carry other verbs under
+        # shell, or another default verb, that this would otherwise keep.
+        if (Test-Path -LiteralPath $DashboardSchemeKey) {
+            Remove-Item -LiteralPath $DashboardSchemeKey -Recurse -Force -ErrorAction Stop
+        }
+        # -Force creates the missing keys on the way down to 'command'.
+        New-Item -Path "$DashboardSchemeKey\shell\open\command" -Force -ErrorAction Stop | Out-Null
+        Set-Item -Path $DashboardSchemeKey -Value 'URL:Obsidian dashboard action' -ErrorAction Stop
+        New-ItemProperty -Path $DashboardSchemeKey -Name 'URL Protocol' -Value '' -PropertyType String -Force -ErrorAction Stop | Out-Null
+        Set-Item -Path "$DashboardSchemeKey\shell\open\command" -Value $command -ErrorAction Stop
+        Write-Host "  obsidian-dashboard:// -> $handler"
+    } catch {
+        Write-Warning "  dashboard buttons not registered: $_"
+    }
+}
+
+function Unregister-DashboardActions {
+    if (Test-Path -LiteralPath $DashboardSchemeKey) {
+        # A warning, not a stop: an uninstall should carry on past this.
+        try {
+            Remove-Item -LiteralPath $DashboardSchemeKey -Recurse -Force -ErrorAction Stop
+            Write-Host '  removed the obsidian-dashboard:// handler'
+        } catch {
+            Write-Warning "  could not remove $DashboardSchemeKey`: $_"
+        }
+    } else {
+        Write-Host '  no obsidian-dashboard:// handler to remove'
+    }
+}
+
 function Get-SecretsFile {
     return (Join-Path $env:USERPROFILE 'dev\secrets\.env')
 }

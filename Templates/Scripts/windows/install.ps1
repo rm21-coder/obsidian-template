@@ -536,12 +536,6 @@ if ($prof) {
         }
     }
 
-    # macOS-only opt-in, so say so rather than accepting the key silently: the
-    # dashboard's buttons work by registering an obsidian-dashboard:// URL
-    # scheme handler as a native .app, which has no Windows counterpart here.
-    if ((Get-ProfileFlag $prof 'DASHBOARD_ACTIONS') -eq $true) {
-        Write-Host '  PROFILE_DASHBOARD_ACTIONS: macOS-only (URL-scheme handler app); ignored on Windows'
-    }
 }
 
 if (-not $SkipTasks) {
@@ -561,6 +555,22 @@ if (-not $SkipTasks) {
         Write-Host '     A headless run cannot answer a permission prompt, so a connector your'
         Write-Host '     tenant has not approved fails in a way that looks silent rather than loud.'
     }
+}
+
+# The dashboard's three buttons (pull meetings, refresh dashboard, refresh RAG
+# index). After the venv (40), whose pythonw.exe the handler runs under.
+# Opt-in, as macOS component 57 is: it registers a URL scheme any web page can
+# fire (the browser asks first). The profile answers; otherwise a person is
+# asked, and an unattended run without a profile declines.
+Write-Host '== 82 dashboard buttons =='
+$dashFlag = Get-ProfileFlag $prof 'DASHBOARD_ACTIONS'
+$wantDash = if ($null -ne $dashFlag) { $dashFlag } else {
+    Confirm-Optional "Make the Morning Dashboard's buttons work? (registers the obsidian-dashboard:// URL scheme for you)"
+}
+if ($wantDash) {
+    Register-DashboardActions -ScriptsDir $scriptsDir
+} else {
+    Write-Host '  skipped. Add later:  windows\Install-DashboardActions.ps1'
 }
 
 # Last on purpose. A baseline adopts the machine's current state as trusted,

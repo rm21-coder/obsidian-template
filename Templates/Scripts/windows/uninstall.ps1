@@ -154,6 +154,11 @@ Write-Host '== Send To shortcut =='
 if ($DryRun) { Write-Host '  [dry-run] would remove the Markitdown Send To shortcut' }
 else { & (Join-Path $PSScriptRoot 'Install-SendTo.ps1') -Remove }
 
+# ---- 2b. dashboard buttons' URL handler -------------------------------------
+Write-Host '== dashboard buttons =='
+if ($DryRun) { Write-Host '  [dry-run] would remove the obsidian-dashboard:// handler' }
+else { & (Join-Path $PSScriptRoot 'Install-DashboardActions.ps1') -Remove }
+
 # ---- 3. regenerable state (venv, scratch, LOCALAPPDATA) --------------------
 Write-Host '== regenerable state =='
 Remove-PathSafe (Join-Path $scriptsDir '.venv')

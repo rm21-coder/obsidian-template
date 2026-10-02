@@ -15,9 +15,9 @@ works on both platforms, so one profile serves a mixed-platform team.
 ```
 
 The two installers read the same keys, with two differences that are properties
-of the platforms rather than gaps: `PROFILE_DASHBOARD_ACTIONS` is macOS-only
-(it registers a URL-scheme handler app, and the Windows run says so rather than
-ignoring the key), and `install.sh` *sources* a profile — shell code at the
+of the platforms rather than gaps: `PROFILE_DASHBOARD_ACTIONS` registers a
+different handler on each (an app on macOS, a per-user registry key on
+Windows), and `install.sh` *sources* a profile — shell code at the
 installer's trust level — while `install.ps1` parses it as data and never
 evaluates a value. Keep values literal and both sides agree.
 
@@ -83,7 +83,7 @@ is where the installer puts what you type at the prompt.
 |---|---|
 | `PROFILE_MEETING_PREPOPULATE` | Run 52 (consumer: handoff JSON → meeting notes + People stubs). |
 | `PROFILE_MEETING_PULL` | Run 54 (producer: MCP calendar fetch → handoff JSON). |
-| `PROFILE_DASHBOARD_ACTIONS` | Run 57 (registers the `obsidian-dashboard://` URL scheme). |
+| `PROFILE_DASHBOARD_ACTIONS` | Register the `obsidian-dashboard://` URL scheme for the dashboard's buttons (macOS component 57; Windows step 82). |
 
 `0` declines without asking. Either way the answer is announced in the log,
 so a profile can't silently install something. 52 and 54 are the two halves

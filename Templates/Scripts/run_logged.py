@@ -162,9 +162,68 @@ def exit_status(rc: int) -> int:
     return rc
 
 
+# A time limit, in seconds, for this one run. Set only by the dashboard's
+# handler (windows/dashboard_action.py); scheduled runs have none here, Task
+# Scheduler's own limit applies to them. It is enforced in this process,
+# which knows the job's process: on expiry the whole tree is stopped, not
+# just the job's interpreter -- a meeting pull's claude CLI included.
+TIMEOUT_ENV = "RUN_LOGGED_TIMEOUT"
+TIMED_OUT = 124
+# By absolute path, as security_common calls system tools: a bare name would
+# be looked up in the interpreter's own folder and the working directory
+# (both user-writable) before System32.
+TASKKILL_EXE = str(Path(os.environ.get("SystemRoot") or r"C:\Windows")
+                   / "System32" / "taskkill.exe")
+
+
+def _timeout() -> float | None:
+    try:
+        t = float(os.environ.get(TIMEOUT_ENV, ""))
+    except ValueError:
+        return None
+    return t if t > 0 else None
+
+
+def _stop_tree(proc: subprocess.Popen) -> None:
+    if sys.platform == "win32":
+        try:
+            subprocess.run([TASKKILL_EXE, "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=60, **spawn_options())
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        import signal
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+    try:
+        proc.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _run_child(cmd: list[str], job: str, **kw) -> int:
+    limit = _timeout()
+    if limit is None:
+        return subprocess.run(cmd, env=child_env(), **spawn_options(), **kw).returncode
+    extra = {} if sys.platform == "win32" else {"start_new_session": True}
+    proc = subprocess.Popen(cmd, env=child_env(), **spawn_options(), **extra, **kw)
+    try:
+        return proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        _stop_tree(proc)
+        # In the job's own log too: that is the file the toast points to.
+        _note(job, f"run_logged: {job} ran past {limit:.0f}s; stopped it and its children")
+        return TIMED_OUT
+
+
 def run(job: str, script: str, args: list[str]) -> int:
     cmd = child_command(script, args)
-    opts = spawn_options()
     path = log_path(job)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -172,17 +231,45 @@ def run(job: str, script: str, args: list[str]) -> int:
         fh = open(path, "ab")
     except OSError as exc:
         diag(f"run_logged: cannot open {path} ({exc}); running {job} without a log")
-        return subprocess.run(cmd, env=child_env(), **opts).returncode
+        return _run_child(cmd, job)
 
     with fh:
-        rc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT,
-                            env=child_env(), **opts).returncode
+        rc = _run_child(cmd, job, stdout=fh, stderr=subprocess.STDOUT)
         if rc != 0:
             # Most jobs don't timestamp their own output, so without this a
             # traceback in the file could not be tied to a run.
             fh.write(("%s run_logged: %s exited with code %d\n"
                       % (time.strftime("%Y-%m-%d %H:%M:%S"), job, rc)).encode("utf-8"))
     return rc
+
+
+# One run of a job at a time. Task Scheduler already refuses a second
+# instance of the same task, but the dashboard's buttons
+# (windows/dashboard_action.py) start the same jobs outside Task Scheduler, so
+# without this a scheduled rag-sync could start while a clicked one was still
+# running. The click takes this same lock itself and names the job here, so
+# the run it starts does not wait on its own lock.
+LOCK_HELD_ENV = "RUN_LOGGED_LOCK_HELD"
+
+
+def job_lock_name(job: str) -> str:
+    return f"run-{job}"
+
+
+def _note(job: str, message: str) -> None:
+    """A line about the runner itself, in the job's own log and in diag()."""
+    diag(message)
+    try:
+        log_path(job).parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path(job), "a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n")
+    except OSError:
+        pass
+
+
+def _busy(job: str) -> int:
+    _note(job, f"run_logged: {job} is already running; not starting a second copy")
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -193,7 +280,24 @@ def main(argv: list[str]) -> int:
     if not _JOB_NAME.match(job):
         diag(f"run_logged: refusing job name {job!r}: it becomes a filename")
         return 2
-    return exit_status(run(job, script, rest))
+    lock = None
+    if os.environ.get(LOCK_HELD_ENV) != job:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import script_lock
+        lock, error = script_lock.try_acquire(job_lock_name(job))
+        if error:
+            # Fail open: the lock only keeps a dashboard click and a
+            # scheduled run of the same job apart. A broken lock directory
+            # must not stop every scheduled job -- least of all silently,
+            # with a success code that shows green on the dashboard.
+            _note(job, f"run_logged: {error}; running {job} without its single-run guard")
+        elif lock is None:
+            return _busy(job)
+    try:
+        return exit_status(run(job, script, rest))
+    finally:
+        if lock is not None:
+            lock.close()
 
 
 if __name__ == "__main__":
