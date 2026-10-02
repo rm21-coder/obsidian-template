@@ -127,7 +127,10 @@ function Resolve-BasePython {
         $exe = $cand[0]
         if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) { continue }
         try {
-            $prefix = Get-CandPrefix $cand
+            # @(...): a one-item array comes back from a function unwrapped to
+            # a string, and splatting a string passes nothing -- py then
+            # printed its banner, and every 'py -3.x' candidate was skipped.
+            $prefix = @(Get-CandPrefix $cand)
             $out = (& $exe @prefix '--version' 2>&1) | Out-String
             # Anchored, and only on success: py's "Requested Python version
             # (3.13) is not installed" also contains a version number.

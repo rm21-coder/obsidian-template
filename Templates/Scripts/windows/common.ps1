@@ -68,6 +68,24 @@ function Get-MaxPythonMinor { return 14 }
 # source builds (--only-binary), whose build tools pip would fetch unhashed.
 # pip itself is not upgraded: that would be an unpinned fetch ahead of the
 # pinned ones, and the venv's bundled pip handles all of this.
+function Remove-PipLeftovers {
+    param([Parameter(Mandatory)][string]$VenvPython)
+    $site = Join-Path (Split-Path (Split-Path $VenvPython)) 'Lib\site-packages'
+    if (-not (Test-Path $site)) { return }
+    $left = @(Get-ChildItem -LiteralPath $site -Directory -Filter '~*' -ErrorAction SilentlyContinue)
+    $kept = @()
+    foreach ($d in $left) {
+        Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $d.FullName) { $kept += $d.Name }
+    }
+    if ($left.Count -gt $kept.Count) {
+        Write-Host "  removed $($left.Count - $kept.Count) folder(s) of old files pip set aside while they were in use"
+    }
+    if ($kept.Count -gt 0) {
+        Write-Host "  still in use, cleared on the next update: $($kept -join ' ')"
+    }
+}
+
 function Install-Requirements {
     param(
         [Parameter(Mandatory)][string]$VenvPython,
@@ -86,6 +104,11 @@ function Install-Requirements {
             throw "The venv runs Python $($ver.Trim()); the pinned dependencies need 3.$(Get-MinPythonMinor) to 3.$(Get-MaxPythonMinor) here. Install Python 3.12 (winget install Python.Python.3.12), delete $(Split-Path (Split-Path $VenvPython)), and re-run install.ps1."
         }
     }
+    # A file in use cannot be deleted on Windows, so when a scheduled job has
+    # a package loaded, pip moves its old files to site-packages\~<name> and
+    # leaves them. Clear what earlier runs left (anything still held stays
+    # until next time); nothing pip installs starts with '~'.
+    Remove-PipLeftovers -VenvPython $VenvPython
     # --force-reinstall: pip skips a package already at the locked version
     # without checking its files, so a venv built before the lock would keep
     # whatever bytes it has. Reinstalling re-checks every one.
@@ -93,6 +116,7 @@ function Install-Requirements {
     Invoke-Native -ErrorMessage 'dependency install failed (a hash mismatch or a missing wheel is a refusal, not a glitch)' {
         & $VenvPython -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary ':all:' --force-reinstall -r $lock
     }
+    Remove-PipLeftovers -VenvPython $VenvPython
     # The lock does not remove what it no longer names; say so.
     $extras = Join-Path $ScriptsDir 'lock_extras.py'
     if (Test-Path $extras) {

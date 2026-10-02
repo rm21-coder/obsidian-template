@@ -431,3 +431,26 @@ def test_update_refreshes_the_dropper_only_on_python_313_and_never_stops_on_it()
 def test_lock_extras_failures_do_not_end_an_install() -> None:
     assert re.search(r'lock_extras\.py" "\$lock" \| tr .*\|\| true', COMMON_SH)
     assert "Invoke-Native -Warn" in _install_requirements_ps()
+
+
+# ---- Windows ARM laptop run (2026-10-01) ----------------------------------
+
+def test_windows_candidate_prefix_stays_an_array() -> None:
+    """A one-item array returned from a function comes back as a string, and
+    splatting a string passes nothing: `py` printed its banner instead of a
+    version, and every 'py -3.x' candidate was skipped (found on the ARM
+    laptop). Every call site must wrap it."""
+    calls = re.findall(r"[^\n]*Get-CandPrefix \$\w+[^\n]*", INSTALL_PS)
+    assert calls
+    for c in calls:
+        assert "@(Get-CandPrefix" in c, c
+
+
+def test_windows_clears_the_files_pip_set_aside_while_in_use() -> None:
+    body = _install_requirements_ps()
+    pip_at = body.index("-m pip install")
+    assert body.index("Remove-PipLeftovers") < pip_at            # earlier runs' leftovers
+    assert body.rindex("Remove-PipLeftovers") > pip_at           # this run's, if released
+    fn = COMMON_PS[COMMON_PS.index("function Remove-PipLeftovers"):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "-Directory -Filter '~*'" in fn and "'Lib\\site-packages'" in fn
