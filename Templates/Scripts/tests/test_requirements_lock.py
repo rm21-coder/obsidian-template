@@ -193,9 +193,8 @@ def test_lock_extras_lists_installed_packages_the_lock_does_not_name(monkeypatch
 
 # ---- macOS: the one shared pip step ----------------------------------------
 
-def _run_install_requirements(tmp_path: Path, *, with_lock: bool = True,
-                              probe: str = "arm64 13 gil", extras: str = "",
-                              lock_name: str | None = None):
+def _mac_setup(tmp_path: Path, *, with_lock: bool = True, probe: str = "arm64 13 gil",
+               extras: str = "", lock_name: str | None = None, pip_exit: int = 0):
     d = tmp_path / "Scripts"
     d.mkdir()
     (d / "requirements.txt").write_text("six\n", encoding="utf-8")
@@ -204,19 +203,29 @@ def _run_install_requirements(tmp_path: Path, *, with_lock: bool = True,
             "six==1.17.0 \\\n    --hash=sha256:00\n", encoding="utf-8")
     (d / "lock_extras.py").write_text("", encoding="utf-8")
     argv = tmp_path / "argv"
-    fake = tmp_path / "python"
+    fake = tmp_path / "venv" / "bin" / "python"      # venv root: tmp_path/venv
+    fake.parent.mkdir(parents=True)
     fake.write_text(
         "#!/bin/sh\n"
         f'if [ "$1" = "-c" ]; then echo "{probe}"; exit 0; fi\n'
         f'case "$1" in *lock_extras.py) printf "%s" "{extras}"; exit 0;; esac\n'
-        f'printf "%s\\n" "$@" >> "{argv}"\n', encoding="utf-8")
+        f'printf "%s\\n" "$@" >> "{argv}"\n'
+        f"exit {pip_exit}\n", encoding="utf-8")
     fake.chmod(0o755)
+    return d, fake, argv
+
+
+def _mac_run(d: Path, fake: Path, lock_name: str | None = None) -> subprocess.CompletedProcess:
     call = 'source "$1"; install_requirements "$2" "$3"' + (f' "{lock_name}"' if lock_name else "")
-    p = subprocess.run(
+    return subprocess.run(
         ["bash", "-c", call, "_", str(REPO / "installers" / "lib" / "common.sh"),
          str(fake), str(d / "requirements.txt")],
         capture_output=True, text=True, env={**os.environ, "NO_COLOR": "1"})
-    return p, argv
+
+
+def _run_install_requirements(tmp_path: Path, **kw):
+    d, fake, argv = _mac_setup(tmp_path, **kw)
+    return _mac_run(d, fake, kw.get("lock_name")), argv
 
 
 def test_macos_installs_only_the_lock_with_every_flag(tmp_path, allow_subprocess) -> None:
@@ -326,7 +335,7 @@ def test_windows_installs_only_the_lock_with_every_flag() -> None:
     pip = [ln for ln in body.splitlines() if "-m pip" in ln]
     assert len(pip) == 1, pip                 # no separate pip self-upgrade
     for flag in FLAGS:
-        assert flag in pip[0], flag
+        assert flag in pip[0] or (flag == "--force-reinstall" and "@reinstall" in pip[0]), flag
     assert "-r $lock" in pip[0]
     assert "Join-Path $ScriptsDir 'requirements.lock'" in body
     assert "refusing to install unpinned requirements" in body
@@ -454,3 +463,66 @@ def test_windows_clears_the_files_pip_set_aside_while_in_use() -> None:
     fn = COMMON_PS[COMMON_PS.index("function Remove-PipLeftovers"):]
     fn = fn[:fn.index("\n}\n")]
     assert "-Directory -Filter '~*'" in fn and "'Lib\\site-packages'" in fn
+
+
+# ---- conditional full reinstall (x64 laptop run, 2026-10-02) ----------------
+# A full reinstall on every update took 4-5 minutes on x64. It now happens
+# only when the lock is new to the venv, recorded as <venv>/<lock>.sha256.
+
+def _pip_calls(argv: Path) -> list[list[str]]:
+    calls, cur = [], []
+    for a in argv.read_text(encoding="utf-8").splitlines():
+        if a == "-m" and cur:
+            calls.append(cur); cur = []
+        cur.append(a)
+    return calls + ([cur] if cur else [])
+
+
+def test_macos_reinstalls_everything_only_when_the_lock_is_new(tmp_path, allow_subprocess) -> None:
+    import hashlib
+    d, fake, argv = _mac_setup(tmp_path)
+    stamp = tmp_path / "venv" / "requirements.lock.sha256"
+    lock = d / "requirements.lock"
+
+    p1 = _mac_run(d, fake)                                  # first install
+    assert p1.returncode == 0, p1.stdout + p1.stderr
+    assert "is new to this venv: reinstalling every package" in p1.stdout + p1.stderr
+    assert stamp.read_text().strip() == hashlib.sha256(lock.read_bytes()).hexdigest()
+
+    p2 = _mac_run(d, fake)                                  # same lock
+    assert "unchanged since this venv's last install" in p2.stdout + p2.stderr
+
+    lock.write_text(lock.read_text() + "idna==3.20 \\\n    --hash=sha256:11\n")
+    p3 = _mac_run(d, fake)                                  # lock changed
+    assert "is new to this venv" in p3.stdout + p3.stderr
+
+    calls = _pip_calls(argv)
+    assert ["--force-reinstall" in c for c in calls] == [True, False, True]
+    assert all("--require-hashes" in c and "--only-binary" in c for c in calls)
+
+
+def test_macos_records_the_lock_only_after_pip_succeeds(tmp_path, allow_subprocess) -> None:
+    d, fake, argv = _mac_setup(tmp_path, pip_exit=1)
+    p = _mac_run(d, fake)
+    assert p.returncode != 0
+    assert "is new to this venv: reinstalling every package" in p.stdout + p.stderr
+    assert _pip_calls(argv)                                   # pip did run, and failed
+    assert not (tmp_path / "venv" / "requirements.lock.sha256").exists()
+
+
+def test_macos_names_the_record_after_the_lock(tmp_path, allow_subprocess) -> None:
+    d, fake, _ = _mac_setup(tmp_path, lock_name="requirements-dropper.lock")
+    assert _mac_run(d, fake, "requirements-dropper.lock").returncode == 0
+    assert (tmp_path / "venv" / "requirements-dropper.lock.sha256").exists()
+
+
+def test_windows_reinstalls_everything_only_when_the_lock_is_new() -> None:
+    body = _install_requirements_ps()
+    assert "Get-FileHash -Algorithm SHA256 -LiteralPath $lock" in body
+    assert "'requirements.lock.sha256'" in body
+    assert "$reinstall = @('--force-reinstall')" in body          # an array, not a string
+    assert re.search(r"if \(\$have -eq \$want\) \{", body)
+    pip_at = body.index("-m pip install")
+    assert "@reinstall -r $lock" in body[pip_at:pip_at + 200]
+    # written only after Invoke-Native returned (it throws on a failed pip)
+    assert body.index("Set-Content -LiteralPath $stamp -Value $want") > pip_at

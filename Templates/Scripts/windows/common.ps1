@@ -109,13 +109,31 @@ function Install-Requirements {
     # leaves them. Clear what earlier runs left (anything still held stays
     # until next time); nothing pip installs starts with '~'.
     Remove-PipLeftovers -VenvPython $VenvPython
-    # --force-reinstall: pip skips a package already at the locked version
-    # without checking its files, so a venv built before the lock would keep
-    # whatever bytes it has. Reinstalling re-checks every one.
-    Write-Host '  installing requirements.lock (hash-checked; packages marked for another platform are skipped) ...'
-    Invoke-Native -ErrorMessage 'dependency install failed (a hash mismatch or a missing wheel is a refusal, not a glitch)' {
-        & $VenvPython -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary ':all:' --force-reinstall -r $lock
+    # --force-reinstall, but only when the lock is new to this venv: pip skips
+    # a package already at the locked version without checking its files, so
+    # the first install from a lock, and the first after it changes, reinstall
+    # every package. The lock's SHA256 is then recorded in the venv
+    # (<venv>\requirements.lock.sha256); later runs with the same lock install
+    # only what is missing or at the wrong version, hash-checked too.
+    # Reinstalling everything every time took 4-5 minutes per update on x64
+    # (2026-10-02). Delete the .sha256 file to force a full reinstall.
+    $stamp = Join-Path (Split-Path (Split-Path $VenvPython)) 'requirements.lock.sha256'
+    $want = (Get-FileHash -Algorithm SHA256 -LiteralPath $lock).Hash.ToLower()
+    $have = ''
+    if (Test-Path -LiteralPath $stamp) { $have = ((Get-Content -LiteralPath $stamp -Raw) -replace '\s', '').ToLower() }
+    $reinstall = @()
+    if ($have -eq $want) {
+        Write-Host '  requirements.lock unchanged since this venv''s last install: installing only what is missing (hash-checked) ...'
+    } else {
+        Write-Host '  requirements.lock is new to this venv: reinstalling every package from it (hash-checked) ...'
+        $reinstall = @('--force-reinstall')
     }
+    Invoke-Native -ErrorMessage 'dependency install failed (a hash mismatch or a missing wheel is a refusal, not a glitch)' {
+        & $VenvPython -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary ':all:' @reinstall -r $lock
+    }
+    # Only after pip succeeded (Invoke-Native throws otherwise): a failed
+    # install retries in full next time.
+    Set-Content -LiteralPath $stamp -Value $want -Encoding ascii
     Remove-PipLeftovers -VenvPython $VenvPython
     # The lock does not remove what it no longer names; say so.
     $extras = Join-Path $ScriptsDir 'lock_extras.py'
