@@ -68,46 +68,53 @@ Install all community plugins via Settings → Community plugins → Browse. Aft
 
 ### 3.1 QuickAdd
 
-QuickAdd provides custom commands for creating notes in specific folders with specific templates. Three commands are configured, each with a sidebar icon managed by Commander.
+QuickAdd provides every command that creates or acts on notes. Seven are configured; the four that create notes have sidebar icons managed by Commander.
 
-#### New Meeting Command
+#### New Meeting Command (macro)
 
-- **Template:** Templates/Meeting Template.md
-- **Folder:** Meetings
-- **File Name Format:** `{{DATE:YYYY-MM-DD HHmm}}`
-- **Open File:** Yes (opens in new tab with focus)
-- **Sidebar Icon:** lucide-handshake (configured via Commander)
+- **Step 1:** user script `Templates/QuickAdd/new_meeting.js` — asks for the meeting type (Group, Individual, Ad-hoc) and fills the variables the template uses (see Section 4.1)
+- **Step 2:** template `Templates/Meeting Template.md` into **Meetings**, named `{{DATE:YYYY-MM-DD HHmm}}`
+- **Hotkey:** Cmd+Shift+M · **Sidebar Icon:** lucide-handshake
 
 #### New Note Command
 
-- **Template:** Templates/Note Template.md
-- **Folder:** Creations
-- **File Name Format:** `{{DATE:YYYY-MM-DD HHmm}}`
-- **Open File:** Yes (opens in new tab with focus)
-- **Sidebar Icon:** lucide-notebook-pen (configured via Commander)
+- **Template:** Templates/Note Template.md (asks Authored or Captured)
+- **Folder:** Creations · **File Name Format:** `{{DATE:YYYY-MM-DD HHmm}}`
+- **Sidebar Icon:** lucide-notebook-pen
+
+#### New Software Note Command
+
+- **Template:** Templates/Software Note Template.md (vendor, product, licence and cost fields)
+- **Folder:** Creations · **File Name Format:** `{{DATE:YYYY-MM-DD HHmm}}`
 
 #### New Person Command
 
 - **Template:** Templates/People Template.md
 - **Folder:** People
 - **File Name Format:** Disabled (prompts for name, use "Lastname, Firstname" format)
-- **Open File:** Yes (opens in new tab with focus)
-- **Sidebar Icon:** lucide-person-standing (configured via Commander)
+- **Sidebar Icon:** lucide-person-standing
 
-> **Important:** For each command, click the lightning bolt icon in QuickAdd settings to enable it as an Obsidian command. This is required before Commander can add it to the sidebar.
+#### Insert People Template Command
 
-### 3.2 Templater
+- **Capture** of `{{TEMPLATE:Templates/People Template.md}}` into the top of the open note — for an **empty** person note, such as one created by clicking a `[[Name]]` link. Into a note that already has properties it adds a second block below them, which Obsidian does not read as properties.
+- **Hotkey:** Ctrl+Alt+Cmd+P
 
-Templater enables JavaScript-powered templates with dynamic content like suggesters and conditionals. It is essential for the Meeting Template and Note Template type selectors.
+#### Move to Knowledge and Clean Filenames (macros)
 
-**Key Settings:**
+- User scripts `Templates/QuickAdd/move_to_knowledge.js` and `Templates/QuickAdd/clean_filenames.js` (see Section 4.6)
+- **Move to Knowledge hotkey:** Ctrl+Alt+Cmd+K · both have sidebar icons
 
-- **Templates Folder:** /Templates
-- **Trigger on File Creation:** Enabled (required for QuickAdd integration)
-- **Enable Folder Templates:** Enabled
-- **Syntax Highlighting:** Enabled
+All open in a new tab with focus where they create a note.
 
-**Hotkey for People Template:** Assign through Obsidian's native Settings → Hotkeys (not Templater's Template Hotkeys, which has a bug where assignments don't save). Search for "Templater: Insert Templates/People Template" (note: it displays as "Templater: Insert eople Template" due to a known display bug, but it works).
+> **Important:** For each command, click the lightning bolt icon in QuickAdd settings to enable it as an Obsidian command. This is required before Commander can add it to the sidebar or a hotkey can be assigned.
+
+### 3.2 Templater (retired 2026-10-03)
+
+The template no longer uses Templater, and updates remove it. Templater ran commands written in note text: dynamic commands (`<%+ %>`, and `<%*+ %>` as JavaScript) in **any** note shown in reading view, with no setting or folder limit, and every command in a new note when its creation trigger was on. A clipped web page or a meeting invite could carry one.
+
+What it did is now done by QuickAdd (Section 3.1): plain QuickAdd templates for notes and people, and three small user scripts for the meeting pickers, Move to Knowledge and Clean Filenames. Those scripts run only when their command is run, never because a note was opened or created, and the plugin-integrity check watches them (QuickAdd's macro settings and the script files they name). A command is run from the palette, a hotkey or a sidebar icon — or, as with any QuickAdd choice, from an `obsidian://quickadd?choice=…` link, which Obsidian lets any page or note open; that gives a page nothing it could not already do with Obsidian's own `obsidian://new` link.
+
+Updates remove Templater (they move its folder out of the vault, into the update's backup folder). Templates of your own written for Templater need rewriting in QuickAdd syntax or as a QuickAdd user script. Quit Obsidian before updating: while it is open it keeps every plugin it loaded — Templater included — running until it restarts. The scripts still neutralise `<%` in outside text, and the export gate still refuses a note carrying a dynamic command, for any machine where Templater has been installed by hand.
 
 ### 3.3 Dataview
 
@@ -200,80 +207,51 @@ Commander manages the left sidebar ribbon icons. It provides custom icons for th
 
 ### 4.1 Meeting Template
 
-**File:** Templates/Meeting Template.md
+**Files:** Templates/Meeting Template.md, filled by the New Meeting macro's script `Templates/QuickAdd/new_meeting.js`
 
-Uses Templater JavaScript to present a three-option type selector (Group, Individual, Ad-hoc) when creating a new meeting. Based on the selection:
+New Meeting first asks for the meeting type:
 
-- **Group:** Prompts for a group file from the Groups folder, then extracts all `[[wiki links]]` from that file (filtering out image embeds), populates the people property, and sets the group property to a wiki link to the selected group.
-- **Individual:** Prompts for a person from the People folder and adds them to the people property.
-- **Ad-hoc:** Creates the note with an empty people and group list.
+- **Group:** pick a note from Groups/. Its `[[wiki links]]` become the attendees — minus image embeds (group notes carry photo thumbnails next to each name) and `.base` embeds — and `group` links the chosen group.
+- **Individual:** pick a person from People/.
+- **Ad-hoc:** type a title (required; Escape cancels the command).
 
-The template produces the following frontmatter:
+The script puts the results in QuickAdd variables, and the template is plain QuickAdd syntax:
 
 ```yaml
 ---
 categories:
   - "[[Meetings]]"
-type: <selected type>
-group:
-  - "[[Group Name]]"
-people:
-  - "[[Person Name]]"
+type: {{VALUE:meetingType}}
+{{VALUE:titleLine}}{{VALUE:groupSection}}people:
+{{VALUE:peopleList}}
+classification: confidential
 tags: []
 ---
 ```
 
-**Image Filtering:** The Templater script includes a regex filter that excludes image embed links (png, jpg, gif, svg, etc.) from the people list. This is essential because group files include photo thumbnails next to each person's wiki link.
+which produces, for a group meeting:
 
-**Full Templater Script:**
-
-```javascript
-<%*
-const options = ["Group", "Individual", "Ad-hoc"];
-const choice = await tp.system.suggester(options, options, false, "Meeting type:");
-const meetingType = choice || "Ad-hoc";
-let peopleList = "";
-let groupLink = "";
-if (meetingType === "Group") {
-  const groupFolder = app.vault.getAbstractFileByPath("Groups");
-  if (groupFolder && groupFolder.children) {
-    const groupFiles = groupFolder.children
-      .filter(f => f.extension === "md")
-      .map(f => f.basename)
-      .sort();
-    const selected = await tp.system.suggester(groupFiles, groupFiles, false, "Select a meeting group:");
-    if (selected) {
-      groupLink = `  - "[[${selected}]]"`;
-      const file = app.vault.getAbstractFileByPath(`Groups/${selected}.md`);
-      const content = await app.vault.read(file);
-      const names = content.match(/\[\[([^\]]+)\]\]/g);
-      if (names) {
-        const filtered = names.filter(n => !n.match(/\.(png|jpg|jpeg|gif|svg|webp|bmp)\|?\d*\]\]/i));
-        peopleList = filtered.map(n => `  - "${n}"`).join("\n");
-      }
-    }
-  }
-} else if (meetingType === "Individual") {
-  const peopleFolder = app.vault.getAbstractFileByPath("People");
-  if (peopleFolder && peopleFolder.children) {
-    const people = peopleFolder.children
-      .filter(f => f.extension === "md")
-      .map(f => f.basename)
-      .sort();
-    const selected = await tp.system.suggester(people, people, false, "Select a person:");
-    if (selected) {
-      peopleList = `  - "[[${selected}]]"`;
-    }
-  }
-}
--%>
+```yaml
+---
+categories:
+  - "[[Meetings]]"
+type: Group
+group:
+  - "[[Group Name]]"
+people:
+  - "[[Person Name]]"
+classification: confidential
+tags: []
+---
 ```
+
+Names and the title go into the YAML made inert: line breaks become spaces, quotes and backslashes are escaped, braces are dropped (so nothing becomes a QuickAdd token) and `<%` is split, so a note name or group note cannot break the frontmatter. Calendar meetings normally arrive through the meeting pipeline instead (`meeting_prepopulate.py`), with attendees already filled.
 
 ### 4.2 People Template
 
 **File:** Templates/People Template.md
 
-A static template (no Templater scripting) with the following structure:
+A static template with the following structure:
 
 ```yaml
 ---
@@ -299,78 +277,15 @@ tags: []
 
 The `## Photo` section is where a photo embed is placed (e.g., `![[Smith-John.png]]`). The `## Meetings` section embeds the Person view from Meetings.base, which dynamically shows all meetings where this person appears in the people property.
 
-### 4.3 Note Template
+### 4.3 Note Template and Software Note Template
 
-**File:** Templates/Note Template.md
+**Files:** Templates/Note Template.md, Templates/Software Note Template.md
 
-Uses Templater JavaScript to present a two-step selector: first a type selector (Article, Idea, Research, Software), then a status selector whose options vary by type. The Software type triggers additional frontmatter fields and body sections for tracking software assets.
+Both are plain QuickAdd templates — no scripting.
 
-**Standard types** (Article, Idea, Research) get status options: Draft, In Progress, Final.
+**New Note** asks for the note's type, `{{VALUE:Authored,Captured}}` (Escape cancels the note; the Templater version used to default to Authored): *Authored* is something you wrote yourself (a memo, idea, draft or analysis); *Captured* is material collected from elsewhere (an excerpt or reference). It stamps `created` and `updated` with `{{DATE:YYYY-MM-DDTHH:mm}}`, sets `classification: internal-use-only`, and starts with a `## Notes` section.
 
-**Software type** gets status options: Evaluating, Implementing, In Production, Retired — plus additional frontmatter fields (vendor, product, version, license-type, contract-expiration, annual-cost, owner) and body sections (Overview, Environment, Integrations, Notes).
-
-**Standard note frontmatter:**
-
-```yaml
----
-categories:
-  - "[[Creations]]"
-title:
-type: Article
-status: Draft
-tags: []
----
-
-## Notes
-```
-
-**Software note frontmatter:**
-
-```yaml
----
-categories:
-  - "[[Creations]]"
-title:
-type: Software
-status: Evaluating
-vendor:
-product:
-version:
-license-type:
-contract-expiration:
-annual-cost:
-owner:
-tags: []
----
-
-## Overview
-
-
-## Environment
-
-
-## Integrations
-
-
-## Notes
-```
-
-**Full Templater Script:**
-
-```javascript
-<%*
-const types = ["Article", "Idea", "Research", "Software"];
-const choice = await tp.system.suggester(types, types, false, "Note type:");
-const noteType = choice || "Article";
-const isSoftware = noteType === "Software";
-
-const statusOptions = isSoftware
-  ? ["Evaluating", "Implementing", "In Production", "Retired"]
-  : ["Draft", "In Progress", "Final"];
-const statusChoice = await tp.system.suggester(statusOptions, statusOptions, false, "Status:");
-const status = statusChoice || statusOptions[0];
--%>
-```
+**New Software Note** is the same with `type: Software`, plus fields for tracking a product — vendor, product, version, license-type, contract-expiration, annual-cost, owner — and sections for Overview, Environment, Integrations and Notes.
 
 ### 4.4 Journal Template
 
@@ -407,27 +322,13 @@ topics: []
 ---
 ```
 
-### 4.6 Utility Templates (Templater Actions)
+### 4.6 Utility Commands (QuickAdd scripts)
 
-These templates are not note templates — they are Templater-powered scripts that perform actions when invoked via the command palette (Cmd+P → "Templater: Insert Templates/<name>").
+Two commands act on notes rather than create them. Each is a QuickAdd macro running one user script from `Templates/QuickAdd/`, and runs only when its command is run (Section 3.2).
 
-**Move to Knowledge** (Templates/Move to Knowledge.md): Moves the currently active file into the Knowledge folder. Useful for triaging web clippings or inbox items.
+**Move to Knowledge** (`move_to_knowledge.js`, Ctrl+Alt+Cmd+K): moves the open note into Knowledge/, and Obsidian updates the links to it. It refuses, rather than overwrites, when Knowledge/ already has a note of that name. Useful for triaging clippings or inbox items.
 
-```javascript
-<%*
-const file = app.workspace.getActiveFile();
-if (file) {
-  const newPath = `Knowledge/${file.name}`;
-  await new Promise(r => setTimeout(r, 200));
-  await app.fileManager.renameFile(file, newPath);
-  new Notice(`Moved "${file.basename}" to Knowledge folder`);
-} else {
-  new Notice("No active file to move");
-}
--%>
-```
-
-**Clean Filenames** (Templates/Clean Filenames.md): Batch-cleans all filenames in the Clippings folder, replacing special characters (bullets, smart quotes, em dashes, accented letters, fractions) with safe equivalents. Saves the original filename as a `title` property. See Section 9.5 for details.
+**Clean Filenames** (`clean_filenames.js`): renames every note in Clippings/ whose name carries characters that trip up links or Windows — bullets, smart quotes, em and en dashes, accented letters, fractions, characters illegal in file names, and a leading dot — and keeps the original name in a `title` property when the clipping has properties. A rename that would collide with an existing note (ignoring case, as macOS and Windows do), a name that would end up empty, and a note whose properties cannot be read are each skipped and counted. See Section 9.5.
 
 ---
 
@@ -666,7 +567,7 @@ To create a new Topic aggregation page, ask Claude to "put all the [TagName] tag
 
 ### 9.5 Filename Cleanup
 
-Web clippings often arrive with special characters (•, ★, ?, smart quotes, em dashes) that are incompatible with Windows. A Templater action is available to clean all filenames in the Clippings folder at once. Run it via Cmd+P → "Templater: Insert Templates/Clean Filenames." It replaces special characters with safe equivalents, saves the original name as a `title` property in frontmatter, and Obsidian auto-updates all wiki links.
+Web clippings often arrive with special characters (•, ★, ?, smart quotes, em dashes) that are incompatible with Windows. The Clean Filenames command cleans every filename in the Clippings folder at once: Cmd+P → "QuickAdd: Clean Filenames", or its sidebar icon. It replaces special characters with safe equivalents, saves the original name as a `title` property in frontmatter, and Obsidian auto-updates all wiki links.
 
 ---
 
@@ -703,7 +604,7 @@ The Obsidian Web Clipper is an official browser extension for saving web content
 1. Browse articles in Chrome (or Safari on iPad) where you're logged into paywalled sites (WSJ, NYT, etc.).
 2. Click the Web Clipper icon to save the article as markdown directly into your vault.
 3. Obsidian Sync pushes the clipped file to all your devices.
-4. Run the "Clean Filenames" Templater action (Cmd+P → "Templater: Insert Templates/Clean Filenames") to sanitize any special characters in filenames for Windows compatibility.
+4. Run the Clean Filenames command (Cmd+P → "QuickAdd: Clean Filenames") to sanitize any special characters in filenames for Windows compatibility.
 5. Tag the clipped article and move to the appropriate folder (e.g., Knowledge).
 
 ### 10.4 Auto-Apply Templates
@@ -723,11 +624,11 @@ The Web Clipper supports rules to automatically apply different templates based 
 
 **QuickAdd files going to wrong folder:** Check data.json: the "folders" array must contain the target folder name (e.g., `["Meetings"]`). An empty array `[]` causes files to go to the vault root.
 
-**Templater code showing as raw text:** When using QuickAdd, "Trigger on File Creation" must be enabled in Templater settings (Settings → Templater → Trigger Templater on new file creation). Do not use "Insert Template" from the command palette for QuickAdd templates — use the QuickAdd command itself.
+**`<%` code showing in a new note:** a template still written for Templater, which the template no longer uses (Section 3.2). Rewrite it in QuickAdd syntax (`{{DATE:...}}`, `{{VALUE:...}}`), or move its logic into a QuickAdd user script.
 
-**Templater hotkeys not saving:** Templater's built-in Template Hotkeys section has a bug where assignments don't persist. Workaround: assign hotkeys through Obsidian's native Settings → Hotkeys, searching for the Templater command name.
+**A QuickAdd command missing from the hotkey list:** enable it as a command first (the lightning bolt icon in QuickAdd settings).
 
-**Image embeds leaking into meeting people lists:** Group files with photo thumbnails (`![[photo.png|40]]`) caused image references to appear in meeting note people properties. Fixed by adding a regex filter in the Meeting Template that excludes links matching image file extensions.
+**Image embeds leaking into meeting people lists:** Group files with photo thumbnails (`![[photo.png|40]]`) caused image references to appear in meeting note people properties. `new_meeting.js` filters out links to image files and `.base` embeds.
 
 **Tags autocomplete replacing typed value:** When typing a new tag in the Properties editor, Obsidian's autocomplete may replace your input. Press Escape to dismiss the suggestion, then Enter or click away to confirm your typed value.
 
@@ -745,14 +646,13 @@ When setting up a new vault from scratch, install and configure plugins in this 
 
 1. Download and open the Kepano starter template.
 2. Enable core plugins: Tags View, Word Count, Daily Notes, Bases, Sync (if applicable).
-3. Install community plugins: Templater, QuickAdd, Dataview, Tasks, Commander, Omnisearch, Recent Files, Paste Image Rename, Sort and Permute Lines, Tag Wrangler, Excalidraw.
-4. Configure Templater: set templates folder to /Templates, enable "Trigger on File Creation," enable folder templates.
-5. Create custom templates: Meeting Template, Note Template, People Template (copy from this document or vault backup).
-6. Configure QuickAdd: create New Meeting, New Note, and New Person commands with correct template paths, folders, and file name formats. Enable each as a command (lightning bolt icon).
-7. Configure Commander: add sidebar icons for each QuickAdd command.
-8. Create Meetings.base in Templates/Bases/ with Person, Meetings, and Type views.
-9. Create task query files: Actions/To-Do.md (not done) and Z_archive/Completed Tasks.md (done).
-10. Create placeholder-person.png in Z_attachments (40x40 transparent PNG).
-11. Install the Obsidian Web Clipper browser extension for Chrome, Firefox, or Safari (see Section 10).
-12. Import contacts and configure groups as needed.
-13. Create Topic files in Topics folder with Dataview queries for each tag aggregation.
+3. Install community plugins: QuickAdd, Dataview, Tasks, Commander, Omnisearch, Recent Files, Paste Image Rename, Sort and Permute Lines, Tag Wrangler, Excalidraw.
+4. Copy the templates (Meeting, Note, Software Note, People) into Templates/ and the QuickAdd user scripts into Templates/QuickAdd/.
+5. Configure QuickAdd as in Section 3.1: the New Meeting, Move to Knowledge and Clean Filenames macros (each runs its user script), the New Note, New Software Note and New Person templates, and the Insert People Template capture. Enable each as a command (lightning bolt icon).
+6. Configure Commander: add sidebar icons for each QuickAdd command.
+7. Create Meetings.base in Templates/Bases/ with Person, Meetings, and Type views.
+8. Create task query files: Actions/To-Do.md (not done) and Z_archive/Completed Tasks.md (done).
+9. Create placeholder-person.png in Z_attachments (40x40 transparent PNG).
+10. Install the Obsidian Web Clipper browser extension for Chrome, Firefox, or Safari (see Section 10).
+11. Import contacts and configure groups as needed.
+12. Create Topic files in Topics folder with Dataview queries for each tag aggregation.

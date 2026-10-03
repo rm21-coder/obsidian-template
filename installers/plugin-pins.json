@@ -202,29 +202,6 @@
     }
   },
   {
-    "id": "templater-obsidian",
-    "repo": "silentvoid13/Templater",
-    "kind": "release",
-    "ref": "2.25.0",
-    "files": {
-      "manifest.json": {
-        "url": "https://github.com/silentvoid13/Templater/releases/download/2.25.0/manifest.json",
-        "sha256": "75985188fac8b518eebb791370a24dae1a2476cce3912de4709778dbde0171e4",
-        "bytes": 756
-      },
-      "main.js": {
-        "url": "https://github.com/silentvoid13/Templater/releases/download/2.25.0/main.js",
-        "sha256": "6a29790e8ad3bb3de5bcc7381588f20093b2dbecc1ff27d8a5d7ed3fcebbdf4e",
-        "bytes": 453404
-      },
-      "styles.css": {
-        "url": "https://github.com/silentvoid13/Templater/releases/download/2.25.0/styles.css",
-        "sha256": "eb94063be602679f397e3e35fcb7f6a4b027da82e17c213bb44a267c6b45d8de",
-        "bytes": 4089
-      }
-    }
-  },
-  {
     "id": "tag-wrangler",
     "repo": "pjeby/tag-wrangler",
     "kind": "release",

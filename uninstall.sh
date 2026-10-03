@@ -20,7 +20,7 @@
 #   --newsyslog   remove /etc/newsyslog.d/obsidian-security.conf (sudo)
 #   --plugins     remove the DOWNLOADED plugin files named in
 #                 installers/plugin-pins.json. Each plugin's data.json - your
-#                 ribbon, QuickAdd and Templater settings - is kept, and so is
+#                 ribbon and QuickAdd settings - is kept, and so is
 #                 its folder. A reinstall does not restore data.json, so it is
 #                 never removed here.
 #   --demo        remove the synthetic demo dataset (see below)
@@ -330,7 +330,7 @@ fi
 # ---- 8. Community plugins (opt-in: --plugins) ------------------------------
 # Removes the DOWNLOADED artifacts named in installers/plugin-pins.json, never
 # the plugins tree. Each plugin folder also holds data.json - the settings that
-# drive ribbon icons, QuickAdd choices, Templater config - which is user
+# drive ribbon icons, QuickAdd choices - which is user
 # content and is NOT restored by a reinstall: 30-plugins.sh fetches only
 # manifest.json / main.js / styles.css. The Windows twin of this step deleted
 # the tree wholesale and destroyed 464 lines of tracked configuration in a

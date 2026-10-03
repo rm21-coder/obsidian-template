@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 30-plugins.sh - install the 13 community plugins from PINNED releases.
+# 30-plugins.sh - install the 12 community plugins from PINNED releases.
 #
 # Every plugin comes from installers/plugin-pins.json: exact release tag,
 # exact URL, SHA256 verified before install (see installers/lib/plugins.sh).

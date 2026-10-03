@@ -31,6 +31,53 @@
       "setFileExistsBehavior": false
     },
     {
+      "id": "f6a7b8c9-0123-45f0-1234-6789012345f0",
+      "name": "Insert People Template",
+      "type": "Capture",
+      "command": true,
+      "appendLink": false,
+      "captureTo": "",
+      "captureToActiveFile": true,
+      "captureToCanvasNodeId": "",
+      "activeFileWritePosition": "top",
+      "createFileIfItDoesntExist": {
+        "enabled": false,
+        "createWithTemplate": false,
+        "template": ""
+      },
+      "format": {
+        "enabled": true,
+        "format": "{{TEMPLATE:Templates/People Template.md}}"
+      },
+      "insertAfter": {
+        "enabled": false,
+        "after": "",
+        "insertAtEnd": false,
+        "considerSubsections": false,
+        "createIfNotFound": false,
+        "createIfNotFoundLocation": "top",
+        "inline": false,
+        "replaceExisting": false,
+        "blankLineAfterMatchMode": "auto"
+      },
+      "newLineCapture": {
+        "enabled": false,
+        "direction": "below"
+      },
+      "prepend": false,
+      "task": false,
+      "openFile": false,
+      "fileOpening": {
+        "location": "tab",
+        "direction": "vertical",
+        "mode": "default",
+        "focus": true
+      },
+      "templater": {
+        "afterCapture": "none"
+      }
+    },
+    {
       "id": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
       "name": "New Note",
       "type": "Template",
@@ -61,11 +108,11 @@
       "setFileExistsBehavior": false
     },
     {
-      "id": "865f5ed1-38ae-42d0-9ed1-d4a5ce39e610",
-      "name": "New Meeting",
+      "id": "c3d4e5f6-7890-12cd-ef01-3456789012cd",
+      "name": "New Software Note",
       "type": "Template",
       "command": true,
-      "templatePath": "Templates/Meeting Template.md",
+      "templatePath": "Templates/Software Note Template.md",
       "fileNameFormat": {
         "enabled": true,
         "format": "{{DATE:YYYY-MM-DD HHmm}}"
@@ -73,7 +120,7 @@
       "folder": {
         "enabled": true,
         "folders": [
-          "Meetings"
+          "Creations"
         ],
         "chooseWhenCreatingNote": false,
         "createInSameFolderAsActiveFile": false,
@@ -89,6 +136,101 @@
       },
       "fileExistsMode": "Increment the file name",
       "setFileExistsBehavior": false
+    },
+    {
+      "id": "865f5ed1-38ae-42d0-9ed1-d4a5ce39e610",
+      "name": "New Meeting",
+      "type": "Macro",
+      "command": true,
+      "runOnStartup": false,
+      "macro": {
+        "name": "New Meeting",
+        "id": "2f6c1d4e-8a90-4b1c-9d2e-3f4a5b6c7d81",
+        "commands": [
+          {
+            "name": "new_meeting",
+            "type": "UserScript",
+            "id": "3a7d2e5f-9b01-4c2d-8e3f-4a5b6c7d8e92",
+            "path": "Templates/QuickAdd/new_meeting.js",
+            "settings": {}
+          },
+          {
+            "name": "Meeting note",
+            "type": "NestedChoice",
+            "id": "4b8e3f60-ac12-4d3e-9f40-5b6c7d8e9fa3",
+            "choice": {
+              "id": "5c9f4071-bd23-4e4f-a051-6c7d8e9fab04",
+              "name": "Meeting note",
+              "type": "Template",
+              "command": false,
+              "templatePath": "Templates/Meeting Template.md",
+              "fileNameFormat": {
+                "enabled": true,
+                "format": "{{DATE:YYYY-MM-DD HHmm}}"
+              },
+              "folder": {
+                "enabled": true,
+                "folders": [
+                  "Meetings"
+                ],
+                "chooseWhenCreatingNote": false,
+                "createInSameFolderAsActiveFile": false,
+                "chooseFromSubfolders": false
+              },
+              "appendLink": false,
+              "openFile": true,
+              "fileOpening": {
+                "location": "tab",
+                "direction": "vertical",
+                "mode": "default",
+                "focus": true
+              },
+              "fileExistsMode": "Increment the file name",
+              "setFileExistsBehavior": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "d4e5f6a7-8901-23de-f012-4567890123de",
+      "name": "Move to Knowledge",
+      "type": "Macro",
+      "command": true,
+      "runOnStartup": false,
+      "macro": {
+        "name": "Move to Knowledge",
+        "id": "6da05182-ce34-4f50-b162-7d8e9fab0c15",
+        "commands": [
+          {
+            "name": "move_to_knowledge",
+            "type": "UserScript",
+            "id": "7eb16293-df45-4061-8273-8e9fab0c1d26",
+            "path": "Templates/QuickAdd/move_to_knowledge.js",
+            "settings": {}
+          }
+        ]
+      }
+    },
+    {
+      "id": "e5f6a7b8-9012-34ef-0123-5678901234ef",
+      "name": "Clean Filenames",
+      "type": "Macro",
+      "command": true,
+      "runOnStartup": false,
+      "macro": {
+        "name": "Clean Filenames",
+        "id": "8fc273a4-e056-4172-9384-9fab0c1d2e37",
+        "commands": [
+          {
+            "name": "clean_filenames",
+            "type": "UserScript",
+            "id": "90d384b5-f167-4283-a495-ab0c1d2e3f48",
+            "path": "Templates/QuickAdd/clean_filenames.js",
+            "settings": {}
+          }
+        ]
+      }
     }
   ],
   "inputPrompt": "single-line",
@@ -97,7 +239,7 @@
   "devMode": false,
   "templateFolderPath": "",
   "announceUpdates": "major",
-  "version": "2.12.0",
+  "version": "2.22.0",
   "globalVariables": {},
   "onePageInputEnabled": false,
   "disableOnlineFeatures": true,

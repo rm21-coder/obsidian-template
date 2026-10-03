@@ -30,7 +30,7 @@ def _after_pull() -> str:
 def test_it_refuses_to_pull_over_local_changes_to_tracked_files() -> None:
     first = _first_pass()
     check = first.index("git -C $vault status --porcelain --untracked-files=no")
-    refuse = first.index("exit 1")
+    refuse = first.index("exit 1", check)
     pull = first.index("git -C $vault pull --ff-only")
     assert check < refuse < pull
 

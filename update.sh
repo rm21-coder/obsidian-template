@@ -80,6 +80,17 @@ main() {
     # ---- 1. pull ------------------------------------------------------------
     if [[ "$AFTER_PULL" -eq 0 ]]; then
         info "== 1/6 pull =="
+        if obsidian_running; then
+            if [[ "$DRY_RUN" -eq 1 ]]; then
+                warn "  Obsidian is running; a real update would stop here until you quit it."
+            else
+                err "Obsidian is running; not updating."
+                err "Quit Obsidian (Cmd+Q), then run this update again. While it is open it keeps"
+                err "the old plugins loaded and writes its own copy of the settings back over the"
+                err "updated ones."
+                return 1
+            fi
+        fi
         local dirty
         dirty="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
         if [[ -n "$dirty" ]]; then
@@ -188,6 +199,7 @@ main() {
     else
         ok "  pins unchanged; plugins left as they are"
     fi
+    retire_plugins "$VAULT" "${backup:-$HOME/Library/Logs/obsidian-template-update/$(date +%Y%m%d-%H%M%S)}" "$DRY_RUN"
 
     # ---- 5. script permissions ----------------------------------------------
     info "== 5/6 script permissions =="
@@ -233,7 +245,10 @@ report_control() {
             warn "      findings:  /usr/bin/python3 $path --json"
             warn "      the diff:  git -C ~/Obsidian diff --name-status $from $to"
             warn "    Script and plist findings must be files this update changed or jobs it"
-            warn "    reloaded; a state_dir or BULK_DELETE finding is NOT the update. Then:"
+            warn "    reloaded; a state_dir or BULK_DELETE finding is NOT the update. Plugin"
+            warn "    findings must be plugins or settings files this update touched (the diff"
+            warn "    under .obsidian/ and Templates/): a REMOVED plugin it retired, or QuickAdd"
+            warn "    choices and the Templates/QuickAdd scripts it changed. Then:"
             warn "      /usr/bin/python3 $path --update"
             ;;
     esac

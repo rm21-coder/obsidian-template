@@ -47,7 +47,7 @@ then call scripts directly, e.g. `.\Templates\Scripts\windows\install.ps1`.)
 - Link `%USERPROFILE%\Obsidian` to wherever you cloned the repo, via a
   directory junction (see [Architecture](#architecture) below)
 - Create a secrets stub at `%USERPROFILE%\dev\secrets\.env`
-- Fetch the 13 community plugins from their GitHub releases into
+- Fetch the 12 community plugins from their GitHub releases into
   `.obsidian\plugins\`
 - Patch QuickAdd's folder-picker fall-through and apply the canonical ribbon
   icon order

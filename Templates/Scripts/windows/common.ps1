@@ -200,6 +200,30 @@ function Unregister-DashboardActions {
     }
 }
 
+# Community plugins the template once shipped and has since retired; update.ps1
+# removes them (Remove-RetiredPlugins). The enabled list arrives with the pull;
+# the plugin's own files -- fetched by the installer, never tracked -- are moved
+# out of the vault so no dormant plugin code stays behind. Names only ever get
+# added here, and must match RETIRED_PLUGINS in installers/lib/update.sh.
+#   templater-obsidian   Templater, retired 2026-10-03
+$RetiredPlugins = @('templater-obsidian')
+
+function Remove-RetiredPlugins {
+    param([Parameter(Mandatory)][string]$Vault)
+    $backup = Join-Path $env:LOCALAPPDATA ("obsidian-template-update\" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '\plugins')
+    foreach ($id in $RetiredPlugins) {
+        $dir = Join-Path $Vault ".obsidian\plugins\$id"
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        try {
+            New-Item -ItemType Directory -Force -Path $backup -ErrorAction Stop | Out-Null
+            Move-Item -LiteralPath $dir -Destination (Join-Path $backup $id) -ErrorAction Stop
+            Write-Host "  $id`: retired upstream; removed (old copy in $backup)"
+        } catch {
+            Write-Warning "  $id`: retired upstream, but could not move $dir aside: $_"
+        }
+    }
+}
+
 function Get-SecretsFile {
     return (Join-Path $env:USERPROFILE 'dev\secrets\.env')
 }

@@ -18,7 +18,6 @@
     "zk-prefixer:Create new unique note": false,
     "bases:Create new base": false,
     "obsidian-excalidraw-plugin:New drawing": false,
-    "quickadd:QuickAdd": false,
-    "templater-obsidian:Templater": false
+    "quickadd:QuickAdd": false
   }
 }
