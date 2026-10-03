@@ -354,7 +354,36 @@ def test_a_plugin_reinstall_always_patches_and_retires_and_a_failure_ends_incomp
     if plugins_fail:
         assert r.returncode == 1, out
         assert "Plugins NOT updated" in out and "Update INCOMPLETE" in out
+        assert "brought back to their pins" not in out
         assert f"Already at {head}" not in out
     else:
         assert r.returncode == 0, out
         assert "Update INCOMPLETE" not in out and f"Already at {head}" in out
+
+
+@macos_only
+def test_the_quickadd_patch_runs_on_every_update(scratch, tmp_path, allow_subprocess):
+    """QuickAdd's patched main.js is exempt from the drift check, so a patch
+    that failed once would never be retried if it ran only with a reinstall
+    (review round 2, 2026-10-03). It is idempotent; it runs every time."""
+    home, vault, la, env = scratch
+    calls = tmp_path / "calls.log"
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    (stubs / "launchctl").write_text(f'#!/bin/sh\necho "launchctl $*" >> "{calls}"\n')
+    (stubs / "launchctl").chmod(0o755)
+    venv_py = vault / "Templates" / "Scripts" / ".venv" / "bin" / "python3"
+    venv_py.unlink()
+    venv_py.write_text('#!/bin/sh\nif [ "$1" = "-c" ]; then echo "arm64 13 gil"; exit 0; fi\n')
+    venv_py.chmod(0o755)
+    (vault / "install.sh").write_text(f'#!/bin/bash\necho "install.sh $*" >> "{calls}"\nexit 0\n')
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=vault,
+                          capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--after-pull", "--from", head],
+                       capture_output=True, text=True, env={**env, "PATH": f"{stubs}:{env['PATH']}"})
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert "every plugin is at its pin" in out
+    log = [ln for ln in calls.read_text().splitlines() if ln.startswith("install.sh")]
+    assert log == ["install.sh --auto --only 31-quickadd-patch",
+                   "install.sh --auto --only 56-script-permissions"], log

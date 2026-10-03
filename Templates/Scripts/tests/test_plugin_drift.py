@@ -133,8 +133,11 @@ def test_windows_update_reinstalls_plugins_after_requirements_and_before_tasks()
     reason = rest.index("Get-PluginReinstallReason -Vault $vault -From $From -VenvPython $venvPy")
     install = rest.index("& (Join-Path $PSScriptRoot 'Install-Plugins.ps1')")
     patch = rest.index("Invoke-QuickAddPatch -Vault $vault -Python @($venvPy)")
-    # The patch runs after the try/catch, so a plugin failure cannot skip it.
-    assert rest.index("$pluginFailure = \"$_\"", install) < patch
+    # The patch runs outside the reinstall block, on every update, so neither a
+    # plugin failure nor an earlier failed patch can leave QuickAdd unpatched.
+    block_end = rest.index("report any whose vetted version differs")
+    assert rest.index("$pluginFailure = \"$_\"", install) < block_end < patch
+    assert rest[rest.rindex("\n", 0, patch) + 1:patch] == "", "the patch call is indented inside a block"
     tasks = rest.index("Write-Host '== 3/3 scheduled tasks =='")
     assert req < reason < install < patch < tasks
 
@@ -156,7 +159,14 @@ def test_a_plugin_failure_does_not_pass_as_a_clean_update() -> None:
     body = body[:body.index("\n}\n")]
     # stderr from the helper must not become a terminating error under Stop
     assert body.index("$ErrorActionPreference = 'Continue'") < body.index("& $exe @rest $qaHelp $qa")
-    tail = rest[rest.index("if ($pluginFailure) {"):]
+    # A tasks failure exits first; its banner must still mention the plugins.
+    tasks_fail = rest[rest.index("Update INCOMPLETE: the code and requirements"):]
+    assert tasks_fail.index("if ($pluginFailure) {") < tasks_fail.index("exit 1")
+    # No "brought back" or "vet" advice after a failure.
+    advice = rest[rest.index("if ($pluginReason) {"):rest.index("Invoke-QuickAddPatch -Vault $vault")]
+    assert "if (-not $pluginFailure -and $pluginReason -eq 'the plugin pins changed')" in advice
+    assert "} elseif (-not $pluginFailure) {" in advice
+    tail = rest[rest.index("if ($pluginFailure) {\n    Write-Host 'Update INCOMPLETE: everything else"):]
     assert tail.index("Update INCOMPLETE") < tail.index("exit 1") < tail.index("Updated $From -> $to.")
 
 

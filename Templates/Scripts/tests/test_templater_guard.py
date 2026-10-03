@@ -126,7 +126,9 @@ PLUGIN_LANGS = ("tasks", "dataview", "dataviewjs", "meta-bind", "meta-bind-butto
                 "meta-bind-embed", "meta-bind-js-view", "mdm", "excalidraw-script-install",
                 "base")
 PLUGIN_PREFIXES = ("tasks", "dataview", "meta-bind", "mdm", "excalidraw", "base")
-JS_WS = "\u00a0\u2003\u3000\ufeff\u2028"   # JS trim() drops these; U+200B it keeps
+# Everything JS trim() drops beyond space and tab; U+200B it keeps.
+JS_WS = ("\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007"
+         "\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff")
 
 
 def plugin_fences(text: str) -> list[str]:
@@ -154,14 +156,27 @@ def plugin_fences(text: str) -> list[str]:
 
 
 def block_queries(text: str) -> list[str]:
-    """Code-block text Dataview would run as an `=` query (its default
-    inlineQueriesInCodeblocks): any line, after quote markers and indentation,
-    starting with "=" or "$=", unless it is a setext underline."""
+    """Code-block text Dataview would run as a query (its default
+    inlineQueriesInCodeblocks): the block's text, JS-trimmed, starting with "="
+    or "$=" -- Dataview reads the whole block, not one line. A block is taken
+    to start after any line holding a fence, and after a blank line followed
+    by an indented line; container prefixes ("> ") are dropped."""
+    lines = text.split("\n")
     out = []
-    for line in text.splitlines():
-        body = re.sub(r"^[ \t>" + JS_WS + "]*", "", line)
-        if body.startswith("$=") or (body.startswith("=") and not re.fullmatch(r"=+[ \t]*", body)):
-            out.append(line)
+    for i, line in enumerate(lines):
+        opener = re.search(r"```|~~~", line)
+        indented = (i > 0 and not lines[i - 1].strip(" \t>" + JS_WS)
+                    and re.match(r"[> ]*(?: {4}|\t)", line))
+        if opener:
+            body = lines[i + 1:]
+        elif indented:
+            body = lines[i:]
+        else:
+            continue
+        block = "\n".join(re.sub(r"^[ \t>]*", "", b) for b in body)
+        block = block.strip(" \t" + JS_WS)
+        if block.startswith(("=", "$=")) and block[1:].strip(" \t" + JS_WS):
+            out.append(block[:30])
     return out
 
 
@@ -213,7 +228,11 @@ def test_escaped_language_names_are_caught(raw: str) -> None:
 @pytest.mark.parametrize("raw", [
     "```text\n= this.file.name\n```", "~~~\n= [[Secret]].field\n~~~",
     "para\n\n    = this.file.name\n", "```\n\n  $= dv.pages()\n```",
-    "> ```\n> = x\n> ```", "- ```\n  = x\n  ```", "\t\ufeff= x", "<pre><code>\n= x",
+    "> ```\n> = x\n> ```", "- ```\n  = x\n  ```", "```\n\t\ufeff= x",
+    "```text\n\u2003= x\n```", "```text\n\u3000= x\n```", "```text\n\v= x\n```",
+    "```text\n\f= x\n```", "```text\n\u2028= x\n```",
+    "```text\n=\nthis.file.name\n```", "para\n\n    =\n    this.file.name\n",
+    "```text\n=\n\n1 + 1\n```", "> ```\n> =\n> x",
 ])
 def test_no_dataview_query_survives_inside_a_code_block(raw: str) -> None:
     assert block_queries(raw), f"case does not reach the oracle: {raw!r}"
@@ -225,6 +244,19 @@ def test_no_dataview_query_survives_inside_a_code_block(raw: str) -> None:
 def test_setext_headings_and_ordinary_equals_are_left_alone() -> None:
     for text in ("Title\n=====\n", "Title\n=\n", "a == b", "x = 1", "a\n  b = c"):
         assert G.neutralize(text) == text, text
+
+
+@pytest.mark.parametrize("raw", ['"excalidraw\\u002dplugin": parsed', '"e\\x78calidraw-plugin": parsed',
+                                 '"excalidraw\\x2donload-script": x', '- "a\\tb": 1'])
+def test_escaped_yaml_keys_are_defused(raw: str) -> None:
+    """YAML double-quoted keys decode escapes, so a key can spell
+    excalidraw-plugin without the text "excalidraw-plugin"."""
+    import yaml
+    out = G.neutralize("---\n" + raw + "\n---\n")
+    keys = yaml.safe_load(out.split("---\n")[1])
+    keys = keys[0] if isinstance(keys, list) else keys
+    assert not any(str(k).startswith("excalidraw-") or k == "a\tb" for k in keys), keys
+    assert G.is_neutral(out)
 
 
 def test_excalidraw_drawing_keys_are_defused() -> None:

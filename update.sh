@@ -207,9 +207,7 @@ main() {
             if ! "$REPO_ROOT/install.sh" --auto --only 30-plugins; then
                 plugins_failed=1
                 err "  Plugins NOT updated (see the lines above)."
-            fi
-            "$REPO_ROOT/install.sh" --auto --only 31-quickadd-patch || warn "  QuickAdd patch step failed"
-            if [[ "$plugin_reason" == "the plugin pins changed" ]]; then
+            elif [[ "$plugin_reason" == "the plugin pins changed" ]]; then
                 warn "  The plugin integrity check will now report the new plugin files. Vet what"
                 warn "  changed (git diff $FROM $TO -- installers/plugin-pins.json) before adopting it."
             else
@@ -219,6 +217,12 @@ main() {
         fi
     else
         ok "  every plugin is at its pin; left as it is"
+    fi
+    # The QuickAdd patch, on every update: it is idempotent, a reinstall brings
+    # back the unpatched bundle, and QuickAdd's patched main.js is exempt from
+    # the drift check -- so a patch that failed once is retried here.
+    if [[ "$DRY_RUN" -ne 1 ]]; then
+        "$REPO_ROOT/install.sh" --auto --only 31-quickadd-patch || warn "  QuickAdd patch step failed"
     fi
     retire_plugins "$VAULT" "${backup:-$HOME/Library/Logs/obsidian-template-update/$(date +%Y%m%d-%H%M%S)}" "$DRY_RUN"
 
@@ -242,6 +246,7 @@ main() {
         err "Update INCOMPLETE: everything else is updated, but the plugins are not (see"
         err "\"Plugins NOT updated\" above). A hash mismatch means upstream changed a file under"
         err "its pin: do not work around it. A download failure is safe to retry: run ./update.sh again."
+        err "Don't adopt a new plugin baseline until an update completes."
         return 1
     fi
     if [[ "$DRY_RUN" -eq 1 ]]; then

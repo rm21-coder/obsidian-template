@@ -92,14 +92,34 @@ _TRIM = " \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006" \
 _CLASS_SPLIT = re.compile(r"[\n\r\f]")
 _INLINE = re.compile(r"(`+)(?=[\s\ufeff]*(?:\$?=|(?:INPUT|VIEW|BUTTON)\[))", re.I)
 # Dataview also runs `=` queries found inside code blocks (its default), on the
-# block's trimmed text. A line that starts, after quote markers and indentation,
-# with "=" or "$=" gets the space -- except a line of nothing but "=", which is
-# a setext heading underline (a query of "=" or "==" does nothing).
-_BLOCK_QUERY = re.compile(r"(?m)^([ \t>\ufeff]*)(?=\$=|=(?!=*[ \t]*$))")
+# block's text after JS trim(). A line that starts, after quote markers and
+# anything trim() removes, with "=" or "$=" gets the space. The one exception
+# is a heading underline: a line of only "=" under a line of text that is not
+# a fence -- inside a code block a bare "=" line can start a query that
+# continues on the next line, and a code block cannot follow text directly.
+_JS_SPACE = "\t\v\f    -     　﻿"
+_BLOCK_QUERY = re.compile(rf"(?m)^([>{_JS_SPACE}]*)(?=\$?=)")
+_SETEXT = re.compile(r"=+[ \t]*")
+_FENCE_LINE = re.compile(r"`{3,}|~{3,}")
 _HTML_CODE = re.compile(r"<(?=code(?![\w-]))", re.I)
 # Excalidraw opens a note as a drawing, and offers to run its onload script,
-# from these frontmatter keys.
-_EXCALIDRAW_KEY = re.compile(r"(excalidraw)(?=-(?:plugin|onload-script))", re.I)
+# from frontmatter keys starting "excalidraw-". A YAML double-quoted key can
+# spell them with escapes ("excalidraw-plugin"), so any double-quoted key
+# holding a backslash is defused too.
+_EXCALIDRAW_KEY = re.compile(r"(excalidraw)(?=-|\\)", re.I)
+_ESCAPED_KEY = re.compile(r'(?m)^([ \t-]*")(?!\u200b)(?=[^"\n]*\\[^"\n]*"[ \t]*:)')
+
+
+def _block_query(m: re.Match) -> str:
+    text = m.string
+    line_end = text.find("\n", m.start())
+    line = text[m.end():len(text) if line_end < 0 else line_end].rstrip("\r")
+    if _SETEXT.fullmatch(line) and m.start() > 0:
+        prev_end = m.start() - 1
+        prev = text[text.rfind("\n", 0, prev_end) + 1:prev_end].rstrip("\r")
+        if prev.strip(_TRIM + ">") and not _FENCE_LINE.search(prev):
+            return m.group(0)
+    return m.group(1) + ZWSP
 
 
 def _decoded(info: str) -> str:
@@ -131,8 +151,9 @@ def neutralize(text: str) -> str:
     text = _OPENER.sub(lambda m: m.group(1) + ZWSP + m.group(2), text)
     text = _FENCE.sub(_fence, text)
     text = _INLINE.sub(lambda m: m.group(1) + ZWSP, text)
-    text = _BLOCK_QUERY.sub(lambda m: m.group(1) + ZWSP, text)
+    text = _BLOCK_QUERY.sub(_block_query, text)
     text = _EXCALIDRAW_KEY.sub(lambda m: m.group(1) + ZWSP, text)
+    text = _ESCAPED_KEY.sub(lambda m: m.group(1) + ZWSP, text)
     return _HTML_CODE.sub("<" + ZWSP, text)
 
 

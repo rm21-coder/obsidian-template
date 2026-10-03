@@ -102,17 +102,21 @@ if ($pluginReason) {
         $pluginFailure = "$_"
         Write-Host "  Plugins NOT updated: $pluginFailure" -ForegroundColor Red
     }
-    # Even after a failure: Install-Plugins replaces every plugin it can before
-    # it throws, QuickAdd included, and a reinstalled QuickAdd is unpatched.
-    Invoke-QuickAddPatch -Vault $vault -Python @($venvPy)
-    if ($pluginReason -eq 'the plugin pins changed') {
+    # After a failure there is nothing to vet yet; the update ends INCOMPLETE.
+    if (-not $pluginFailure -and $pluginReason -eq 'the plugin pins changed') {
         Write-Host '  The plugin integrity check will now report the new plugin files. Vet what' -ForegroundColor Yellow
         Write-Host "  changed (git -C `"$vault`" diff $From HEAD -- installers/plugin-pins.json) before adopting it." -ForegroundColor Yellow
-    } else {
+    } elseif (-not $pluginFailure) {
         Write-Host '  The plugins were brought back to their pins. The plugin integrity check will' -ForegroundColor Yellow
         Write-Host '  report any whose vetted version differs; vet those before adopting.' -ForegroundColor Yellow
     }
 }
+
+# The QuickAdd patch, on every update: it is idempotent, a reinstall (even a
+# failed one: Install-Plugins replaces every plugin it can before it throws)
+# brings back the unpatched bundle, and QuickAdd's patched main.js is exempt
+# from the drift check -- so a patch that failed once is retried here.
+Invoke-QuickAddPatch -Vault $vault -Python @($venvPy)
 
 # Plugins the template has retired: disabled by the pull, removed here --
 # before the task step, whose failure ends this script.
@@ -126,6 +130,9 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host 'Update INCOMPLETE: the code and requirements are updated, but some tasks still' -ForegroundColor Red
     Write-Host 'run their old definition (see FAILED above). Re-run this update from an elevated' -ForegroundColor Red
     Write-Host 'PowerShell; it is safe to repeat.' -ForegroundColor Red
+    if ($pluginFailure) {
+        Write-Host 'The plugins were not updated either (see "Plugins NOT updated" above).' -ForegroundColor Red
+    }
     exit 1
 }
 
@@ -171,6 +178,7 @@ if ($pluginFailure) {
     Write-Host 'Update INCOMPLETE: everything else is updated, but the plugins are not (see' -ForegroundColor Red
     Write-Host '"Plugins NOT updated" above). A hash mismatch means upstream changed a file under' -ForegroundColor Red
     Write-Host 'its pin: do not work around it. A download failure is safe to retry: run the update again.' -ForegroundColor Red
+    Write-Host "Don't adopt a new plugin baseline until an update completes." -ForegroundColor Red
     exit 1
 }
 if ($From -eq $to) {
