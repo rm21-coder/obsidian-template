@@ -63,6 +63,13 @@ case "$action" in
     ;;
 
   refresh-rag)
+    # Only where the optional local-LLM RAG layer is set up (rag_status.py).
+    # The dashboard draws no RAG button elsewhere, so this is a typed or
+    # forged link.
+    if ! "$PY" rag_status.py >> "$LOG" 2>&1; then
+      echo "dashboard_actions.sh: refresh-rag refused: RAG is not set up on this machine" >&2
+      exit 3
+    fi
     # Backgrounded: a full vault re-index takes minutes on a big vault.
     nohup "$VENV_PY" -u obsidian-rag-sync.py >> "$LOG" 2>&1 &
     ;;

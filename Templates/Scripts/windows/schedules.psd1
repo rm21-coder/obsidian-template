@@ -48,7 +48,10 @@
         # on a machine that was off; skip-if-fresh keeps that catch-up cheap.
         @{ Name='meeting-pull';         Script='meeting_pull.py';       Args=@('--skip-if-fresh'); Trigger=@{ Type='Weekly'; At='05:00'; DaysOfWeek=@('Monday','Tuesday','Wednesday','Thursday','Friday') }; Enabled=$false }
         @{ Name='group-photos';         Script='run_group_photos.py';   Args=@();            Trigger=@{ Type='Daily';  At='02:00' };        Enabled=$true }
-        @{ Name='rag-sync';             Script='obsidian-rag-sync.py';  Args=@();            Trigger=@{ Type='Daily';  At='03:00' };        Enabled=$true }
+        # Only where the optional local-LLM RAG layer is set up (rag_status.py:
+        # OBSIDIAN_COLLECTION_ID configured). Elsewhere it would fail every
+        # night unseen, so Register-Tasks enables it exactly when RAG is set up.
+        @{ Name='rag-sync';             Script='obsidian-rag-sync.py';  Args=@();            Trigger=@{ Type='Daily';  At='03:00' };        Enabled=$true; RequiresRag=$true }
         @{ Name='security-plugin-check';Script='plugin_integrity_check.py'; Args=@();        Trigger=@{ Type='Daily';  At='06:30' };        Enabled=$true }
         @{ Name='security-integrity';   Script='integrity_monitor.py';  Args=@();            Trigger=@{ Type='Daily';  At='06:35' };        Enabled=$true }
         @{ Name='morning-dashboard';    Script='morning_dashboard.py';  Args=@();            Trigger=@{ Type='Weekly'; At='07:00'; DaysOfWeek=@('Monday','Tuesday','Wednesday','Thursday','Friday') }; Enabled=$true }

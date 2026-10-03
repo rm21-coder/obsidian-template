@@ -63,6 +63,22 @@ function New-TriggerFromSpec($t) {
 # "registered" lines.
 $failed = @()
 
+# Jobs marked RequiresRag run only where the optional local-LLM RAG layer is
+# set up. Asked once, of rag_status.py, through the console python.exe: the
+# windowless pythonw.exe is a GUI program, which PowerShell does not wait for,
+# so its exit code would not be this run's.
+$ragSetUp = $false
+if ($manifest.Jobs | Where-Object { $_.RequiresRag }) {
+    $ragCheck = Join-Path $scriptsDir 'rag_status.py'
+    $console  = Get-VenvPython
+    if ((Test-Path -LiteralPath $ragCheck) -and (Test-Path -LiteralPath $console)) {
+        $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { & $console $ragCheck *> $null; $ragSetUp = ($LASTEXITCODE -eq 0) }
+        catch { $ragSetUp = $false }
+        finally { $ErrorActionPreference = $prevEAP }
+    }
+}
+
 foreach ($job in $manifest.Jobs) {
     if ($Only -and $job.Name -ne $Only) { continue }
 
@@ -88,6 +104,7 @@ foreach ($job in $manifest.Jobs) {
     # it used to re-disable meeting-pull and the other opt-in jobs every time.
     $existing = Get-ScheduledTask -TaskName $taskName -TaskPath "$folder\" -ErrorAction SilentlyContinue
     $enable   = $job.Enabled -or ($existing -and $existing.State -ne 'Disabled')
+    if ($job.RequiresRag) { $enable = $ragSetUp }
 
     if ($PSCmdlet.ShouldProcess("$folder\$taskName", 'Register scheduled task')) {
         # -ErrorAction Stop on each call, not the preference set at the top:
@@ -118,7 +135,9 @@ foreach ($job in $manifest.Jobs) {
             $failed += $taskName
             continue
         }
-        if (-not $enable) {
+        if (-not $enable -and $job.RequiresRag) {
+            Write-Host ("  registered (DISABLED): {0}  (RAG is not set up here; it is enabled once OBSIDIAN_COLLECTION_ID is set)" -f $taskName)
+        } elseif (-not $enable) {
             Write-Host ("  registered (DISABLED): {0}" -f $taskName)
         } elseif (-not $job.Enabled) {
             Write-Host ("  registered (ENABLED):  {0}  (kept: was enabled before this refresh)" -f $taskName)

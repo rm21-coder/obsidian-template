@@ -1698,9 +1698,10 @@ h1 { font-size: 28px; margin: 0; font-weight: 700; letter-spacing: -0.02em;
      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
 .subtitle { color: var(--muted); font-size: 13px; }
 
-/* Action buttons -- obsidian-dashboard://run/<action> links, handled by
-   DashboardActions.app (see build_dashboard_actions_app.sh). A static
-   file:// page can't run local commands from a click any other way. */
+/* Action buttons: links to a custom URL scheme, answered by
+   DashboardActions.app on macOS or windows/dashboard_action.py on Windows
+   (see docs/Dashboard-Actions.md). A static file:// page can't run local
+   commands from a click any other way. */
 .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 22px; }
 .actions a {
   display: inline-flex;
@@ -1909,6 +1910,16 @@ def _windows_dashboard_handler() -> Path | None:
     return handler if same and interpreter.is_file() else None
 
 
+def rag_is_set_up() -> bool:
+    """Whether this machine runs the optional local-LLM RAG layer; see
+    rag_status.py. Never raises: a broken check hides the RAG parts."""
+    try:
+        import rag_status
+        return rag_status.configured()
+    except Exception:
+        return False
+
+
 def dashboard_actions_available() -> bool:
     """True when the obsidian-dashboard:// URL-scheme handler is installed.
 
@@ -1962,7 +1973,8 @@ def render(today: _dt.date,
            usage: list[dict] | None = None,
            cc_usage: dict | None = None,
            show_actions: bool | None = None,
-           classification: dict | None = None) -> str:
+           classification: dict | None = None,
+           rag_enabled: bool | None = None) -> str:
     now = now_local()
     pretty_date = today.strftime("%A, %B %d, %Y")
     tz_label = now.strftime("%Z") or "ET"
@@ -2008,11 +2020,16 @@ def render(today: _dt.date,
     # controls have just detected. See dashboard_actions.sh.
     if show_actions is None:
         show_actions = dashboard_actions_available()
+    # The local-LLM RAG layer is optional and most installs never set it up:
+    # without it, its button and its card would only ever report failure.
+    if rag_enabled is None:
+        rag_enabled = rag_is_set_up()
     if show_actions:
-        parts.append("""<div class="actions">
+        rag_button = ('\n  <a href="obsidian-dashboard://run/refresh-rag">Refresh RAG index</a>'
+                      if rag_enabled else "")
+        parts.append(f"""<div class="actions">
   <a href="obsidian-dashboard://run/pull-meetings">Pull meetings</a>
-  <a href="obsidian-dashboard://run/refresh-dashboard">Refresh dashboard</a>
-  <a href="obsidian-dashboard://run/refresh-rag">Refresh RAG index</a>
+  <a href="obsidian-dashboard://run/refresh-dashboard">Refresh dashboard</a>{rag_button}
 </div>
 """)
     parts.append('<div class="grid">\n')
@@ -2108,8 +2125,10 @@ def render(today: _dt.date,
                 parts.append('      </div>\n')
     parts.append('    </div>\n')
 
-    # ----- RAG sync health sub-section -----
-    if rag is None:
+    # ----- RAG sync health sub-section (only where RAG is set up) -----
+    if not rag_enabled:
+        pass
+    elif rag is None:
         parts.append('    <div class="subsection section-rag">\n')
         parts.append('      <h2>RAG sync</h2>\n')
         parts.append('      <p class="empty">No sync reports found.</p>\n')
@@ -2280,7 +2299,8 @@ def main() -> int:
     todos     = collect_todos()
     meetings  = collect_meetings(today)
     new_today = collect_new_today(today)
-    rag       = collect_rag_sync_status()
+    rag_enabled = rag_is_set_up()
+    rag       = collect_rag_sync_status() if rag_enabled else None
     # Before pipeline health, which uses the verdict: an unreachable gateway
     # is the cause of every LLM-backed job's failure, not a separate finding.
     gateway   = collect_gateway_status()
@@ -2291,7 +2311,7 @@ def main() -> int:
 
     html_text = render(today, todos, meetings, new_today, rag, health,
                        gateway=gateway, usage=usage, cc_usage=cc_usage,
-                       classification=classification)
+                       classification=classification, rag_enabled=rag_enabled)
 
     dated_path  = DASHBOARDS_DIR / f"morning-{today.isoformat()}.html"
     stable_path = DASHBOARDS_DIR / "morning.html"
@@ -2331,7 +2351,9 @@ def main() -> int:
     if classification is not None:
         print(f"  classify:  {classification['pending']} pending review"
               + (" (list is stale)" if classification["stale"] else ""))
-    if rag is not None:
+    if not rag_enabled:
+        print("  rag sync:  not set up on this machine")
+    elif rag is not None:
         print(f"  rag sync:  {rag['status']} (last run {rag['run_dt']:%Y-%m-%d %H:%M}, "
               f"{rag['errors']} errors)")
     else:
