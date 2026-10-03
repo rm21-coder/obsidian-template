@@ -127,7 +127,9 @@ def scratch(tmp_path):
         shutil.copy2(REPO / "Templates" / "Scripts" / name, scripts / name)
     (vault / ".obsidian").mkdir()
     (vault / ".obsidian" / "types.json").write_text("{}\n")
-    env = {**os.environ, "HOME": str(home), "USER": "tester",
+    # OBSIDIAN_PGREP: the real pgrep would see the maintainer's own Obsidian,
+    # and the update refuses while it runs.
+    env = {**os.environ, "HOME": str(home), "USER": "tester", "OBSIDIAN_PGREP": "false",
            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
     subprocess.run(["git", "init", "-q"], cwd=vault, check=True, env=env)

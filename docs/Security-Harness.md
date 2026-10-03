@@ -70,7 +70,7 @@ The plugin integrity monitor is unaffected — it baselines post-install state,
 so the patched `main.js` is simply what it records as normal, and a later
 unexplained change to it still alerts.
 
-### Outside text is never Templater code
+### Outside text is never plugin code
 
 This is not one of the two controls, but it is one less thing for them to
 watch. Templater runs dynamic commands (`<%+ … %>`, and `<%*+ … %>` as
@@ -90,6 +90,28 @@ It puts a zero-width space between the `<` and the `%` in every rendered form
 of the opener (`&lt;%`, `&#60;%`, `<&#37;`, `\<\%`, …). The text reads the
 same, but Templater no longer sees a command.
 
+Other plugins run code from note text too, and the guard defuses those
+triggers the same way (since 2026-10-03):
+
+- **Tasks.** A `tasks` block's `filter by function`, `sort by function` and
+  `group by function` lines are JavaScript. Tasks runs them whenever the block
+  renders, in Live Preview as well as reading view, and has no setting to turn
+  them off.
+- **Dataview.** `` `= …` `` inline queries are on by default, and their result
+  renders as markdown. A crafted query could build a remote image URL out of
+  another note's text, so opening the note sends that text to an outside
+  server. `dataview` / `dataviewjs` blocks and `` `$= …` `` are covered too.
+- **Meta Bind, Metadata Menu, Excalidraw.** Their blocks (`meta-bind-*`,
+  `mdm`, `excalidraw-script-install`) and Meta Bind's inline `INPUT[`,
+  `VIEW[` and `BUTTON[` render controls that act on a click.
+
+A zero-width space goes between the fence and the language, after the
+opening backticks of inline code, and inside a raw `<code` tag. The language
+is matched the way the plugins match it: entities and backslash escapes
+decoded, case ignored, leading whitespace (JavaScript's `trim()` set) skipped,
+on any line, so fences inside list items and quotes count. Ordinary code
+blocks (`python`, `json`, …) are left alone.
+
 `tests/test_templater_guard.py` lists every guarded writer. Any new script
 that writes outside text into the vault belongs on that list.
 
@@ -98,10 +120,13 @@ The guard has two limits:
 - **Copied text keeps the space.** Text copied out of a neutralised note
   carries the zero-width space, so a clipped JSP or ASP snippet (`<%= … %>`)
   no longer pastes cleanly.
-- **New clippings are briefly raw.** A Web Clipper note stays unchanged for
-  the few seconds before `strip_ads` rewrites it. This matters only if the
-  note is switched to reading view in that window. Notes open in Live Preview
-  by default, and there the post-processor does not run on the body.
+- **New clippings are briefly raw.** The Web Clipper writes a note directly,
+  and it stays unchanged until `strip_ads` rewrites it: a few seconds on a Mac,
+  where a folder watch starts it, and up to 5 minutes on Windows, where it runs
+  on a 5-minute schedule. For Templater this matters only if the note is
+  switched to reading view in that window. A plugin block renders in Live
+  Preview too, so opening a clipping of a hostile page in that window would
+  run it.
 
 Either way, the export gate blocks a dynamic command anywhere in an export
 (see `Data-Classification.md`).
