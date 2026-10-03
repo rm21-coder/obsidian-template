@@ -159,6 +159,7 @@ main() {
         esac
     done < <(plan_agents "$REPO_ROOT" "$LA")
     [[ "$n_changed" -eq 0 ]] && ok "  every installed job already matches its template"
+    retire_agents "$LA" "${backup:-$HOME/Library/Logs/obsidian-template-update/$(date +%Y%m%d-%H%M%S)}" "$DRY_RUN"
     if [[ ${#not_installed[@]} -gt 0 ]]; then
         info "  Not installed on this machine (declined at install, or new upstream); left alone:"
         local entry

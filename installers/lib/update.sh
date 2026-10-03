@@ -67,6 +67,35 @@ plan_agents() {
     done
 }
 
+# Jobs this template once installed and has since retired. An update removes
+# them: nothing else would, and a retired job either fails on every run or
+# runs code that no longer ships. Names only ever get added here.
+#   com.obsidian.handoff-blob-pull   Azure Blob relay, removed 2026-09-30
+RETIRED_AGENTS=(com.obsidian.handoff-blob-pull)
+
+# retire_agents <launchagents_dir> <backup_dir> <dry_run>
+# Unload and remove each retired agent that is still installed, keeping a copy
+# of its plist in <backup_dir>. Prints one line per agent removed; a failure to
+# unload is a warning, not a stop -- the plist is still moved aside.
+retire_agents() {
+    local la="$1" backup="$2" dry="$3" label
+    for label in "${RETIRED_AGENTS[@]}"; do
+        [[ -f "$la/$label.plist" ]] || continue
+        if [[ "$dry" -eq 1 ]]; then
+            info "  $label: retired upstream; dry run: would unload and remove it"
+            continue
+        fi
+        launchctl bootout "gui/$(id -u)/$label" 2>/dev/null \
+            || launchctl unload "$la/$label.plist" 2>/dev/null || true
+        mkdir -p "$backup"
+        if mv "$la/$label.plist" "$backup/$label.plist"; then
+            ok "  $label: retired upstream; unloaded and removed (old copy in $backup)"
+        else
+            warn "  $label: retired upstream, but could not move its plist aside"
+        fi
+    done
+}
+
 # pins_changed <repo_root> <from_commit>
 # True when the update moved installers/plugin-pins.json, i.e. the pinned
 # plugin versions or hashes changed and the plugins need reinstalling.

@@ -146,6 +146,25 @@ foreach ($job in $manifest.Jobs) {
         }
     }
 }
+# Retired jobs: unregister any still present. Skipped under -Only (a refresh
+# of one job). A failure is a warning, not a FAILED entry: a leftover retired
+# task is disabled or failing, not running old code in place of new.
+if (-not $Only) {
+    foreach ($retired in @($manifest.RetiredJobs)) {
+        if (-not $retired) { continue }
+        $old = Get-ScheduledTask -TaskName $retired -TaskPath "$folder\" -ErrorAction SilentlyContinue
+        if (-not $old) { continue }
+        if ($PSCmdlet.ShouldProcess("$folder\$retired", 'Unregister retired scheduled task')) {
+            try {
+                Unregister-ScheduledTask -TaskName $retired -TaskPath "$folder\" -Confirm:$false -ErrorAction Stop
+                Write-Host ("  removed (retired upstream): {0}" -f $retired)
+            } catch {
+                Write-Warning ("could not remove retired task {0} -- {1}. If it was registered from an elevated prompt, run this from PowerShell opened with 'Run as administrator'." -f $retired, $_.Exception.Message)
+            }
+        }
+    }
+}
+
 Write-Host ""
 if ($failed.Count -gt 0) {
     Write-Host ("FAILED: {0} task(s) were NOT registered and still run their old definition:" -f $failed.Count) -ForegroundColor Red
