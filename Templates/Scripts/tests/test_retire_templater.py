@@ -378,6 +378,20 @@ def test_other_settings_files_match_what_obsidian_writes() -> None:
     omni = (REPO / ".obsidian" / "plugins" / "omnisearch" / "data.json").read_text(encoding="utf-8")
     keys = list(json.loads(omni))
     assert keys.index("indexFilesWithoutExtension") == keys.index("indexedFileTypes") + 1
-    assert not (REPO / ".obsidian" / "types.json").read_text(encoding="utf-8").endswith("\n")
     attrs = (REPO / ".gitattributes").read_text(encoding="utf-8")
     assert ".obsidian/**/*.json text eol=lf" in attrs
+
+
+def test_no_tracked_settings_file_ends_in_a_newline(allow_subprocess) -> None:
+    """Obsidian and its plugins write settings with no final newline, so a tracked
+    one that has one is rewritten on launch and the next update refuses.
+    community-plugins.json was, on every launch, on the recheck run."""
+    out = subprocess.run(["git", "ls-files", "--", ".obsidian/*.json"],
+                         cwd=REPO, capture_output=True, text=True)
+    if out.returncode != 0:
+        pytest.skip("not a git checkout")
+    files = [ln for ln in out.stdout.splitlines()
+             if not re.fullmatch(r"\.obsidian/plugins/[^/]+/manifest\.json", ln)]
+    assert ".obsidian/community-plugins.json" in files
+    for rel in files:    # plugin manifests ship as released and are never rewritten
+        assert not (REPO / rel).read_bytes().endswith(b"\n"), rel

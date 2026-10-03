@@ -90,3 +90,20 @@ def test_install_and_update_share_one_requirements_step() -> None:
 def test_a_no_op_update_does_not_claim_to_have_updated() -> None:
     tail = UPDATE[UPDATE.index("if ($From -eq $to) {"):]
     assert tail.index("Already at $to") < tail.index("Updated $From -> $to.")
+
+
+def test_settings_left_crlf_by_an_older_checkout_are_rewritten_after_the_pull() -> None:
+    # Clones made before .gitattributes held settings JSON as CRLF. Obsidian
+    # re-saved them as LF and git then called them modified with no diff, so
+    # the following update refused (ARM test laptop, 2026-10-03).
+    rest = _after_pull()
+    assert "Repair-SettingsLineEndings -Vault $vault" in rest
+    assert rest.index("Repair-SettingsLineEndings") < rest.index("== 3/3 scheduled tasks ==")
+    body = COMMON[COMMON.index("function Repair-SettingsLineEndings"):]
+    body = body[:body.index("\n}\n")]
+    # Only a file whose content matches git apart from line endings is touched,
+    # and it is deleted before the checkout, which otherwise skips it.
+    guard = body.index("diff --quiet --ignore-cr-at-eol -- $rel")
+    assert guard < body.index("$redo += $rel")
+    assert body.index("Remove-Item -LiteralPath") < body.index("checkout -- @redo")
+    assert "catch {" in body and "Write-Warning" in body    # a failure warns, never ends the update

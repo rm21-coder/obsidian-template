@@ -224,6 +224,37 @@ function Remove-RetiredPlugins {
     }
 }
 
+# Obsidian's settings JSON checked out before .gitattributes made it LF
+# (2bf2afb) is still CRLF on disk. Obsidian re-saves it as LF, and git then
+# reports the file modified with no diff, so the next update refuses. Rewrite
+# those files from git as LF now. Only a file whose content already matches
+# git apart from line endings is touched; anything else is left alone.
+# Deleting first is what makes git write it: a checkout skips a file whose
+# cached state says it is up to date. (Seen on the ARM test laptop 2026-10-03.)
+function Repair-SettingsLineEndings {
+    param([Parameter(Mandatory)][string]$Vault)
+    $tracked = Invoke-Native -ErrorMessage 'git ls-files failed' {
+        git -C $Vault ls-files -- '.obsidian/*.json'
+    }
+    $redo = @()
+    foreach ($rel in @($tracked)) {
+        if (-not $rel) { continue }
+        $path = Join-Path $Vault $rel
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        if (-not [IO.File]::ReadAllText($path).Contains("`r`n")) { continue }
+        git -C $Vault diff --quiet --ignore-cr-at-eol -- $rel 2>$null
+        if ($LASTEXITCODE -eq 0) { $redo += $rel }
+    }
+    if (-not $redo) { return }
+    try {
+        foreach ($rel in $redo) { Remove-Item -LiteralPath (Join-Path $Vault $rel) -ErrorAction Stop }
+        Invoke-Native -ErrorMessage 'git checkout failed' { git -C $Vault checkout -- @redo }
+        Write-Host "  settings: $($redo.Count) file(s) rewritten with LF line endings (content unchanged)"
+    } catch {
+        Write-Warning "  settings: could not rewrite line endings: $_. Run: git -C `"$Vault`" checkout -- .obsidian"
+    }
+}
+
 function Get-SecretsFile {
     return (Join-Path $env:USERPROFILE 'dev\secrets\.env')
 }

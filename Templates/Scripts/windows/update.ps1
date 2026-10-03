@@ -88,6 +88,7 @@ Install-Requirements -VenvPython $venvPy -ScriptsDir $scriptsDir
 # Plugins the template has retired: disabled by the pull, removed here --
 # before the task step, whose failure ends this script.
 Remove-RetiredPlugins -Vault $vault
+Repair-SettingsLineEndings -Vault $vault
 
 Write-Host '== 3/3 scheduled tasks =='
 & (Join-Path $PSScriptRoot 'Register-Tasks.ps1')
