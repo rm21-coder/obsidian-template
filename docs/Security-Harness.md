@@ -76,7 +76,7 @@ This is not one of the two controls, but it is one less thing for them to
 watch. Templater runs dynamic commands (`<%+ … %>`, and `<%*+ … %>` as
 JavaScript) in the rendered text of every note shown in reading view, with no
 setting or folder limit. It also runs every command in a new note when
-"Trigger Templater on new file creation" is on (off in this template).
+"Trigger Templater on new file creation" is on. The template stopped shipping Templater on 2026-10-03 and updates remove it (see the Obsidian Configuration Guide, 3.2); this stays for anyone who installs it themselves.
 
 The scripts write other people's words into notes:
 

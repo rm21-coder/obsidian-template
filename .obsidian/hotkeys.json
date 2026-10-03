@@ -17,16 +17,6 @@
   "workspace:goto-tab-7": [],
   "workspace:goto-tab-8": [],
   "workspace:undo-close-pane": [],
-  "templater-obsidian:Templates/People Template.md": [
-    {
-      "modifiers": [
-        "Alt",
-        "Ctrl",
-        "Mod"
-      ],
-      "key": "P"
-    }
-  ],
   "workspace:close-window": [],
   "file-explorer:new-file-in-new-pane": [],
   "editor:delete-paragraph": [],
@@ -42,7 +32,17 @@
       "key": "T"
     }
   ],
-  "templater-obsidian:Templates/Move to Knowledge.md": [
+  "quickadd:choice:f6a7b8c9-0123-45f0-1234-6789012345f0": [
+    {
+      "modifiers": [
+        "Alt",
+        "Ctrl",
+        "Mod"
+      ],
+      "key": "P"
+    }
+  ],
+  "quickadd:choice:d4e5f6a7-8901-23de-f012-4567890123de": [
     {
       "modifiers": [
         "Alt",

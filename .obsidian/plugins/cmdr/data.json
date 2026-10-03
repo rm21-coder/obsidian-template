@@ -30,13 +30,13 @@
       "mode": "any"
     },
     {
-      "id": "templater-obsidian:Templates/Move to Knowledge.md",
+      "id": "quickadd:choice:d4e5f6a7-8901-23de-f012-4567890123de",
       "icon": "lucide-move-right",
       "name": "Move note to Knowledge",
       "mode": "any"
     },
     {
-      "id": "templater-obsidian:create-Templates/Clean Filenames.md",
+      "id": "quickadd:choice:e5f6a7b8-9012-34ef-0123-5678901234ef",
       "icon": "lucide-brush-cleaning",
       "name": "Clean Filenames",
       "mode": "any"
@@ -57,7 +57,6 @@
       "Create new base",
       "QuickAdd",
       "New drawing",
-      "Templater",
       "Insert template",
       "Open quick switcher",
       "Create new canvas"

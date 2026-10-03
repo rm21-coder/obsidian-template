@@ -34,7 +34,7 @@ This template extends the [Kepano starter vault](https://github.com/kepano/obsid
 - **Data Classification** — A nightly LaunchAgent (`com.obsidian.classify`) that proposes a classification tier for notes whose body changed, and a companion export gate that refuses to ship content above the tier its audience is cleared for. Three layers: deterministic detectors auto-apply `restricted` for material that is regulated on sight (SSN, private key, API token, MRN with a value); a Haiku-class model adjudicates everything else against a topic-versus-instance rule, because a vault like this discusses HIPAA and breaches constantly as *subject matter* and keyword DLP alone measured ~80% false positive; and the model never writes `classification` itself — it proposes, and you accept in a review queue. Elevation only, never demotion. The export gate resolves `![[embeds]]` recursively, so a `public` note that transcludes a `confidential` one is correctly blocked. See [`docs/Data-Classification.md`](docs/Data-Classification.md).
 - **Synthetic Demo Content** — The repo ships content-free, so one command fills the vault with an obviously-fictional dataset (Nimbus Widgets Inc., `.example` addresses, `555` numbers) and one command removes it. ~74 notes across every content folder — people, groups, meetings, clippings, a working tag taxonomy — so the Bases, Topics, graph view, and Morning Dashboard all show something real instead of empty folders. Generated rather than committed because the dashboard keys off today's date, and removal is guarded so it is safe to run in a vault holding your own notes. See [`docs/Demo-Content.md`](docs/Demo-Content.md).
 - **Quick Actions** — Sidebar buttons for New Meeting, New Note, and New Person via QuickAdd + Commander.
-- **Utility Templates** — Templater-based actions for moving files to the Knowledge folder and cleaning Windows-incompatible filenames.
+- **Utility Commands** — QuickAdd commands for moving files to the Knowledge folder and cleaning Windows-incompatible filenames.
 
 ## Before You Start — Have These Ready
 
@@ -62,7 +62,7 @@ cd ~/Obsidian && ./install.sh
 - Install Homebrew, python3.13, yt-dlp, ffmpeg, Ollama, Docker Desktop, and Obsidian.app — anything missing
 - Bootstrap the vault folders and a per-vault Python venv with the workflow dependencies
 - Prompt for API keys (Anthropic or your gateway, Open WebUI) — see [Before You Start](#before-you-start--have-these-ready) above
-- Install the 13 community plugins from **pinned, SHA256-verified** GitHub releases into `.obsidian/plugins/` (pins live in `installers/plugin-pins.json`; refresh deliberately with `installers/lib/pin_plugins.py`)
+- Install the 12 community plugins from **pinned, SHA256-verified** GitHub releases into `.obsidian/plugins/` (pins live in `installers/plugin-pins.json`; refresh deliberately with `installers/lib/pin_plugins.py`)
 - Install 13 LaunchAgents (tagger, voice-cleanup, source-mail-pull, strip-ads, podcast-watch, meeting-prep, two security agents, RAG sync, group-photos, morning-dashboard, vault-lint, nightly classifier) and build the Markitdown Dropper.app — the two meeting-pipeline agents are separate opt-ins
 - Apply the canonical ribbon icon order to `workspace.json`
 - Pull a local 8B LLM model via Ollama and start an Open WebUI container at <http://localhost:3000>
@@ -315,7 +315,6 @@ Install steps, the optional Tag Taxonomy.md format, and on-demand maintenance pr
 
 All plugins are pre-configured and included:
 
-- **Templater** — Dynamic templates with JavaScript
 - **QuickAdd** — Custom note creation commands
 - **Dataview** — Dynamic queries and lists
 - **Tasks** — Task management across vault

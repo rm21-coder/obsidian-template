@@ -20,7 +20,7 @@
     -RemoveRAG       stop + remove the open-webui Docker container (+ prompt for its volume)
     -RemovePlugins   delete the DOWNLOADED plugin files named in
                      installers\plugin-pins.json. Each plugin's data.json --
-                     your ribbon, QuickAdd and Templater settings -- is kept,
+                     your ribbon and QuickAdd settings -- is kept,
                      and so is its folder. A reinstall does not restore
                      data.json, so it is never removed here.
     -RemoveApps      winget-uninstall Obsidian, Ollama, Docker Desktop, iCloud
@@ -213,7 +213,7 @@ if ($RemoveRAG) {
 # ---- 5. community plugins (opt-in) -----------------------------------------
 # Removes the DOWNLOADED artifacts named in installers\plugin-pins.json, never
 # the plugins tree. Each plugin folder also holds data.json -- the settings that
-# drive ribbon icons, QuickAdd choices, Templater config -- which is user
+# drive ribbon icons, QuickAdd choices -- which is user
 # content, is tracked in this repo for five plugins, and is NOT restored by a
 # reinstall: Install-Plugins.ps1 fetches only manifest.json / main.js /
 # styles.css. Deleting the tree wholesale destroyed 464 lines of tracked

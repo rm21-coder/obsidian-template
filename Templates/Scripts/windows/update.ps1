@@ -1,7 +1,8 @@
 <#
 .SYNOPSIS  Bring an existing Windows install up to date in one command.
 .DESCRIPTION
-  Three steps, always in this order:
+  Three steps, always in this order (plus removing any plugin the template has
+  retired, between 2 and 3):
 
     1. git pull --ff-only     the new code
     2. requirements           the same pip step install.ps1 runs
@@ -39,6 +40,16 @@ $scriptsDir = Get-ScriptsDir
 
 if (-not $AfterPull) {
     Write-Host '== 1/3 pull =='
+    # Not while Obsidian is open: it keeps the old plugins loaded (a retired one
+    # included) until it restarts, and writes its in-memory copies of tracked
+    # settings back over the pulled ones, so the next update would refuse.
+    if (Get-Process -Name Obsidian -ErrorAction SilentlyContinue) {
+        Write-Host 'Obsidian is running; not updating.' -ForegroundColor Red
+        Write-Host 'Quit Obsidian (close every window, or right-click its taskbar icon > Close all windows),'
+        Write-Host 'then run this update again. While it is open it keeps the old plugins loaded and'
+        Write-Host 'writes its own copy of the settings back over the updated ones.'
+        exit 1
+    }
     # Tracked changes only: notes in the content folders are untracked and fine.
     $dirty = Invoke-Native -ErrorMessage 'git status failed' {
         git -C $vault status --porcelain --untracked-files=no
@@ -73,6 +84,10 @@ Write-Host '== 2/3 requirements =='
 $venvPy = Join-Path $scriptsDir '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPy)) { throw "No venv at $venvPy. This is not an existing install: run install.ps1." }
 Install-Requirements -VenvPython $venvPy -ScriptsDir $scriptsDir
+
+# Plugins the template has retired: disabled by the pull, removed here --
+# before the task step, whose failure ends this script.
+Remove-RetiredPlugins -Vault $vault
 
 Write-Host '== 3/3 scheduled tasks =='
 & (Join-Path $PSScriptRoot 'Register-Tasks.ps1')

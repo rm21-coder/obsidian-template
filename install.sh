@@ -14,7 +14,7 @@
 #   05-obsidian-app          install Obsidian.app via Homebrew cask
 #   10-vault-bootstrap       vault folder skeleton (only fills missing dirs)
 #   20-secrets               prompt for the model endpoint key + Open WebUI
-#   30-plugins               fetch the 13 community plugins from GitHub
+#   30-plugins               fetch the 12 community plugins from GitHub
 #   31-quickadd-patch        suppress QuickAdd's current-folder topItem suggestion
 #   35-ribbon-order          apply tracked ribbon icon order to workspace.json
 #   39-source-mail           signed mail drop transport (voice/podcast producers)

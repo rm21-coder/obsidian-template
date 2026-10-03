@@ -96,6 +96,45 @@ retire_agents() {
     done
 }
 
+# Community plugins the template once shipped and has since retired. An update
+# disables and removes them: the enabled list arrives with the pull, and the
+# plugin's own files -- fetched by the installer, never tracked -- are moved
+# out of the vault here, so no dormant plugin code stays behind.
+#   templater-obsidian   Templater, retired 2026-10-03 (ran commands from note
+#                        text in reading view; QuickAdd user scripts replace it)
+RETIRED_PLUGINS=(templater-obsidian)
+
+# retire_plugins <vault> <backup_dir> <dry_run>
+# Move each retired plugin's folder from <vault>/.obsidian/plugins into
+# <backup_dir>/plugins. Prints one line per plugin removed.
+retire_plugins() {
+    local vault="$1" backup="$2" dry="$3" id dir
+    for id in "${RETIRED_PLUGINS[@]}"; do
+        dir="$vault/.obsidian/plugins/$id"
+        [[ -d "$dir" ]] || continue
+        if [[ "$dry" -eq 1 ]]; then
+            info "  $id: retired upstream; dry run: would remove the plugin"
+            continue
+        fi
+        mkdir -p "$backup/plugins"
+        if mv "$dir" "$backup/plugins/$id"; then
+            ok "  $id: retired upstream; removed (old copy in $backup/plugins)"
+        else
+            warn "  $id: retired upstream, but could not move $dir aside"
+        fi
+    done
+}
+
+# obsidian_running
+# True while the Obsidian app is open. An update must not run then: Obsidian
+# keeps the old plugins loaded (a retired one included) until it restarts, and
+# writes its in-memory copies of tracked settings -- community-plugins.json,
+# hotkeys.json, a plugin's data.json -- back over the pulled ones, leaving the
+# tree dirty so the next update refuses. OBSIDIAN_PGREP is a test seam.
+obsidian_running() {
+    "${OBSIDIAN_PGREP:-pgrep}" -x Obsidian >/dev/null 2>&1
+}
+
 # pins_changed <repo_root> <from_commit>
 # True when the update moved installers/plugin-pins.json, i.e. the pinned
 # plugin versions or hashes changed and the plugins need reinstalling.
