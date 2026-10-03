@@ -173,6 +173,16 @@ def mark_started(action: str, now: float) -> None:
         log(f"{action}: could not record the start ({exc}); its cooldown will not apply")
 
 
+def rag_set_up() -> bool:
+    """Whether the optional local-LLM RAG layer is configured here (see
+    rag_status.py). A failed check counts as not set up."""
+    try:
+        import rag_status
+        return rag_status.configured()
+    except Exception:
+        return False
+
+
 def pull_refused_today() -> str | None:
     """Today's recorded sign-in refusal for the meeting pull, if any -- the
     guard the scheduled run applies through --skip-if-fresh."""
@@ -204,6 +214,12 @@ def _main(argv: list[str]) -> int:
         return 2
     task, script, args, label = ACTIONS[action]
     title = f"Dashboard: {label}"
+
+    if action == "refresh-rag" and not rag_set_up():
+        # The dashboard draws no RAG button here; this is a typed or forged link.
+        notify(title, "Not set up on this machine: the local RAG layer is not configured.")
+        log(f"{action}: RAG is not set up here")
+        return 3
 
     state = task_state(task)
     if state is None:

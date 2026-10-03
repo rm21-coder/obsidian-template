@@ -19,7 +19,7 @@
           app (winget) | 06 docker desktop (winget, early -- see note below) |
           10 vault check | 20 secrets stub | 30 community
           plugins | 31 quickadd patch | 35 ribbon order | 40 venv + deps |
-          50 llm-rag (optional) | 80 register tasks (12 enabled, 2 disabled) |
+          50 llm-rag (optional) | 80 register tasks |
           90 status
 
   Docker Desktop's installer requests admin elevation -- a UAC prompt with its
@@ -539,7 +539,7 @@ if ($prof) {
 }
 
 if (-not $SkipTasks) {
-    Write-Host '== 80 scheduled tasks (12 enabled, 2 disabled) =='
+    Write-Host '== 80 scheduled tasks =='
     & (Join-Path $PSScriptRoot 'Register-Tasks.ps1')
     if ($LASTEXITCODE -ne 0) {
         throw 'scheduled-task registration failed: see the FAILED list above'
@@ -653,7 +653,7 @@ if ($SkipTasks) {
     Write-Host 'schedule until you re-run without -SkipTasks, or run:'
     Write-Host ("  {0}" -f (Join-Path $PSScriptRoot 'Register-Tasks.ps1'))
 } else {
-    Write-Host 'The 12 enabled jobs are LIVE now and will fire on their triggers -- fill in'
+    Write-Host 'The enabled jobs are LIVE now and will fire on their triggers -- fill in'
     Write-Host '.env first if you have not, or they will log errors until you do.'
     Write-Host 'Sanity-check one by hand:'
     Write-Host ("  {0} `"{1}`"" -f $venvPy, (Join-Path $scriptsDir 'tag_clippings.py'))

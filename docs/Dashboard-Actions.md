@@ -69,6 +69,10 @@ Differences from macOS:
   right now, it is reported as already running.
 - **Pull meetings pulls now:** it drops the scheduled task's
   `--skip-if-fresh`.
+- **Refresh RAG index appears only where RAG is set up** (`rag_status.py`:
+  `OBSIDIAN_COLLECTION_ID` filled in), on both platforms; the dashboard's RAG
+  sync card likewise. Most installs never run the local LLM layer. A
+  `refresh-rag` link on a machine without it is refused as not set up.
 - **Every action waits for its job** and then toasts *Finished* or *Failed
   (exit N)* with the log to read, rather than toasting at start only. A second
   click while the first is still running is reported, not run twice.
@@ -96,7 +100,7 @@ page asking to start a dashboard job.
 |---|---|---|
 | Pull meetings | `meeting_pull.py` | background |
 | Refresh dashboard | `morning_dashboard.py` | synchronous |
-| Refresh RAG index | `obsidian-rag-sync.py` | background |
+| Refresh RAG index (only where RAG is set up) | `obsidian-rag-sync.py` | background |
 
 Every dispatch appends to `~/Library/Logs/dashboard-actions.log`, and the
 app posts a notification when an action starts and finishes.

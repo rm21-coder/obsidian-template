@@ -54,8 +54,9 @@ then call scripts directly, e.g. `.\Templates\Scripts\windows\install.ps1`.)
 - Create a per-vault Python venv and install `requirements.lock`: every
   package at a locked release, each file checked against its SHA256, wheels
   only (see `requirements.lock` in the README)
-- Register all 14 scheduled jobs in Task Scheduler under `\Obsidian\` — 12
-  ship **enabled** by default (validated end-to-end on a clean Windows 11
+- Register all 14 scheduled jobs in Task Scheduler under `\Obsidian\` — 11
+  ship **enabled** by default, plus `rag-sync` where the local RAG layer is set
+  up (validated end-to-end on a clean Windows 11
   install) and begin firing on their triggers as soon as the installer
   finishes, the other 2 ship **disabled** because they each need a per-user
   resource this template can't assume exists (a dedicated mailbox or an MCP
@@ -303,8 +304,8 @@ seeds the `LLM_*`/`CLASSIFIER_*` config it reads.
 ## Scheduled jobs
 
 All 14 jobs are registered by `Register-Tasks.ps1` under the Task Scheduler
-path `\Obsidian\`, from the manifest in `schedules.psd1`. 12 ship **enabled**
-by default — each was validated end-to-end on a clean Windows 11 install by
+path `\Obsidian\`, from the manifest in `schedules.psd1`. 11 ship **enabled**
+by default (`rag-sync` too, where RAG is set up) — each was validated end-to-end on a clean Windows 11 install by
 running its script by hand before its task was enabled. Because they are
 enabled at registration time, they start firing as soon as `install.ps1`
 finishes, so fill in `.env` first or expect logged errors until you do. The
@@ -325,7 +326,7 @@ prerequisite, validate the script by hand, then
 | `meeting-prepopulate` | `meeting_prepopulate.py` | every 30 min | enabled | Reads a schedule-handoff JSON from a local drop folder via a pluggable source (`drop` or `mcp`) — see [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md). The producer side is yours to build; the consumer runs cleanly and reports "no handoffs to process" until it's wired up. |
 | `meeting-pull` | `meeting_pull.py` | weekdays 5:00 AM | **disabled** | Producer side of meeting pre-population: shells out to the Claude CLI over an MCP calendar connector. Exercised end-to-end on macOS only — needs the Claude CLI on `PATH` and a registered MCP calendar connector before it can even reach its own config; validate with `python meeting_pull.py --dry-run` first. |
 | `group-photos` | `run_group_photos.py` | daily 2:00 AM | enabled | Runs `Z_attachments/insert_group_placeholders.py` then `refresh_groups.py` in sequence, mirroring the macOS `insert && refresh` pipeline. |
-| `rag-sync` | `obsidian-rag-sync.py` | daily 3:00 AM | enabled | Pushes the vault into Open WebUI's Knowledge collection. Needs `-WithRAG` set up first — safe to leave enabled otherwise, since it detects a missing/unconfigured stack and skips cleanly. |
+| `rag-sync` | `obsidian-rag-sync.py` | daily 3:00 AM | when RAG is set up | Pushes the vault into Open WebUI's Knowledge collection. Enabled exactly when the optional local RAG layer is set up — `OBSIDIAN_COLLECTION_ID` filled in (`rag_status.py`) — and disabled otherwise, because without Open WebUI it fails every night. `install.ps1` and `update.ps1` re-check on each run, so filling in the collection ID and updating turns it on. |
 | `security-plugin-check` | `plugin_integrity_check.py` | daily 6:30 AM | enabled | Community-plugin code integrity, the enabled-plugin list and the settings that let a plugin run JavaScript from notes; HMAC-signed baseline (DPAPI-backed key on Windows). `install.ps1` offers to record the baseline as its last step; until one exists the check protects nothing. |
 | `security-integrity` | `integrity_monitor.py` | daily 6:35 AM | enabled | Automation-script and Task Scheduler-task integrity. `install.ps1` offers to record the baseline as its last step, after the tasks are registered; until one exists the monitor protects nothing. |
 | `morning-dashboard` | `morning_dashboard.py` | weekdays 7:00 AM | enabled | Self-contained HTML dashboard: open to-dos, today's meetings, new notes, pipeline health. |
