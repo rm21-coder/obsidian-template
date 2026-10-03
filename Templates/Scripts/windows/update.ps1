@@ -98,12 +98,19 @@ if ($pluginReason) {
     Write-Host "  $pluginReason; reinstalling from the pins"
     try {
         & (Join-Path $PSScriptRoot 'Install-Plugins.ps1')
-        Invoke-QuickAddPatch -Vault $vault -Python @($venvPy)
-        Write-Host '  The plugin integrity check will now report the new plugin files. Vet what' -ForegroundColor Yellow
-        Write-Host "  changed (git -C `"$vault`" diff $From HEAD -- installers/plugin-pins.json) before adopting it." -ForegroundColor Yellow
     } catch {
         $pluginFailure = "$_"
         Write-Host "  Plugins NOT updated: $pluginFailure" -ForegroundColor Red
+    }
+    # Even after a failure: Install-Plugins replaces every plugin it can before
+    # it throws, QuickAdd included, and a reinstalled QuickAdd is unpatched.
+    Invoke-QuickAddPatch -Vault $vault -Python @($venvPy)
+    if ($pluginReason -eq 'the plugin pins changed') {
+        Write-Host '  The plugin integrity check will now report the new plugin files. Vet what' -ForegroundColor Yellow
+        Write-Host "  changed (git -C `"$vault`" diff $From HEAD -- installers/plugin-pins.json) before adopting it." -ForegroundColor Yellow
+    } else {
+        Write-Host '  The plugins were brought back to their pins. The plugin integrity check will' -ForegroundColor Yellow
+        Write-Host '  report any whose vetted version differs; vet those before adopting.' -ForegroundColor Yellow
     }
 }
 

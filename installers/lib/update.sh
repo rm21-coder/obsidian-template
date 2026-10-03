@@ -136,7 +136,7 @@ obsidian_running() {
 }
 
 # plugins_drifted <vault>
-# True when an enabled plugin's installed manifest is not the pinned one
+# True when an enabled plugin's installed files are not the pinned ones
 # (installers/lib/plugin_drift.py), or the check itself cannot run -- then the
 # reinstall reports why. Catches what pins_changed cannot: a re-run after a
 # failed download, and an install that drifted from its pins some other way.

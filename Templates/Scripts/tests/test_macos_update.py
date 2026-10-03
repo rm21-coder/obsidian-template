@@ -308,3 +308,53 @@ def test_an_update_rewrites_only_the_changed_job_and_keeps_the_old_copy(
     assert loads == [f"launchctl load {la}/com.voice-cleanup.plist"], log
     assert not (la / "com.obsidian-rag-sync.plist").exists(), "an update installed a declined job"
     assert f"Already at {head}" in out
+
+
+@macos_only
+@pytest.mark.parametrize("plugins_fail", [False, True])
+def test_a_plugin_reinstall_always_patches_and_retires_and_a_failure_ends_incomplete(
+        scratch, tmp_path, plugins_fail, allow_subprocess):
+    """Review 2026-10-03: under `set -e` a failed 30-plugins aborted the update
+    before the QuickAdd patch, the retired-plugin removal, permissions and the
+    control report -- and did so on every later run while the cause persisted."""
+    home, vault, la, env = scratch
+    pin = [{"id": "p1", "ref": "2.0.0", "files": {"manifest.json": {
+        "url": "https://example.invalid/m", "sha256": "0" * 64}}}]
+    (vault / "installers" / "plugin-pins.json").write_text(json.dumps(pin))
+    (vault / ".obsidian" / "community-plugins.json").write_text('["p1"]')
+    subprocess.run(["git", "commit", "-qam", "pin p1"], cwd=vault, check=True, env=env)
+    retired = vault / ".obsidian" / "plugins" / "templater-obsidian"
+    retired.mkdir(parents=True)
+    (retired / "main.js").write_text("old")
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    calls = tmp_path / "calls.log"
+    (stubs / "launchctl").write_text(f'#!/bin/sh\necho "launchctl $*" >> "{calls}"\n')
+    (stubs / "launchctl").chmod(0o755)
+    venv_py = vault / "Templates" / "Scripts" / ".venv" / "bin" / "python3"
+    venv_py.unlink()
+    venv_py.write_text('#!/bin/sh\nif [ "$1" = "-c" ]; then echo "arm64 13 gil"; exit 0; fi\n'
+                       f'echo "venv-python $*" >> "{calls}"\n')
+    venv_py.chmod(0o755)
+    fail = "1" if plugins_fail else "0"
+    (vault / "install.sh").write_text(        # --after-pull does not re-check the tree
+        f'#!/bin/bash\necho "install.sh $*" >> "{calls}"\n'
+        f'[[ "$*" == *30-plugins* && "{fail}" == 1 ]] && exit 1\nexit 0\n')
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=vault,
+                          capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--after-pull", "--from", head],
+                       capture_output=True, text=True, env={**env, "PATH": f"{stubs}:{env['PATH']}"})
+    out = r.stdout + r.stderr
+    log = [ln for ln in calls.read_text().splitlines() if ln.startswith("install.sh")]
+    assert log == ["install.sh --auto --only 30-plugins", "install.sh --auto --only 31-quickadd-patch",
+                   "install.sh --auto --only 56-script-permissions"], log
+    assert not retired.exists(), "the retired plugin stayed in the vault"
+    assert "== 6/6 security controls ==" in out
+    assert "not at their pins: p1; reinstalling from the pins" in out
+    if plugins_fail:
+        assert r.returncode == 1, out
+        assert "Plugins NOT updated" in out and "Update INCOMPLETE" in out
+        assert f"Already at {head}" not in out
+    else:
+        assert r.returncode == 0, out
+        assert "Update INCOMPLETE" not in out and f"Already at {head}" in out

@@ -274,7 +274,12 @@ function Invoke-QuickAddPatch {
     }
     $exe  = $Python[0]
     $rest = @($Python | Select-Object -Skip 1)
-    $qaRes = (& $exe @rest $qaHelp $qa 2>&1 | Out-String).Trim()
+    # Continue, not the caller's Stop: under Stop, PS 5.1 turns any stderr line
+    # from the helper into a terminating error, which the update would then
+    # report as the plugins failing.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $qaRes = (& $exe @rest $qaHelp $qa 2>&1 | Out-String).Trim() }
+    finally { $ErrorActionPreference = $prevEAP }
     switch -Regex ($qaRes) {
         '^PATCHED$'         { Write-Host    '  quickadd patched (dropped topItems in default fall-through)' }
         '^ALREADY_PATCHED$' { Write-Host    '  quickadd already patched' }

@@ -28,14 +28,24 @@ sys.path.insert(0, str(HELPER.parent))
 import plugin_drift  # noqa: E402
 
 PINNED = b'{"id": "a", "version": "2.0.0"}'
+MAIN = b"pinned bundle"
 
 
-def _vault(tmp_path: Path, enabled, installed: dict[str, bytes | None]) -> Path:
+def _sha(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def _vault(tmp_path: Path, enabled, installed: dict[str, bytes | None],
+           main: dict[str, bytes] | None = None) -> Path:
+    """Pins for a, b, c and quickadd (manifest PINNED, main.js MAIN); installed
+    holds each plugin's manifest (None: missing) and, unless overridden in
+    `main`, the pinned main.js."""
     v = tmp_path / "vault"
     (v / "installers").mkdir(parents=True)
     pins = [{"id": pid, "ref": "2.0.0", "files": {
-        "manifest.json": {"url": "https://example.invalid", "sha256": hashlib.sha256(PINNED).hexdigest()},
-        "main.js": {"url": "https://example.invalid", "sha256": "0" * 64}}} for pid in ("a", "b", "c")]
+        "manifest.json": {"url": "https://example.invalid", "sha256": _sha(PINNED)},
+        "main.js": {"url": "https://example.invalid", "sha256": _sha(MAIN)}}}
+        for pid in ("a", "b", "c", "quickadd")]
     (v / "installers" / "plugin-pins.json").write_text(json.dumps(pins))
     (v / ".obsidian").mkdir()
     (v / ".obsidian" / "community-plugins.json").write_text(json.dumps(enabled))
@@ -44,16 +54,31 @@ def _vault(tmp_path: Path, enabled, installed: dict[str, bytes | None]) -> Path:
         d.mkdir(parents=True)
         if body is not None:
             (d / "manifest.json").write_bytes(body)
-        (d / "main.js").write_text("patched locally")      # never compared
+        (d / "main.js").write_bytes((main or {}).get(pid, MAIN))
     return v
 
 
-def test_only_plugins_whose_manifest_differs_from_the_pin_are_listed(tmp_path) -> None:
+def test_only_plugins_that_differ_from_the_pin_are_listed(tmp_path) -> None:
     v = _vault(tmp_path, ["a", "b", "c", "unpinned", 7],
                {"a": PINNED, "b": b'{"id": "b", "version": "1.0.0"}', "c": None})
-    # a: at its pin (main.js differing is the QuickAdd patch, not drift);
-    # b: older; c: manifest missing; unpinned and non-string entries: left alone.
+    # a: at its pin; b: older; c: manifest missing; unpinned and non-string
+    # entries: left alone.
     assert plugin_drift.drifted(v) == ["b", "c"]
+
+
+def test_a_bundle_that_differs_behind_a_matching_manifest_is_drift(tmp_path) -> None:
+    """A same-version re-pin (upstream re-uploaded the bundle under the same
+    tag) whose first reinstall failed, or a hand-replaced main.js: the manifest
+    matches, so a manifest-only check never retried it (review 2026-10-03)."""
+    v = _vault(tmp_path, ["a"], {"a": PINNED}, main={"a": b"other bundle"})
+    assert plugin_drift.drifted(v) == ["a"]
+
+
+def test_quickadds_locally_patched_bundle_is_not_drift_but_its_manifest_is(tmp_path) -> None:
+    v = _vault(tmp_path, ["quickadd"], {"quickadd": PINNED}, main={"quickadd": b"patched"})
+    assert plugin_drift.drifted(v) == []
+    (v / ".obsidian" / "plugins" / "quickadd" / "manifest.json").write_bytes(b"old")
+    assert plugin_drift.drifted(v) == ["quickadd"]
 
 
 def test_a_plugin_that_is_not_installed_at_all_is_drift(tmp_path) -> None:
@@ -108,6 +133,8 @@ def test_windows_update_reinstalls_plugins_after_requirements_and_before_tasks()
     reason = rest.index("Get-PluginReinstallReason -Vault $vault -From $From -VenvPython $venvPy")
     install = rest.index("& (Join-Path $PSScriptRoot 'Install-Plugins.ps1')")
     patch = rest.index("Invoke-QuickAddPatch -Vault $vault -Python @($venvPy)")
+    # The patch runs after the try/catch, so a plugin failure cannot skip it.
+    assert rest.index("$pluginFailure = \"$_\"", install) < patch
     tasks = rest.index("Write-Host '== 3/3 scheduled tasks =='")
     assert req < reason < install < patch < tasks
 
@@ -125,6 +152,10 @@ def test_a_plugin_failure_does_not_pass_as_a_clean_update() -> None:
     rest = _after_pull()
     block = rest[rest.index("if ($pluginReason) {"):rest.index("Remove-RetiredPlugins -Vault $vault")]
     assert "} catch {" in block and "$pluginFailure = \"$_\"" in block
+    body = COMMON[COMMON.index("function Invoke-QuickAddPatch"):]
+    body = body[:body.index("\n}\n")]
+    # stderr from the helper must not become a terminating error under Stop
+    assert body.index("$ErrorActionPreference = 'Continue'") < body.index("& $exe @rest $qaHelp $qa")
     tail = rest[rest.index("if ($pluginFailure) {"):]
     assert tail.index("Update INCOMPLETE") < tail.index("exit 1") < tail.index("Updated $From -> $to.")
 

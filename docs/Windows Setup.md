@@ -172,8 +172,8 @@ in a fixed order:
 1. **`git pull --ff-only`** brings in the new code.
 2. **Reinstall the requirements**, using the same pip step `install.ps1` runs.
    The plugins are reinstalled here too, from their pins, when the pins moved
-   or an installed plugin is not its pinned copy. The plugins are compared by
-   manifest hash (`installers/lib/plugin_drift.py`), so a plugin you updated
+   or an installed plugin is not its pinned copy. Each plugin's files are
+   checked against their pinned hashes (`installers/lib/plugin_drift.py`), so a plugin you updated
    yourself inside Obsidian goes back to the reviewed version. Plugins the
    template has retired, Templater among them, are moved out of the vault.
 3. **`Register-Tasks.ps1`** re-registers every scheduled task.

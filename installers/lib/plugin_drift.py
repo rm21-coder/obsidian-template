@@ -2,10 +2,11 @@
 
 Called by the updaters (macOS update.sh, Windows update.ps1) to decide whether
 the plugins need reinstalling from installers/plugin-pins.json. A plugin counts
-as drifted when its manifest.json is missing or does not match the pinned
-SHA256. The manifest is compared rather than main.js because the installers
-patch QuickAdd's main.js after install (quickadd_patch.py), so main.js never
-matches its pin; a release always changes the manifest's version.
+as drifted when any pinned file is missing or does not match its pinned
+SHA256 -- every file, so a same-version re-pin (upstream re-uploaded a bundle
+under the same tag) or a hand-replaced main.js is caught too. The one
+exception is QuickAdd's main.js: the installers patch it after install
+(quickadd_patch.py), so it never matches its pin; its manifest still does.
 
 Deciding from what is installed, not from what the last pull changed, matters
 in two cases the pull alone misses: a re-run after a failed download (the pull
@@ -26,6 +27,10 @@ import sys
 from pathlib import Path
 
 
+# Files the installers change after installing them, so never equal to the pin.
+PATCHED_LOCALLY = {("quickadd", "main.js")}
+
+
 def drifted(vault: Path) -> list[str]:
     pins = json.loads((vault / "installers" / "plugin-pins.json").read_text(encoding="utf-8"))
     by_id = {p["id"]: p for p in pins}
@@ -35,14 +40,16 @@ def drifted(vault: Path) -> list[str]:
         pin = by_id.get(pid) if isinstance(pid, str) else None
         if pin is None:
             continue
-        want = pin["files"]["manifest.json"]["sha256"].lower()
-        manifest = vault / ".obsidian" / "plugins" / pid / "manifest.json"
-        try:
-            got = hashlib.sha256(manifest.read_bytes()).hexdigest()
-        except OSError:
-            got = None
-        if got != want:
-            out.append(pid)
+        for name, meta in pin["files"].items():
+            if (pid, name) in PATCHED_LOCALLY:
+                continue
+            try:
+                got = hashlib.sha256((vault / ".obsidian" / "plugins" / pid / name).read_bytes()).hexdigest()
+            except OSError:
+                got = None
+            if got != meta["sha256"].lower():
+                out.append(pid)
+                break
     return out
 
 

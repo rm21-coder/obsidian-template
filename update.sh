@@ -188,8 +188,8 @@ main() {
     info "== 4/6 plugins =="
     # Reinstall when the pull moved the pins, or when an installed plugin is not
     # its pinned copy: a re-run after a failed download, or an install that
-    # drifted from its pins (plugin_drift.py compares each manifest's hash).
-    local plugin_reason="" drift
+    # drifted from its pins (plugin_drift.py checks each file against its pin).
+    local plugin_reason="" drift plugins_failed=0
     if pins_changed "$REPO_ROOT" "$FROM"; then
         plugin_reason="the plugin pins changed"
     elif drift="$(plugins_drifted "$VAULT")"; then
@@ -200,10 +200,22 @@ main() {
             info "  dry run: $plugin_reason; would reinstall plugins (30) and re-patch QuickAdd (31)"
         else
             info "  $plugin_reason; reinstalling from the pins"
-            "$REPO_ROOT/install.sh" --auto --only 30-plugins
-            "$REPO_ROOT/install.sh" --auto --only 31-quickadd-patch
-            warn "  The plugin integrity check will now report the new plugin files. Vet what"
-            warn "  changed (git diff $FROM $TO -- installers/plugin-pins.json) before adopting it."
+            # A failure must not stop the steps after it: the QuickAdd patch
+            # (a reinstall brings back the unpatched bundle), the retired-plugin
+            # removal, permissions and the control report all still run, and
+            # the update ends INCOMPLETE instead.
+            if ! "$REPO_ROOT/install.sh" --auto --only 30-plugins; then
+                plugins_failed=1
+                err "  Plugins NOT updated (see the lines above)."
+            fi
+            "$REPO_ROOT/install.sh" --auto --only 31-quickadd-patch || warn "  QuickAdd patch step failed"
+            if [[ "$plugin_reason" == "the plugin pins changed" ]]; then
+                warn "  The plugin integrity check will now report the new plugin files. Vet what"
+                warn "  changed (git diff $FROM $TO -- installers/plugin-pins.json) before adopting it."
+            else
+                warn "  The plugins were brought back to their pins. The plugin integrity check will"
+                warn "  report any whose vetted version differs; vet those before adopting."
+            fi
         fi
     else
         ok "  every plugin is at its pin; left as it is"
@@ -226,6 +238,12 @@ main() {
     report_control "plugin integrity check" plugin_integrity_check.py "$FROM" "$TO"
 
     info ""
+    if [[ "$plugins_failed" -eq 1 ]]; then
+        err "Update INCOMPLETE: everything else is updated, but the plugins are not (see"
+        err "\"Plugins NOT updated\" above). A hash mismatch means upstream changed a file under"
+        err "its pin: do not work around it. A download failure is safe to retry: run ./update.sh again."
+        return 1
+    fi
     if [[ "$DRY_RUN" -eq 1 ]]; then
         ok "Dry run at $TO: nothing was changed."
     elif [[ "$FROM" == "$TO" ]]; then
