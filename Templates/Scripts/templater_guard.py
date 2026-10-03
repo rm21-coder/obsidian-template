@@ -92,16 +92,20 @@ _TRIM = " \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006" \
 _CLASS_SPLIT = re.compile(r"[\n\r\f]")
 _INLINE = re.compile(r"(`+)(?=[\s\ufeff]*(?:\$?=|(?:INPUT|VIEW|BUTTON)\[))", re.I)
 # Dataview also runs `=` queries found inside code blocks (its default), on the
-# block's text after JS trim(). A line that starts, after quote markers and
-# anything trim() removes, with "=" or "$=" gets the space. The one exception
-# is a heading underline: a line of only "=" under a line of text that is not
-# a fence -- inside a code block a bare "=" line can start a query that
-# continues on the next line, and a code block cannot follow text directly.
+# block's text after JS trim(). A code block can start almost anywhere -- after
+# a fence, after a heading or a rule, inside a list item or a quote -- so any
+# line that starts, after quote markers, list markers and anything trim()
+# removes, with "=" or "$=" gets the space. The one exception is a heading
+# underline: a line of only "=", indented at most three spaces, with no list
+# marker, under a non-blank line that holds no fence. Code indented less than
+# four spaces only ever starts after a fence; an indented code block's lines
+# are indented four or more, which no underline is.
 _JS_SPACE = "\t\v\f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 # A line starts after LF or a lone CR: Obsidian turns every CR into a line
 # break before parsing.
-_BLOCK_QUERY = re.compile(rf"(?:^|(?<=[\n\r]))([>{_JS_SPACE}]*)(?=\$?=)")
-_SETEXT = re.compile(r"=+[ \t]*")
+_BLOCK_QUERY = re.compile(
+    rf"(?:^|(?<=[\n\r]))((?:[>{_JS_SPACE}]|[-*+](?=[{_JS_SPACE}])|\d{{1,9}}[.)](?=[{_JS_SPACE}]))*)(?=\$?=)")
+_SETEXT = re.compile(r" {0,3}=+[ \t]*")
 _FENCE_LINE = re.compile(r"`{3,}|~{3,}")
 _HTML_CODE = re.compile(r"<(?=code(?![\w-]))", re.I)
 # Excalidraw opens a note as a drawing, and offers to run its onload script,
@@ -118,12 +122,19 @@ _ESCAPED_KEY = re.compile(
 
 def _block_query(m: re.Match) -> str:
     text = m.string
-    line = re.split(r"[\r\n]", text[m.end():], maxsplit=1)[0]
-    if _SETEXT.fullmatch(line) and m.start() > 0:
-        before = text[:m.start()]
+    line_start = m.start()
+    line = re.split(r"[\r\n]", text[line_start:], maxsplit=1)[0]
+    if _SETEXT.fullmatch(re.sub(r"^(?:[ \t]*>)+[ \t]?", "", line)) and line_start > 0:
+        before = text[:line_start]
         before = before[:-2] if before.endswith("\r\n") else before[:-1]
         prev = re.split(r"[\r\n]", before)[-1]
-        if prev.strip(_TRIM + ">") and not _FENCE_LINE.search(prev):
+        # Inside a quote, judge both lines without their shared ">" markers.
+        quote = re.match(r"(?:[ \t]*>)+[ \t]?", line)
+        if quote and prev.startswith(quote.group(0).rstrip()):
+            line, prev = line[quote.end():], prev[len(quote.group(0).rstrip()):].lstrip(" \t")
+            if not _SETEXT.fullmatch(line):
+                return m.group(1) + ZWSP
+        if prev.strip(_TRIM) and not _FENCE_LINE.search(prev):
             return m.group(0)
     return m.group(1) + ZWSP
 

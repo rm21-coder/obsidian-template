@@ -165,15 +165,20 @@ def block_queries(text: str) -> list[str]:
     out = []
     for i, line in enumerate(lines):
         opener = re.search(r"```|~~~", line)
-        indented = (i > 0 and not lines[i - 1].strip(" \t>" + JS_WS)
-                    and re.match(r"[> ]*(?: {4}|\t)", line))
+        prev = lines[i - 1] if i > 0 else ""
+        # Indented code after a blank line, a heading or a rule, or straight
+        # after a list marker (the item's content is then indented code).
+        after_break = (not prev.strip(" \t>" + JS_WS)
+                       or re.match(r" {0,3}(?:#|([-*_])(?:[ \t]*\1){2,}[ \t]*$)", prev.lstrip(">")))
+        indented = (re.match(r"[> ]*(?: {4}|\t)", line) and after_break) \
+            or re.match(r"[> ]*(?:[-*+]|\d{1,9}[.)])(?: {5,}|[ \t]*\t)", line)
         if opener:
             body = lines[i + 1:]
         elif indented:
             body = lines[i:]
         else:
             continue
-        block = "\n".join(re.sub(r"^[ \t>]*", "", b) for b in body)
+        block = "\n".join(re.sub(r"^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?", "", b) for b in body)
         block = block.strip(" \t" + JS_WS)
         if block.startswith(("=", "$=")) and block[1:].strip(" \t" + JS_WS):
             out.append(block[:30])
@@ -234,6 +239,9 @@ def test_escaped_language_names_are_caught(raw: str) -> None:
     "```text\n=\nthis.file.name\n```", "para\n\n    =\n    this.file.name\n",
     "```text\n=\n\n1 + 1\n```", "> ```\n> =\n> x",
     "```text\r= x\r```", "```text\r=\rthis.file.name\r```", "```text\r\n= x\r\n```",
+    "# H\n    =\n    this.file.name\n", "***\n    =\n    this.file.name\n",
+    "-     = x\n", "1.      = x\n", "1. \t= x", "-     =\n      this.file.name\n",
+    "> # H\n>     =\n>     x",
 ])
 def test_no_dataview_query_survives_inside_a_code_block(raw: str) -> None:
     assert block_queries(raw), f"case does not reach the oracle: {raw!r}"
@@ -243,7 +251,8 @@ def test_no_dataview_query_survives_inside_a_code_block(raw: str) -> None:
 
 
 def test_setext_headings_and_ordinary_equals_are_left_alone() -> None:
-    for text in ("Title\n=====\n", "Title\n=\n", "a == b", "x = 1", "a\n  b = c"):
+    for text in ("Title\n=====\n", "Title\n=\n", "a == b", "x = 1", "a\n  b = c",
+                 "> Title\n> ===\n", "1 + 1 = 2", "Title\n  ===\n"):
         assert G.neutralize(text) == text, text
 
 
@@ -334,3 +343,10 @@ def test_mixed_triggers_fuzz() -> None:
             assert not block_queries(out), raw
             assert inline_triggers(out, lambda xs: [x.strip(" \t\n" + JS_WS) for x in xs]) == [], raw
             assert out.replace(G.ZWSP, "") == raw
+
+
+def test_the_guard_source_is_ascii() -> None:
+    """Invisible characters are spelled as escapes, so a reader sees what the
+    patterns match."""
+    src = (SCRIPTS / "templater_guard.py").read_text(encoding="utf-8")
+    assert all(ord(c) < 128 for c in src)

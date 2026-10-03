@@ -123,7 +123,7 @@ highlighting still works.
 `tests/test_templater_guard.py` lists every guarded writer. Any new script
 that writes outside text into the vault belongs on that list.
 
-The guard has three limits:
+The guard has four limits:
 
 - **Copied text keeps the space.** Text copied out of a neutralised note
   carries the zero-width space, so a clipped JSP or ASP snippet (`<%= … %>`),
@@ -139,6 +139,10 @@ The guard has three limits:
 - **Search blocks stay live.** Obsidian's core `query` block is left alone. It
   lists vault search results inside the note, on screen only, with no way to
   send them anywhere.
+- **Exotic YAML keys are not parsed.** An Excalidraw key spelled with escapes
+  in an explicit-key or multi-line flow layout (`? ` with the key on the next
+  line, or `{? "…"` across lines) can still open a note as a drawing. Its
+  onload script stays off: that setting ships disabled and asks before it runs.
 
 Either way, the export gate blocks a dynamic command anywhere in an export
 (see `Data-Classification.md`).
