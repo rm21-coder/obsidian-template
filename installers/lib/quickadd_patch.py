@@ -17,6 +17,7 @@ the object (executor:, or future additions) pass through untouched.
 Usage: python3 quickadd_patch.py <path-to-main.js>
 Prints exactly one of: PATCHED | ALREADY_PATCHED | NOT_FOUND | AMBIGUOUS:<n>
 """
+import os
 import re
 import sys
 import pathlib
@@ -51,7 +52,12 @@ def main() -> None:
             new_body = re.sub(r",topItems:\w+", "", body, count=1)
         new_call = f"getOrCreateFolder({m.group(1)},{{{new_body}}})"
         s = s[: m.start()] + new_call + s[m.end() :]
-        path.write_text(s, encoding="utf-8", newline="")
+        # Atomic: a crash mid-write would leave a truncated main.js that no
+        # later run repairs (QuickAdd's patched bundle is exempt from the
+        # updaters' drift check, and the patch then reports NOT_FOUND).
+        tmp = path.with_name(path.name + ".patching")
+        tmp.write_text(s, encoding="utf-8", newline="")
+        os.replace(tmp, path)
         print("PATCHED")
     elif len(needing_patch) == 0 and already_patched:
         print("ALREADY_PATCHED")

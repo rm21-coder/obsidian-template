@@ -161,7 +161,7 @@ def block_queries(text: str) -> list[str]:
     or "$=" -- Dataview reads the whole block, not one line. A block is taken
     to start after any line holding a fence, and after a blank line followed
     by an indented line; container prefixes ("> ") are dropped."""
-    lines = text.split("\n")
+    lines = re.sub(r"\r\n|\r", "\n", text).split("\n")    # as remark does first
     out = []
     for i, line in enumerate(lines):
         opener = re.search(r"```|~~~", line)
@@ -233,6 +233,7 @@ def test_escaped_language_names_are_caught(raw: str) -> None:
     "```text\n\f= x\n```", "```text\n\u2028= x\n```",
     "```text\n=\nthis.file.name\n```", "para\n\n    =\n    this.file.name\n",
     "```text\n=\n\n1 + 1\n```", "> ```\n> =\n> x",
+    "```text\r= x\r```", "```text\r=\rthis.file.name\r```", "```text\r\n= x\r\n```",
 ])
 def test_no_dataview_query_survives_inside_a_code_block(raw: str) -> None:
     assert block_queries(raw), f"case does not reach the oracle: {raw!r}"
@@ -247,7 +248,8 @@ def test_setext_headings_and_ordinary_equals_are_left_alone() -> None:
 
 
 @pytest.mark.parametrize("raw", ['"excalidraw\\u002dplugin": parsed', '"e\\x78calidraw-plugin": parsed',
-                                 '"excalidraw\\x2donload-script": x', '- "a\\tb": 1'])
+                                 '"excalidraw\\x2donload-script": x', '- "a\\tb": 1',
+                                 '{"\\x65xcalidraw-plugin": parsed}', '? "\\x65xcalidraw-plugin"\n: parsed'])
 def test_escaped_yaml_keys_are_defused(raw: str) -> None:
     """YAML double-quoted keys decode escapes, so a key can spell
     excalidraw-plugin without the text "excalidraw-plugin"."""
@@ -257,6 +259,12 @@ def test_escaped_yaml_keys_are_defused(raw: str) -> None:
     keys = keys[0] if isinstance(keys, list) else keys
     assert not any(str(k).startswith("excalidraw-") or k == "a\tb" for k in keys), keys
     assert G.is_neutral(out)
+
+
+def test_escaped_yaml_values_are_left_alone() -> None:
+    """Titles with escaped quotes are common; only keys are defused."""
+    text = '---\ntitle: "Lunch \\"Q4\\" chat"\npeople:\n  - "[[A \\"B\\"]]"\n---\n'
+    assert G.neutralize(text) == text
 
 
 def test_excalidraw_drawing_keys_are_defused() -> None:

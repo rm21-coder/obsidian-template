@@ -68,7 +68,7 @@ from __future__ import annotations
 import html
 import re
 
-ZWSP = "​"
+ZWSP = "\u200b"
 
 _LT = r"(?:<|&lt;?|&#0*60;?|&#x0*3c;?)"
 _PCT = r"(?:\\?%|&percnt;?|&#0*37;?|&#x0*25;?)"   # "\%" is a markdown escape
@@ -97,26 +97,32 @@ _INLINE = re.compile(r"(`+)(?=[\s\ufeff]*(?:\$?=|(?:INPUT|VIEW|BUTTON)\[))", re.
 # is a heading underline: a line of only "=" under a line of text that is not
 # a fence -- inside a code block a bare "=" line can start a query that
 # continues on the next line, and a code block cannot follow text directly.
-_JS_SPACE = "\t\v\f    -     　﻿"
-_BLOCK_QUERY = re.compile(rf"(?m)^([>{_JS_SPACE}]*)(?=\$?=)")
+_JS_SPACE = "\t\v\f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+# A line starts after LF or a lone CR: Obsidian turns every CR into a line
+# break before parsing.
+_BLOCK_QUERY = re.compile(rf"(?:^|(?<=[\n\r]))([>{_JS_SPACE}]*)(?=\$?=)")
 _SETEXT = re.compile(r"=+[ \t]*")
 _FENCE_LINE = re.compile(r"`{3,}|~{3,}")
 _HTML_CODE = re.compile(r"<(?=code(?![\w-]))", re.I)
 # Excalidraw opens a note as a drawing, and offers to run its onload script,
 # from frontmatter keys starting "excalidraw-". A YAML double-quoted key can
-# spell them with escapes ("excalidraw-plugin"), so any double-quoted key
-# holding a backslash is defused too.
+# spell them with escapes ("\x65xcalidraw-plugin"), in block style, in
+# a flow mapping or after "? ", so any double-quoted key holding a backslash
+# is defused too. Values are left alone: titles with escaped quotes are common.
 _EXCALIDRAW_KEY = re.compile(r"(excalidraw)(?=-|\\)", re.I)
-_ESCAPED_KEY = re.compile(r'(?m)^([ \t-]*")(?!\u200b)(?=[^"\n]*\\[^"\n]*"[ \t]*:)')
+_QUOTED = r'(?:[^"\\\r\n]|\\.)*' 
+_ESCAPED_KEY = re.compile(
+    rf'(")(?!\u200b)(?={_QUOTED}\\{_QUOTED}"[ \t]*:)'                # "k\x": v, {"k\x": v}
+    rf'|(?:^|(?<=[\n\r]))([ \t]*\?[ \t]*")(?!\u200b)(?={_QUOTED}\\)')  # ? "k\x"
 
 
 def _block_query(m: re.Match) -> str:
     text = m.string
-    line_end = text.find("\n", m.start())
-    line = text[m.end():len(text) if line_end < 0 else line_end].rstrip("\r")
+    line = re.split(r"[\r\n]", text[m.end():], maxsplit=1)[0]
     if _SETEXT.fullmatch(line) and m.start() > 0:
-        prev_end = m.start() - 1
-        prev = text[text.rfind("\n", 0, prev_end) + 1:prev_end].rstrip("\r")
+        before = text[:m.start()]
+        before = before[:-2] if before.endswith("\r\n") else before[:-1]
+        prev = re.split(r"[\r\n]", before)[-1]
         if prev.strip(_TRIM + ">") and not _FENCE_LINE.search(prev):
             return m.group(0)
     return m.group(1) + ZWSP
@@ -153,7 +159,7 @@ def neutralize(text: str) -> str:
     text = _INLINE.sub(lambda m: m.group(1) + ZWSP, text)
     text = _BLOCK_QUERY.sub(_block_query, text)
     text = _EXCALIDRAW_KEY.sub(lambda m: m.group(1) + ZWSP, text)
-    text = _ESCAPED_KEY.sub(lambda m: m.group(1) + ZWSP, text)
+    text = _ESCAPED_KEY.sub(lambda m: (m.group(1) or m.group(2)) + ZWSP, text)
     return _HTML_CODE.sub("<" + ZWSP, text)
 
 

@@ -175,3 +175,17 @@ def test_install_and_update_share_one_quickadd_patch_step() -> None:
     assert "Invoke-QuickAddPatch -Vault $vault -Python" in INSTALL
     for src, name in ((INSTALL, "install.ps1"), (UPDATE, "update.ps1")):
         assert "'installers\\lib\\quickadd_patch.py'" not in src, f"{name} carries its own copy of the patch step"
+
+
+def test_the_quickadd_patch_is_idempotent_and_leaves_no_temp_file(tmp_path, allow_subprocess) -> None:
+    """Written atomically (temp file + replace): a truncated main.js would
+    never be repaired, since QuickAdd's patched bundle is exempt from drift."""
+    helper = REPO / "installers" / "lib" / "quickadd_patch.py"
+    main = tmp_path / "main.js"
+    main.write_text("a;getOrCreateFolder(t,{allowedRoots:t,topItems:i,executor:e});b", encoding="utf-8")
+    first = subprocess.run([sys.executable, str(helper), str(main)], capture_output=True, text=True)
+    second = subprocess.run([sys.executable, str(helper), str(main)], capture_output=True, text=True)
+    assert (first.stdout.strip(), second.stdout.strip()) == ("PATCHED", "ALREADY_PATCHED")
+    assert main.read_text(encoding="utf-8") == "a;getOrCreateFolder(t,{allowedRoots:t,executor:e});b"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["main.js"]
+    assert "os.replace(tmp, path)" in helper.read_text(encoding="utf-8")
