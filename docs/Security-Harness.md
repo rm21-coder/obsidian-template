@@ -101,25 +101,34 @@ triggers the same way (since 2026-10-03):
   renders as markdown. A crafted query could build a remote image URL out of
   another note's text, so opening the note sends that text to an outside
   server. `dataview` / `dataviewjs` blocks and `` `$= …` `` are covered too.
+- **Dataview inside code blocks.** Dataview also runs an `=` query that
+  begins a code block, any code block, by default.
+- **Bases.** Obsidian's own `base` blocks can build an image URL from note
+  properties, the same channel as a Dataview query.
 - **Meta Bind, Metadata Menu, Excalidraw.** Their blocks (`meta-bind-*`,
   `mdm`, `excalidraw-script-install`) and Meta Bind's inline `INPUT[`,
-  `VIEW[` and `BUTTON[` render controls that act on a click.
+  `VIEW[` and `BUTTON[` render controls that act on a click. Excalidraw's
+  frontmatter keys would open a note as a drawing and offer to run its script.
 
 A zero-width space goes between the fence and the language, after the
-opening backticks of inline code, and inside a raw `<code` tag. The language
-is matched the way the plugins match it: entities and backslash escapes
-decoded, case ignored, leading whitespace (JavaScript's `trim()` set) skipped,
-on any line, so fences inside list items and quotes count. Ordinary code
-blocks (`python`, `json`, …) are left alone.
+opening backticks of inline code, before a line that starts a code-block
+query, and inside a raw `<code` tag. The language is matched the way Obsidian
+finds it: entities and backslash escapes decoded, case ignored, leading
+whitespace (JavaScript's `trim()` set) skipped, on any line, so fences inside
+list items and quotes count. A language that would smuggle in a second CSS
+class (a form feed, or an encoded line break, before `language-tasks`) is
+rewritten so it cannot. Other code blocks keep their language, so syntax
+highlighting still works.
 
 `tests/test_templater_guard.py` lists every guarded writer. Any new script
 that writes outside text into the vault belongs on that list.
 
-The guard has two limits:
+The guard has three limits:
 
 - **Copied text keeps the space.** Text copied out of a neutralised note
-  carries the zero-width space, so a clipped JSP or ASP snippet (`<%= … %>`)
-  no longer pastes cleanly.
+  carries the zero-width space, so a clipped JSP or ASP snippet (`<%= … %>`),
+  an Excel formula in code (`` `=SUM(A1:A9)` ``) or an HTML sample using
+  `<code>` no longer pastes cleanly.
 - **New clippings are briefly raw.** The Web Clipper writes a note directly,
   and it stays unchanged until `strip_ads` rewrites it: a few seconds on a Mac,
   where a folder watch starts it, and up to 5 minutes on Windows, where it runs
@@ -127,6 +136,9 @@ The guard has two limits:
   switched to reading view in that window. A plugin block renders in Live
   Preview too, so opening a clipping of a hostile page in that window would
   run it.
+- **Search blocks stay live.** Obsidian's core `query` block is left alone. It
+  lists vault search results inside the note, on screen only, with no way to
+  send them anywhere.
 
 Either way, the export gate blocks a dynamic command anywhere in an export
 (see `Data-Classification.md`).

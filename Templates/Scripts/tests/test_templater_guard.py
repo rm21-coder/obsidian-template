@@ -123,21 +123,46 @@ import shutil
 import subprocess
 
 PLUGIN_LANGS = ("tasks", "dataview", "dataviewjs", "meta-bind", "meta-bind-button",
-                "meta-bind-embed", "meta-bind-js-view", "mdm", "excalidraw-script-install")
+                "meta-bind-embed", "meta-bind-js-view", "mdm", "excalidraw-script-install",
+                "base")
+PLUGIN_PREFIXES = ("tasks", "dataview", "meta-bind", "mdm", "excalidraw", "base")
 JS_WS = "\u00a0\u2003\u3000\ufeff\u2028"   # JS trim() drops these; U+200B it keeps
 
 
 def plugin_fences(text: str) -> list[str]:
-    """Languages a plugin would render: every fence run's info string, decoded
-    as CommonMark decodes it, first word, case-folded. Over-approximates where a
-    fence may start (the plugins only ever see a subset)."""
+    """Languages a plugin would render, modelled on Obsidian (reviewed in its
+    app.js, 2026-10-03). Over-approximates where a fence may start.
+
+    Reading view: the info string is backslash-unescaped, then entity-decoded;
+    the language is what follows up to the first space or tab; the block gets
+    class "language-<that>", and the DOM splits a class attribute on LF, FF, CR
+    and space, so every resulting "language-X" class counts. Live Preview: the
+    raw text after the fence, up to the first character outside [\\w/+#-]."""
     langs = []
     for m in re.finditer(r"(?=(?:```|~~~)([^\r\n]*))", text):    # every position
-        info = html.unescape(re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", m.group(1).lstrip("`~")))
-        word = (info.strip(" \t" + JS_WS).split() or [""])[0].lower()
-        if word.startswith(("tasks", "dataview", "meta-bind", "mdm", "excalidraw")):
-            langs.append(word)
-    return langs
+        raw = m.group(1).lstrip("`~")
+        info = html.unescape(re.sub(r"\\([!-/:-@\[-`{-~])", r"\1", raw))
+        token = re.split(r"[ \t]", info.lstrip(" \t"), maxsplit=1)[0]
+        for cls in re.split(r"[\n\r\f ]", "language-" + token):
+            if cls.startswith("language-"):
+                langs.append(cls[len("language-"):].lower())
+        live = re.match(r"[ \t]*([\w/+#-]*)", raw).group(1)
+        langs.append(live.lower())
+        # and the looser reading earlier models used (JS trim, case-folded)
+        langs.append((info.strip(" \t" + JS_WS).split() or [""])[0].lower())
+    return [lang for lang in langs if lang.startswith(PLUGIN_PREFIXES)]
+
+
+def block_queries(text: str) -> list[str]:
+    """Code-block text Dataview would run as an `=` query (its default
+    inlineQueriesInCodeblocks): any line, after quote markers and indentation,
+    starting with "=" or "$=", unless it is a setext underline."""
+    out = []
+    for line in text.splitlines():
+        body = re.sub(r"^[ \t>" + JS_WS + "]*", "", line)
+        if body.startswith("$=") or (body.startswith("=") and not re.fullmatch(r"=+[ \t]*", body)):
+            out.append(line)
+    return out
 
 
 @pytest.mark.parametrize("lang", PLUGIN_LANGS)
@@ -157,17 +182,24 @@ def plugin_fences(text: str) -> list[str]:
     "```&#x{h};{r}",
     "```&{name}{r}",
     "text ```` ```{l}",
+    "```x\flanguage-{l}",
+    "```x&#10;language-{l}",
+    "```x&#12;language-{l}",
+    "```x&#13;language-{l}",
+    "```x&NewLine;language-{l}",
+    "~~~x\\&#10;language-{l}",
 ])
 def test_no_plugin_block_survives_in_any_form(lang: str, shape: str) -> None:
     first = lang[0]
     raw = shape.format(l=lang, L=lang.upper(), r=lang[1:], n=ord(first),
                        h=format(ord(first), "x"), name={"t": "#116;", "d": "#100;",
-                                                       "m": "#109;", "e": "#101;"}[first])
+                                                       "m": "#109;", "e": "#101;", "b": "#98;"}[first])
     assert plugin_fences(raw), f"case does not reach the oracle: {raw!r}"
     out = G.neutralize(raw)
     assert not plugin_fences(out), out
     assert G.is_neutral(out) and G.neutralize(out) == out
-    assert out.replace(G.ZWSP, "") == raw          # reads the same
+    if "language-" not in shape:    # a smuggled class is rewritten, not just split
+        assert out.replace(G.ZWSP, "") == raw          # reads the same
 
 
 @pytest.mark.parametrize("raw", ["```meta\\-bind-button", "```excalidraw\\-script-install",
@@ -176,6 +208,30 @@ def test_escaped_language_names_are_caught(raw: str) -> None:
     """CommonMark decodes backslash escapes and entities in a fence's info."""
     assert plugin_fences(raw), raw
     assert not plugin_fences(G.neutralize(raw))
+
+
+@pytest.mark.parametrize("raw", [
+    "```text\n= this.file.name\n```", "~~~\n= [[Secret]].field\n~~~",
+    "para\n\n    = this.file.name\n", "```\n\n  $= dv.pages()\n```",
+    "> ```\n> = x\n> ```", "- ```\n  = x\n  ```", "\t\ufeff= x", "<pre><code>\n= x",
+])
+def test_no_dataview_query_survives_inside_a_code_block(raw: str) -> None:
+    assert block_queries(raw), f"case does not reach the oracle: {raw!r}"
+    out = G.neutralize(raw)
+    assert not block_queries(out), out
+    assert G.is_neutral(out) and out.replace(G.ZWSP, "") == raw
+
+
+def test_setext_headings_and_ordinary_equals_are_left_alone() -> None:
+    for text in ("Title\n=====\n", "Title\n=\n", "a == b", "x = 1", "a\n  b = c"):
+        assert G.neutralize(text) == text, text
+
+
+def test_excalidraw_drawing_keys_are_defused() -> None:
+    raw = "---\nexcalidraw-plugin: parsed\nexcalidraw-onload-script: alert(1)\n---\n"
+    out = G.neutralize(raw)
+    assert "excalidraw-plugin" not in out and "excalidraw-onload-script" not in out
+    assert G.is_neutral(out) and out.replace(G.ZWSP, "") == raw
 
 
 def test_ordinary_code_blocks_are_left_alone() -> None:
@@ -235,5 +291,6 @@ def test_mixed_triggers_fuzz() -> None:
             out = G.neutralize(raw)
             assert G.is_neutral(out), raw
             assert not plugin_fences(out), raw
+            assert not block_queries(out), raw
             assert inline_triggers(out, lambda xs: [x.strip(" \t\n" + JS_WS) for x in xs]) == [], raw
             assert out.replace(G.ZWSP, "") == raw
