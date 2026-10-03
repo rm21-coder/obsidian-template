@@ -181,7 +181,9 @@ machine already has:
 3. It re-renders and reloads only the scheduled jobs whose template changed,
    prints the diff, and backs up the old copy to
    `~/Library/Logs/obsidian-template-update/`.
-4. It reinstalls the plugins only if their pins moved.
+4. It reinstalls the plugins from their pins when the pins moved or an installed
+   plugin is not its pinned copy. A plugin you updated yourself inside Obsidian
+   is put back to the reviewed version.
 5. It reports the two security controls, without adopting a baseline.
 
 A job that is new upstream, or that you declined, is listed with the

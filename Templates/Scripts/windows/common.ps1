@@ -255,6 +255,57 @@ function Repair-SettingsLineEndings {
     }
 }
 
+# Drop the topItems suggestion from QuickAdd's deterministic getFolderPath
+# fall-through (see install.ps1 step 31 and installers/lib/quickadd_patch.py).
+# Shared by install and update: a plugin reinstall brings back the unpatched
+# bundle, so the update must patch again. -Python is the interpreter plus any
+# launcher arguments (py.exe's -3).
+function Invoke-QuickAddPatch {
+    param([Parameter(Mandatory)][string]$Vault, [Parameter(Mandatory)][string[]]$Python)
+    $qa     = Join-Path $Vault '.obsidian\plugins\quickadd\main.js'
+    $qaHelp = Join-Path $Vault 'installers\lib\quickadd_patch.py'
+    if (-not (Test-Path $qa)) {
+        Write-Host '  quickadd main.js not found; skipping'
+        return
+    }
+    if (-not (Test-Path $qaHelp)) {
+        Write-Warning "  patch helper not found at $qaHelp; skipping"
+        return
+    }
+    $exe  = $Python[0]
+    $rest = @($Python | Select-Object -Skip 1)
+    $qaRes = (& $exe @rest $qaHelp $qa 2>&1 | Out-String).Trim()
+    switch -Regex ($qaRes) {
+        '^PATCHED$'         { Write-Host    '  quickadd patched (dropped topItems in default fall-through)' }
+        '^ALREADY_PATCHED$' { Write-Host    '  quickadd already patched' }
+        '^NOT_FOUND$'       { Write-Warning '  quickadd pattern not found (plugin version differs); skipping' }
+        '^AMBIGUOUS:(\d+)$' { Write-Warning "  expected 1 occurrence of the patch target, found $($Matches[1]); skipping" }
+        default             { Write-Warning "  quickadd patch helper failed: $qaRes" }
+    }
+}
+
+# Why the plugins need reinstalling from their pins, or $null when they do not:
+# the commits between $From and HEAD moved the pins (a same-version re-pin
+# included), or an enabled plugin's installed manifest is not the pinned one
+# (installers/lib/plugin_drift.py) -- which also makes a re-run after a failed
+# download retry it. The same test as macOS update.sh. If the drift check
+# cannot run, the answer is "reinstall": Install-Plugins then reports why.
+function Get-PluginReinstallReason {
+    param([Parameter(Mandatory)][string]$Vault, [string]$From,
+          [Parameter(Mandatory)][string]$VenvPython)
+    if ($From) {
+        git -C $Vault diff --quiet $From HEAD -- installers/plugin-pins.json 2>$null
+        if ($LASTEXITCODE -ne 0) { return 'the plugin pins changed' }
+    }
+    $helper = Join-Path $Vault 'installers\lib\plugin_drift.py'
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $ids = @(& $VenvPython $helper $Vault 2>$null) } finally { $ErrorActionPreference = $prevEAP }
+    if ($LASTEXITCODE -ne 0) { return 'the plugin drift check failed' }
+    $ids = @($ids | Where-Object { $_ })
+    if ($ids) { return "not at their pins: $($ids -join ', ')" }
+    return $null
+}
+
 function Get-SecretsFile {
     return (Join-Path $env:USERPROFILE 'dev\secrets\.env')
 }

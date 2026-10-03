@@ -11,6 +11,7 @@ touches the real LaunchAgents.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -118,7 +119,7 @@ def scratch(tmp_path):
         shutil.copy2(REPO / rel, vault / rel)
     shutil.copytree(REPO / "installers" / "lib", vault / "installers" / "lib")
     shutil.copytree(REPO / "installers" / "components", vault / "installers" / "components")
-    (vault / "installers" / "plugin-pins.json").write_text("{}\n")
+    (vault / "installers" / "plugin-pins.json").write_text("[]\n")
     scripts = vault / "Templates" / "Scripts"
     scripts.mkdir(parents=True)
     for p in (REPO / "Templates" / "Scripts").glob("*.plist"):
@@ -127,6 +128,7 @@ def scratch(tmp_path):
         shutil.copy2(REPO / "Templates" / "Scripts" / name, scripts / name)
     (vault / ".obsidian").mkdir()
     (vault / ".obsidian" / "types.json").write_text("{}\n")
+    (vault / ".obsidian" / "community-plugins.json").write_text("[]")
     # OBSIDIAN_PGREP: the real pgrep would see the maintainer's own Obsidian,
     # and the update refuses while it runs.
     env = {**os.environ, "HOME": str(home), "USER": "tester", "OBSIDIAN_PGREP": "false",
@@ -168,6 +170,32 @@ def test_a_dry_run_reports_the_plan_and_changes_nothing(scratch, allow_subproces
     assert not (home / "Library" / "Logs" / "obsidian-template-update").exists()
     assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=vault, capture_output=True,
                           text=True).stdout == head
+
+
+@macos_only
+@pytest.mark.parametrize("drift", [False, True])
+def test_a_plugin_not_at_its_pin_is_reinstalled(scratch, drift, allow_subprocess):
+    """Decided from what is installed, so a re-run after a failed download (the
+    pull brings nothing new) still reinstalls, and so does an install that
+    drifted from its pins some other way."""
+    home, vault, la, env = scratch
+    pinned = b'{"id": "p1", "version": "2.0.0"}'
+    pin = [{"id": "p1", "ref": "2.0.0", "files": {"manifest.json": {
+        "url": "https://example.invalid/m", "sha256": hashlib.sha256(pinned).hexdigest()}}}]
+    (vault / "installers" / "plugin-pins.json").write_text(json.dumps(pin))
+    (vault / ".obsidian" / "community-plugins.json").write_text('["p1"]')
+    subprocess.run(["git", "commit", "-qam", "pin p1"], cwd=vault, check=True, env=env)
+    installed = vault / ".obsidian" / "plugins" / "p1"
+    installed.mkdir(parents=True)
+    (installed / "manifest.json").write_bytes(b'{"id": "p1", "version": "1.0.0"}' if drift else pinned)
+    r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--dry-run"],
+                       capture_output=True, text=True, env=env)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    if drift:
+        assert "dry run: not at their pins: p1; would reinstall plugins (30) and re-patch QuickAdd (31)" in out
+    else:
+        assert "every plugin is at its pin; left as it is" in out
 
 
 @macos_only

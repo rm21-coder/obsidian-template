@@ -85,6 +85,28 @@ $venvPy = Join-Path $scriptsDir '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPy)) { throw "No venv at $venvPy. This is not an existing install: run install.ps1." }
 Install-Requirements -VenvPython $venvPy -ScriptsDir $scriptsDir
 
+# Plugins: reinstalled from their pins when the pins moved or an installed
+# plugin is not its pinned copy, as macOS update.sh does. Without this a re-pin
+# -- a plugin's security fix included -- never reached an existing Windows
+# install. A failure here does not stop the remaining steps, but the update
+# ends INCOMPLETE: Install-Plugins throws when a download fails or does not
+# match its pinned hash, and that refusal needs a person to look at it.
+$pluginFailure = $null
+$pluginReason = Get-PluginReinstallReason -Vault $vault -From $From -VenvPython $venvPy
+if ($pluginReason) {
+    Write-Host '== plugins =='
+    Write-Host "  $pluginReason; reinstalling from the pins"
+    try {
+        & (Join-Path $PSScriptRoot 'Install-Plugins.ps1')
+        Invoke-QuickAddPatch -Vault $vault -Python @($venvPy)
+        Write-Host '  The plugin integrity check will now report the new plugin files. Vet what' -ForegroundColor Yellow
+        Write-Host "  changed (git -C `"$vault`" diff $From HEAD -- installers/plugin-pins.json) before adopting it." -ForegroundColor Yellow
+    } catch {
+        $pluginFailure = "$_"
+        Write-Host "  Plugins NOT updated: $pluginFailure" -ForegroundColor Red
+    }
+}
+
 # Plugins the template has retired: disabled by the pull, removed here --
 # before the task step, whose failure ends this script.
 Remove-RetiredPlugins -Vault $vault
@@ -138,6 +160,12 @@ if ($status -eq 'ok') {
 }
 
 Write-Host ''
+if ($pluginFailure) {
+    Write-Host 'Update INCOMPLETE: everything else is updated, but the plugins are not (see' -ForegroundColor Red
+    Write-Host '"Plugins NOT updated" above). A hash mismatch means upstream changed a file under' -ForegroundColor Red
+    Write-Host 'its pin: do not work around it. A download failure is safe to retry: run the update again.' -ForegroundColor Red
+    exit 1
+}
 if ($From -eq $to) {
     Write-Host "Already at $to; requirements and scheduled tasks refreshed." -ForegroundColor Green
 } else {

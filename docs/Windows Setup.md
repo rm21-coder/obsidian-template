@@ -166,10 +166,16 @@ One command, from PowerShell in the vault:
 cd $env:USERPROFILE\Obsidian; powershell -ExecutionPolicy Bypass -File .\Templates\Scripts\windows\update.ps1
 ```
 
-It runs three steps in a fixed order:
+Quit Obsidian first: the update refuses while it is open. It runs three steps
+in a fixed order:
 
 1. **`git pull --ff-only`** brings in the new code.
 2. **Reinstall the requirements**, using the same pip step `install.ps1` runs.
+   The plugins are reinstalled here too, from their pins, when the pins moved
+   or an installed plugin is not its pinned copy. The plugins are compared by
+   manifest hash (`installers/lib/plugin_drift.py`), so a plugin you updated
+   yourself inside Obsidian goes back to the reviewed version. Plugins the
+   template has retired, Templater among them, are moved out of the vault.
 3. **`Register-Tasks.ps1`** re-registers every scheduled task.
 
 All three are needed:
@@ -184,6 +190,12 @@ All three are needed:
 After pulling, `update.ps1` runs the rest of the update from the version it
 just pulled, so steps 2 and 3 always use the new code. The update is safe to
 repeat.
+
+**"Plugins NOT updated" and "Update INCOMPLETE".** A plugin download failed,
+or a file did not match its pinned hash. Everything else is updated. A failed
+download is safe to retry: run the update again, and it reinstalls the
+plugins that are still not at their pins. A hash mismatch means upstream
+changed a file under its pin; leave it for the maintainer to re-pin.
 
 **`update.ps1` not found.** Your install predates it. Run `git pull` once,
 then the command above.

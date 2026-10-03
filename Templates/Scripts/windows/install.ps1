@@ -330,22 +330,7 @@ Write-Host '== 31 quickadd patch =='
 # locals every release, so the fall-through has to be identified structurally,
 # as the one getOrCreateFolder call whose first argument IS its own
 # allowedRoots) that two implementations would inevitably drift.
-$qa     = Join-Path $vault '.obsidian\plugins\quickadd\main.js'
-$qaHelp = Join-Path $vault 'installers\lib\quickadd_patch.py'
-if (-not (Test-Path $qa)) {
-    Write-Host '  quickadd main.js not found; skipping'
-} elseif (-not (Test-Path $qaHelp)) {
-    Write-Warning "  patch helper not found at $qaHelp; skipping"
-} else {
-    $qaRes = (& $base[0] @(Get-CandPrefix $base) $qaHelp $qa 2>&1 | Out-String).Trim()
-    switch -Regex ($qaRes) {
-        '^PATCHED$'         { Write-Host    '  quickadd patched (dropped topItems in default fall-through)' }
-        '^ALREADY_PATCHED$' { Write-Host    '  quickadd already patched' }
-        '^NOT_FOUND$'       { Write-Warning '  quickadd pattern not found (plugin version differs); skipping' }
-        '^AMBIGUOUS:(\d+)$' { Write-Warning "  expected 1 occurrence of the patch target, found $($Matches[1]); skipping" }
-        default             { Write-Warning "  quickadd patch helper failed: $qaRes" }
-    }
-}
+Invoke-QuickAddPatch -Vault $vault -Python (@($base[0]) + @(Get-CandPrefix $base))
 
 Write-Host '== 40 venv + deps =='
 # CTranslate2 (faster-whisper, for podcast transcription) links against the MSVC

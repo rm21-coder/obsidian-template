@@ -186,18 +186,27 @@ main() {
 
     # ---- 4. plugins ---------------------------------------------------------
     info "== 4/6 plugins =="
+    # Reinstall when the pull moved the pins, or when an installed plugin is not
+    # its pinned copy: a re-run after a failed download, or an install that
+    # drifted from its pins (plugin_drift.py compares each manifest's hash).
+    local plugin_reason="" drift
     if pins_changed "$REPO_ROOT" "$FROM"; then
+        plugin_reason="the plugin pins changed"
+    elif drift="$(plugins_drifted "$VAULT")"; then
+        plugin_reason="$drift"
+    fi
+    if [[ -n "$plugin_reason" ]]; then
         if [[ "$DRY_RUN" -eq 1 ]]; then
-            info "  dry run: the plugin pins changed; would reinstall plugins (30) and re-patch QuickAdd (31)"
+            info "  dry run: $plugin_reason; would reinstall plugins (30) and re-patch QuickAdd (31)"
         else
-            info "  the plugin pins changed; reinstalling"
+            info "  $plugin_reason; reinstalling from the pins"
             "$REPO_ROOT/install.sh" --auto --only 30-plugins
             "$REPO_ROOT/install.sh" --auto --only 31-quickadd-patch
             warn "  The plugin integrity check will now report the new plugin files. Vet what"
             warn "  changed (git diff $FROM $TO -- installers/plugin-pins.json) before adopting it."
         fi
     else
-        ok "  pins unchanged; plugins left as they are"
+        ok "  every plugin is at its pin; left as it is"
     fi
     retire_plugins "$VAULT" "${backup:-$HOME/Library/Logs/obsidian-template-update/$(date +%Y%m%d-%H%M%S)}" "$DRY_RUN"
 

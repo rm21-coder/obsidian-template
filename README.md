@@ -195,8 +195,8 @@ cd ~/Obsidian && ./update.sh              # --dry-run to see what would change
 
 Pulls, reinstalls the requirements, re-renders and reloads only the scheduled
 jobs this machine already has where their template changed (the old copy is
-backed up), reinstalls plugins only if their pins moved, and reports the
-security controls without adopting a baseline. Don't re-run `install.sh` to
+backed up), reinstalls the plugins from their pins when the pins moved or a
+plugin is not its pinned copy, and reports the security controls without adopting a baseline. Don't re-run `install.sh` to
 update: it does not remember what you declined, so `--auto` would add every
 component.
 
@@ -206,7 +206,8 @@ component.
 cd $env:USERPROFILE\Obsidian; powershell -ExecutionPolicy Bypass -File .\Templates\Scripts\windows\update.ps1
 ```
 
-Pulls, reinstalls the requirements, and re-registers the scheduled tasks. See
+Pulls, reinstalls the requirements, reinstalls the plugins from their pins
+when needed (as on macOS), and re-registers the scheduled tasks. See
 "Updating an existing install" in [`docs/Windows Setup.md`](docs/Windows%20Setup.md).
 
 ## Uninstall

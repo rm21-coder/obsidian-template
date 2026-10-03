@@ -135,6 +135,23 @@ obsidian_running() {
     "${OBSIDIAN_PGREP:-pgrep}" -x Obsidian >/dev/null 2>&1
 }
 
+# plugins_drifted <vault>
+# True when an enabled plugin's installed manifest is not the pinned one
+# (installers/lib/plugin_drift.py), or the check itself cannot run -- then the
+# reinstall reports why. Catches what pins_changed cannot: a re-run after a
+# failed download, and an install that drifted from its pins some other way.
+# Prints the reason.
+plugins_drifted() {
+    local vault="$1" ids
+    if ! ids="$(python3 "$vault/installers/lib/plugin_drift.py" "$vault" 2>/dev/null)"; then
+        echo "the plugin drift check failed"
+        return 0
+    fi
+    [[ -n "$ids" ]] || return 1
+    echo "not at their pins: $(echo "$ids" | paste -sd ' ' -)"
+    return 0
+}
+
 # pins_changed <repo_root> <from_commit>
 # True when the update moved installers/plugin-pins.json, i.e. the pinned
 # plugin versions or hashes changed and the plugins need reinstalling.
