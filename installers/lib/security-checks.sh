@@ -145,7 +145,7 @@ want() {   # want <pass>
             [[ -z "$files" ]] && return 1
             case "$1" in
                 sca)     grep -qE 'requirements(-dropper)?\.(txt|lock)|lock_requirements\.py|lock_extras\.py|installers/lib/common\.sh|windows/common\.ps1' <<<"$files" ;;
-                sast)    grep -qE '\.py$'                          <<<"$files" ;;
+                sast)    grep -qE '\.py$|security-suppressions\.txt' <<<"$files" ;;
                 shell)   grep -qE '\.sh$'                          <<<"$files" ;;
                 secrets) return 0 ;;
                 dast)    grep -qE 'url_safety|source_mail|handoff|plugins|integrity|rag-sync' <<<"$files" ;;
@@ -216,6 +216,16 @@ fi
 if want sast; then
     expect sast
     _head "SAST - semgrep + bandit"
+    # Every accepted finding is counted, explained and dated; one past its
+    # re-check date fails the run until it is re-argued (see suppressions.py).
+    if python3 installers/lib/suppressions.py dates >"$OUT/suppressions.txt" 2>&1; then
+        record sast PASS "$(tail -1 "$OUT/suppressions.txt" | sed 's/^OK: //')"
+        _say "  PASS: $(tail -1 "$OUT/suppressions.txt")"
+    else
+        record sast FAIL "suppressions: expired, undated or uncounted - see suppressions.txt"
+        _say "  FAIL: security-suppressions.txt:"
+    fi
+    grep -E '^(FAIL|NOTE):' "$OUT/suppressions.txt" | while IFS= read -r l; do _say "    $l"; done
     if ! have semgrep; then
         skip_missing sast semgrep "brew install semgrep"
     else
@@ -228,27 +238,15 @@ if want sast; then
                 --config installers/lib/semgrep-rules/ \
                 --json -o "$OUT/semgrep.json" \
                 --metrics=off --quiet . >"$OUT/semgrep.log" 2>&1
-        n="$(python3 - "$OUT/semgrep.json" "$SUPPRESSIONS" <<'PY' || echo '?'
-import json, sys, pathlib
-res = json.load(open(sys.argv[1])).get("results", [])
-sup = set()
-p = pathlib.Path(sys.argv[2])
-if p.exists():
-    for line in p.read_text().splitlines():
-        line = line.split("#")[0].strip()
-        if line.startswith("semgrep"):
-            sup.add(tuple(line.split()[1:3]))
-live = [r for r in res
-        if (r["path"], r["check_id"].split(".")[-1]) not in sup]
-print(len(live))
-PY
-)"
+        n="$(python3 installers/lib/suppressions.py apply semgrep "$OUT/semgrep.json" \
+                2>"$OUT/semgrep-live.txt" || echo '?')"
         if [[ "$n" == "0" ]]; then
             record sast PASS "semgrep clean (after suppressions)"
             _say "  PASS: semgrep - no unsuppressed findings."
         else
             record sast FAIL "semgrep: $n unsuppressed finding(s)"
-            _say "  FAIL: semgrep - $n unsuppressed finding(s). See semgrep.json"
+            _say "  FAIL: semgrep - $n unsuppressed finding(s). See semgrep-live.txt"
+            sed 's/^/    /' "$OUT/semgrep-live.txt" | head -20 | while IFS= read -r l; do _say "$l"; done
         fi
     fi
 
@@ -257,28 +255,15 @@ PY
     else
         bandit -q -r Templates/Scripts installers -ll -f json \
                -o "$OUT/bandit.json" >"$OUT/bandit.log" 2>&1
-        n="$(python3 - "$OUT/bandit.json" "$SUPPRESSIONS" <<'PY' || echo '?'
-import json, sys, pathlib, os
-d = json.load(open(sys.argv[1]))
-sup = set()
-p = pathlib.Path(sys.argv[2])
-if p.exists():
-    for line in p.read_text().splitlines():
-        line = line.split("#")[0].strip()
-        if line.startswith("bandit"):
-            sup.add(tuple(line.split()[1:3]))
-root = os.getcwd() + "/"
-live = [r for r in d.get("results", [])
-        if (r["filename"].replace(root, ""), r["test_id"]) not in sup]
-print(len(live))
-PY
-)"
+        n="$(python3 installers/lib/suppressions.py apply bandit "$OUT/bandit.json" \
+                2>"$OUT/bandit-live.txt" || echo '?')"
         if [[ "$n" == "0" ]]; then
             record sast PASS "bandit clean (after suppressions)"
             _say "  PASS: bandit - no unsuppressed MEDIUM+ findings."
         else
             record sast FAIL "bandit: $n unsuppressed finding(s)"
-            _say "  FAIL: bandit - $n unsuppressed MEDIUM+ finding(s). See bandit.json"
+            _say "  FAIL: bandit - $n unsuppressed MEDIUM+ finding(s). See bandit-live.txt"
+            sed 's/^/    /' "$OUT/bandit-live.txt" | head -20 | while IFS= read -r l; do _say "$l"; done
         fi
     fi
 fi
