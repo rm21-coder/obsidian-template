@@ -25,9 +25,8 @@
   "obsidian-tasks-plugin:edit-task": [
     {
       "modifiers": [
-        "Alt",
-        "Ctrl",
-        "Mod"
+        "Mod",
+        "Alt"
       ],
       "key": "T"
     }
@@ -35,9 +34,8 @@
   "quickadd:choice:f6a7b8c9-0123-45f0-1234-6789012345f0": [
     {
       "modifiers": [
-        "Alt",
-        "Ctrl",
-        "Mod"
+        "Mod",
+        "Alt"
       ],
       "key": "P"
     }
@@ -45,9 +43,8 @@
   "quickadd:choice:d4e5f6a7-8901-23de-f012-4567890123de": [
     {
       "modifiers": [
-        "Alt",
-        "Ctrl",
-        "Mod"
+        "Mod",
+        "Alt"
       ],
       "key": "K"
     }

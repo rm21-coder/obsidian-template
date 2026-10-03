@@ -74,7 +74,7 @@ QuickAdd provides every command that creates or acts on notes. Seven are configu
 
 - **Step 1:** user script `Templates/QuickAdd/new_meeting.js` — asks for the meeting type (Group, Individual, Ad-hoc) and fills the variables the template uses (see Section 4.1)
 - **Step 2:** template `Templates/Meeting Template.md` into **Meetings**, named `{{DATE:YYYY-MM-DD HHmm}}`
-- **Hotkey:** Cmd+Shift+M · **Sidebar Icon:** lucide-handshake
+- **Hotkey:** Cmd+Shift+M (Ctrl+Shift+M on Windows) · **Sidebar Icon:** lucide-handshake
 
 #### New Note Command
 
@@ -97,12 +97,12 @@ QuickAdd provides every command that creates or acts on notes. Seven are configu
 #### Insert People Template Command
 
 - **Capture** of `{{TEMPLATE:Templates/People Template.md}}` into the top of the open note — for an **empty** person note, such as one created by clicking a `[[Name]]` link. Into a note that already has properties it adds a second block below them, which Obsidian does not read as properties.
-- **Hotkey:** Ctrl+Alt+Cmd+P
+- **Hotkey:** Cmd+Option+P (Ctrl+Alt+P on Windows)
 
 #### Move to Knowledge and Clean Filenames (macros)
 
 - User scripts `Templates/QuickAdd/move_to_knowledge.js` and `Templates/QuickAdd/clean_filenames.js` (see Section 4.6)
-- **Move to Knowledge hotkey:** Ctrl+Alt+Cmd+K · both have sidebar icons
+- **Move to Knowledge hotkey:** Cmd+Option+K (Ctrl+Alt+K on Windows) · both have sidebar icons
 
 All open in a new tab with focus where they create a note.
 
@@ -326,7 +326,7 @@ topics: []
 
 Two commands act on notes rather than create them. Each is a QuickAdd macro running one user script from `Templates/QuickAdd/`, and runs only when its command is run (Section 3.2).
 
-**Move to Knowledge** (`move_to_knowledge.js`, Ctrl+Alt+Cmd+K): moves the open note into Knowledge/, and Obsidian updates the links to it. It refuses, rather than overwrites, when Knowledge/ already has a note of that name. Useful for triaging clippings or inbox items.
+**Move to Knowledge** (`move_to_knowledge.js`, Cmd+Option+K / Ctrl+Alt+K): moves the open note into Knowledge/, and Obsidian updates the links to it. It refuses, rather than overwrites, when Knowledge/ already has a note of that name. Useful for triaging clippings or inbox items.
 
 **Clean Filenames** (`clean_filenames.js`): renames every note in Clippings/ whose name carries characters that trip up links or Windows — bullets, smart quotes, em and en dashes, accented letters, fractions, characters illegal in file names, and a leading dot — and keeps the original name in a `title` property when the clipping has properties. A rename that would collide with an existing note (ignoring case, as macOS and Windows do), a name that would end up empty, and a note whose properties cannot be read are each skipped and counted. See Section 9.5.
 

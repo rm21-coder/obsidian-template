@@ -42,37 +42,39 @@ function notesIn(app, folder) {
 module.exports = async (params) => {
   const { app, quickAddApi } = params;
 
-  // Escape on a picker means "no choice", as it did before.
-  const pick = async (items, placeholder) => {
-    if (!items.length) return null;
+  // Escape at any picker cancels the command, so no note is made -- as Escape
+  // does at New Note's picker and at the ad-hoc title. (Choosing a type and
+  // then escaping the group list used to leave an empty "Group" meeting.)
+  const pick = async (items, placeholder, what) => {
+    if (!items.length) params.abort(`No ${what} to choose from`);
+    let answer = null;
     try {
-      return (await quickAddApi.suggester(items, items, placeholder)) || null;
+      answer = await quickAddApi.suggester(items, items, placeholder);
     } catch (e) {
-      return null;
+      answer = null;
     }
+    if (!answer) params.abort("New Meeting cancelled");
+    return answer;
   };
 
-  const meetingType = (await pick(["Group", "Individual", "Ad-hoc"], "Meeting type:")) || "Ad-hoc";
+  const meetingType = await pick(["Group", "Individual", "Ad-hoc"], "Meeting type:", "meeting types");
   let titleLine = "";
   let groupSection = "";
   let peopleList = "";
 
   if (meetingType === "Group") {
-    groupSection = "group:\n";
-    const selected = await pick(notesIn(app, "Groups"), "Select a meeting group:");
-    if (selected) {
-      groupSection = `group:\n  - "[[${yamlSafe(selected)}]]"\n`;
-      const file = app.vault.getAbstractFileByPath(`Groups/${selected}.md`);
-      const content = file ? await app.vault.read(file) : "";
-      const links = content.match(/\[\[([^\]]+)\]\]/g) || [];
-      peopleList = links
-        .filter((link) => !IMAGE_EMBED.test(link) && !BASE_EMBED.test(link))
-        .map((link) => `  - "${yamlSafe(link)}"`)
-        .join("\n");
-    }
+    const selected = await pick(notesIn(app, "Groups"), "Select a meeting group:", "notes in Groups/");
+    groupSection = `group:\n  - "[[${yamlSafe(selected)}]]"\n`;
+    const file = app.vault.getAbstractFileByPath(`Groups/${selected}.md`);
+    const content = file ? await app.vault.read(file) : "";
+    const links = content.match(/\[\[([^\]]+)\]\]/g) || [];
+    peopleList = links
+      .filter((link) => !IMAGE_EMBED.test(link) && !BASE_EMBED.test(link))
+      .map((link) => `  - "${yamlSafe(link)}"`)
+      .join("\n");
   } else if (meetingType === "Individual") {
-    const selected = await pick(notesIn(app, "People"), "Select a person:");
-    if (selected) peopleList = `  - "[[${yamlSafe(selected)}]]"`;
+    const selected = await pick(notesIn(app, "People"), "Select a person:", "notes in People/");
+    peopleList = `  - "[[${yamlSafe(selected)}]]"`;
   } else {
     let title = "";
     while (!title.trim()) {

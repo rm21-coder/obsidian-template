@@ -189,7 +189,7 @@ def test_group_meeting_takes_the_groups_people_without_images(tmp_path, allow_su
 def test_individual_and_cancelled_type(tmp_path, allow_subprocess) -> None:
     out = _run(tmp_path, "new_meeting.js", {"folders": {"People": ["Ann Smith.md"]}, "answers": ["Individual", "Ann Smith"]})
     assert out["variables"]["peopleList"] == '  - "[[Ann Smith]]"'
-    out = _run(tmp_path, "new_meeting.js", {"answers": ["__cancel__", "Lunch {{DATE}} \\ talk"]})
+    out = _run(tmp_path, "new_meeting.js", {"answers": ["Ad-hoc", "Lunch {{DATE}} \\ talk"]})
     assert out["variables"]["meetingType"] == "Ad-hoc"
     assert out["variables"]["titleLine"] == 'title: "Lunch DATE \\\\ talk"\n'    # token braces dropped, backslash escaped
 
@@ -335,3 +335,49 @@ def test_quickadd_settings_will_not_dirty_the_tree_on_first_launch() -> None:
 def test_no_stale_templater_entries_remain() -> None:
     assert "templater-obsidian" not in (REPO / ".gitignore").read_text(encoding="utf-8")
     assert "templater" not in (REPO / ".obsidian" / "ribbon-config.json").read_text(encoding="utf-8").lower()
+
+
+# ---- the ARM laptop run of 9b39b8a (2026-10-03) -----------------------------
+
+@needs_node
+@pytest.mark.parametrize("scenario,marker", [
+    ({"answers": ["__cancel__"]}, "ABORT:New Meeting cancelled"),                                  # type picker
+    ({"folders": {"Groups": ["G.md"]}, "answers": ["Group", "__cancel__"]}, "ABORT:New Meeting cancelled"),
+    ({"folders": {"People": ["P.md"]}, "answers": ["Individual", "__cancel__"]}, "ABORT:New Meeting cancelled"),
+    ({"answers": ["Group"]}, "ABORT:No notes in Groups/ to choose from"),                          # empty folder
+])
+def test_escape_at_any_meeting_picker_makes_no_note(tmp_path, allow_subprocess, scenario, marker) -> None:
+    """Escape at the group list used to leave an empty "Group" meeting note."""
+    out = _run(tmp_path, "new_meeting.js", scenario)
+    assert out["ok"] is False and marker in out["error"]
+
+
+def test_no_hotkey_pairs_ctrl_with_mod() -> None:
+    """Mod is Ctrl on Windows, so ["Alt","Ctrl","Mod"] read as Ctrl+Ctrl+Alt there and
+    could not be pressed (Insert People Template, Move to Knowledge, Tasks' edit task)."""
+    for command, bindings in HOTKEYS.items():
+        for b in bindings:
+            assert not {"Ctrl", "Mod"} <= set(b.get("modifiers", [])), command
+
+
+def test_quickadd_settings_are_already_in_222s_format() -> None:
+    """QuickAdd 2.22 migrated the 2.12-format file on first launch and saved it, so
+    every install's tree was dirty and the next update refused. The shipped file is
+    2.22's own output, with every migration recorded: verified 2026-10-03 by running
+    the pinned 2.22.0 bundle's load path against it, which then saved nothing."""
+    assert all(QA_DATA["migrations"].values()) and len(QA_DATA["migrations"]) >= 16
+    assert "templateFolderPath" not in QA_DATA and QA_DATA["templateFolderPaths"] == []
+    by_name = {c["name"]: c for c in _choices()}
+    for name in ("New Note", "New Software Note", "Meeting note"):
+        assert by_name[name]["fileExistsBehavior"] == {"kind": "apply", "mode": "duplicateSuffix"}, name
+        assert "fileExistsMode" not in by_name[name] and "setFileExistsBehavior" not in by_name[name]
+    assert by_name["New Person"]["fileExistsBehavior"] == {"kind": "prompt"}
+
+
+def test_other_settings_files_match_what_obsidian_writes() -> None:
+    omni = (REPO / ".obsidian" / "plugins" / "omnisearch" / "data.json").read_text(encoding="utf-8")
+    keys = list(json.loads(omni))
+    assert keys.index("indexFilesWithoutExtension") == keys.index("indexedFileTypes") + 1
+    assert not (REPO / ".obsidian" / "types.json").read_text(encoding="utf-8").endswith("\n")
+    attrs = (REPO / ".gitattributes").read_text(encoding="utf-8")
+    assert ".obsidian/**/*.json text eol=lf" in attrs

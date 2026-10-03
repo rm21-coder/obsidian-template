@@ -35,6 +35,12 @@
 installers/lib/hooks/pre-commit text eol=lf
 installers/lib/hooks/pre-push text eol=lf
 
+# LF: Obsidian's own settings. Obsidian writes them with LF on every platform,
+# so a Windows checkout in CRLF made each one it re-saved look modified --
+# app.json, appearance.json and core-plugins.json on first open of the ARM test
+# laptop (2026-10-03) -- and update.ps1 then refused over "local changes".
+.obsidian/**/*.json text eol=lf
+
 # CRLF: the Windows PowerShell layer, which is Windows-only by definition.
 # Note this is about line endings only -- the same files are also held
 # ASCII-only, for a different reason, by
