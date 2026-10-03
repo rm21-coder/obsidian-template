@@ -22,6 +22,13 @@
 #   Enable-ScheduledTask -TaskName <name> -TaskPath '\Obsidian'
 
 @{
+    # Jobs this template once registered and has since retired. Register-Tasks
+    # (so every install and update) unregisters them from \Obsidian\: nothing
+    # else would, and a retired job only ever fails or runs code that no longer
+    # ships. An explicit list rather than "anything not in Jobs", so a task a
+    # user added under \Obsidian\ themselves is never touched.
+    #   handoff-blob-pull   Azure Blob relay, removed 2026-09-30
+    RetiredJobs = @('handoff-blob-pull')
     Jobs = @(
         @{ Name='tag-clippings';        Script='tag_clippings.py';      Args=@();            Trigger=@{ Type='MinuteInterval'; Minutes=30 }; Enabled=$true }
         @{ Name='voice-cleanup';        Script='voice_cleanup.py';      Args=@('--once');    Trigger=@{ Type='MinuteInterval'; Minutes=5  }; Enabled=$true }
