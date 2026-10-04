@@ -115,3 +115,6 @@ installers/lib/identity-denylist.local
 
 # Claude Code session state and agent worktrees (full copies of the repo)
 .claude/
+
+# Obsidian's own trash folder (when "Files & links > Deleted files" is set to it)
+.trash/

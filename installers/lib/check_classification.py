@@ -286,12 +286,14 @@ def range_blobs(repo_root: Path, rev_range: str) -> list[tuple[str, Path]]:
         capture_output=True, text=True, encoding="utf-8").stdout.split()
     out: list[tuple[str, Path]] = []
     for c in commits:
+        # -m: a merge commit lists nothing without it, and a note added in
+        # the merge itself would go unaudited (review round 2, 2026-10-04).
         names = subprocess.run(
-            ["git", "diff-tree", "--no-commit-id", "-r", "-z", "--root",
+            ["git", "diff-tree", "-m", "--no-commit-id", "-r", "-z", "--root",
              "--name-only", "--diff-filter=ACMRT", c, "--", ":(icase)*.md"],
             cwd=repo_root, check=True, capture_output=True, text=True,
             encoding="utf-8", errors="surrogateescape").stdout
-        out += [(c, Path(n)) for n in names.split("\0") if n]
+        out += [(c, Path(n)) for n in dict.fromkeys(names.split("\0")) if n]
     return out
 
 
@@ -400,7 +402,14 @@ def main() -> int:
         return 2
 
     if args.range:
-        violations, audited = audit_range(repo_root, args.range)
+        try:
+            violations, audited = audit_range(repo_root, args.range)
+        except subprocess.CalledProcessError as exc:
+            # A range git cannot list (a remote sha missing locally after a
+            # force-push elsewhere, a shallow clone) fails closed, with a reason.
+            print(f"classification audit: cannot list commits in {args.range!r}: "
+                  f"{(exc.stderr or '').strip() or exc}", file=sys.stderr)
+            return 1
         if violations or not args.quiet:
             print(f"classification audit: {audited} pushed note version(s) audited, "
                   f"{violations} violation(s).", file=sys.stderr)

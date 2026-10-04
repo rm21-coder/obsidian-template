@@ -30,12 +30,19 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 ZERO="0000000000000000000000000000000000000000"
 publishes=0
 ranges=()
+REMOTE="${1:-origin}"
 while read -r _lref lsha _rref rsha; do
     [[ -n "${lsha:-}" && "$lsha" != "$ZERO" ]] || continue
     publishes=1
+    # Only commits (or tags that resolve to one) can be audited: a tag on a
+    # blob or a tree would publish content no rev-list ever lists.
+    if [[ "$(git cat-file -t "${lsha}^{}" 2>/dev/null)" != "commit" ]]; then
+        echo "pre-push: refusing to push $_lref: it is not a commit or a tag on one." >&2
+        exit 1
+    fi
     # What this push publishes: the commits the remote does not have yet.
     if [[ -z "${rsha:-}" || "$rsha" == "$ZERO" ]]; then
-        ranges+=("$lsha --not --remotes")   # new branch: anything not already pushed
+        ranges+=("$lsha --not --remotes=$REMOTE")   # new branch: anything this remote lacks
     else
         ranges+=("$rsha..$lsha")
     fi

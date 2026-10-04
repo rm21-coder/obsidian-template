@@ -202,17 +202,28 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
     return out
 
 
+class RangeError(RuntimeError):
+    """A pushed range git could not list."""
+
+
 def range_added_lines(rev_range: str) -> list[tuple[str, int, str]]:
     """Added lines and names from every commit in a rev-list range: what a
     push publishes, intermediate commits included (a name committed and then
     removed is still in the pushed history)."""
     out: list[tuple[str, int, str]] = []
-    for commit in run_git("rev-list", *rev_range.split()).split():
-        names = [p for p in run_git("diff-tree", "--no-commit-id", "-r", "-z", "--root",
-                                    "--name-only", "--diff-filter=ACMRT", commit).split("\0") if p]
+    listing = subprocess.run(("git", "rev-list", *rev_range.split()), capture_output=True,
+                             text=True, encoding="utf-8", check=False)
+    if listing.returncode != 0:
+        # Fail closed: an unlistable range is not a clean one.
+        raise RangeError(listing.stderr.strip() or f"git rev-list {rev_range} failed")
+    for commit in listing.stdout.split():
+        # -m / --diff-merges=separate: a merge's own changes, per parent.
+        names = [p for p in dict.fromkeys(run_git(
+            "diff-tree", "-m", "--no-commit-id", "-r", "-z", "--root",
+            "--name-only", "--diff-filter=ACMRT", commit).split("\0")) if p]
         out += _name_lines(names)
         diff = run_git("show", "--format=", "--unified=0", "--no-color", "--text",
-                       "--diff-filter=ACMRT", "--root", commit)
+                       "--diff-merges=separate", "--diff-filter=ACMRT", "--root", commit)
         path, lineno = None, 0
         for line in diff.splitlines():
             if line.startswith("+++ "):
@@ -445,7 +456,12 @@ def main() -> int:
     allowed = load_allowed_domains()
 
     if args.range:
-        lines = range_added_lines(args.range)
+        try:
+            lines = range_added_lines(args.range)
+        except RangeError as exc:
+            print(f"check_identity_leak: cannot list commits in {args.range!r}: {exc}",
+                  file=sys.stderr)
+            return 1
     elif args.staged:
         lines = staged_added_lines()
     elif args.worktree:
