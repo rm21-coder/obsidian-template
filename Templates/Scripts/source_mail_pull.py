@@ -297,6 +297,25 @@ def verify(fields: dict[str, str], *, key: str) -> tuple[bool, str]:
 # Message handling
 # ---------------------------------------------------------------------------
 
+# C0 controls, DEL, C1 controls (incl. NEL) and the Unicode line/paragraph
+# separators: anything a log reader or a dashboard splitting on lines could
+# take as a line break or a terminal escape.
+_LOG_UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+LOG_FIELD_MAX = 80
+
+
+def log_safe(value: object, limit: int = LOG_FIELD_MAX) -> str:
+    """Header text from any sender, made fit for one log line.
+
+    A folded Subject comes back from the compat32 parser with its CRLF intact,
+    so logging it raw let anyone who knows the intake address write a line of
+    their own into the log -- and the morning dashboard quotes log tails as a
+    failing job's diagnosis. Control runs collapse to one space; the result is
+    bounded after that, so the bound applies to what is actually written.
+    """
+    return _LOG_UNSAFE.sub(" ", str(value or ""))[:limit]
+
+
 def sender_allowed(msg: Message, allowed: list[str]) -> tuple[bool, str]:
     raw = msg.get("From", "")
     _, addr = email.utils.parseaddr(raw)
@@ -304,7 +323,7 @@ def sender_allowed(msg: Message, allowed: list[str]) -> tuple[bool, str]:
     if not allowed:
         return False, "no allowlist configured"
     if addr not in allowed:
-        return False, f"sender {addr or raw!r} not in allowlist"
+        return False, f"sender {log_safe(addr or raw)!r} not in allowlist"
     return True, addr
 
 
@@ -568,7 +587,7 @@ def process_mailbox(*, user: str, password: str, key: str,
             # failure to parse an unauthenticated message is a rejection.
             try:
                 msg = email.message_from_bytes(raw[0][1])
-                subject = str(msg.get("Subject") or "")[:80]
+                subject = log_safe(msg.get("Subject"))
                 ok, who = sender_allowed(msg, allowed)
                 fields = parse_body(plain_text_body(msg)) if ok else {}
             except RunDeadlineExceeded:
