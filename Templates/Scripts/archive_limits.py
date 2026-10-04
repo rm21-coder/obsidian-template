@@ -9,9 +9,11 @@ into nested archives, and mammoth reads each .docx image whole. A small file
 whose member inflates to gigabytes exhausts memory inside md.convert(), before
 markitdown_cleanup's own extraction limits ever run.
 
-So the converters call refusal() first. It reads only the archive's central
-directory (declared sizes) plus four bytes of each member to spot a nested
-zip, which it checks the same way. Declared sizes are enough: Python's
+So the converters call refusal() first. It reads the archive's central
+directory (declared sizes), and asks zipfile.is_zipfile() of every member
+whether it is itself a zip (leading junk included, since zipfile opens those
+too); a nested zip is checked the same way. That reads each member once
+more, bounded by the size limits below. Declared sizes are enough: Python's
 zipfile stops decompressing a member at its declared size, and MarkItDown,
 python-docx, python-pptx, openpyxl and mammoth all read through zipfile.
 
@@ -33,7 +35,7 @@ MAX_CONTAINER_MEMBER_BYTES = 100 * 1024 * 1024   # one member, decompressed
 MAX_CONTAINER_TOTAL_BYTES = 500 * 1024 * 1024    # all members, all levels
 MAX_NESTING = 2                                  # zip inside zip inside zip
 
-_ZIP_MAGIC = b"PK\x03\x04"
+_MIN_ZIP = 22          # an end-of-central-directory record; nothing smaller opens
 
 
 class _Refused(Exception):
@@ -55,15 +57,21 @@ def _check(zf: zipfile.ZipFile, depth: int, tally: list[int]) -> None:
             raise _Refused(
                 f"members inflate to more than {MAX_CONTAINER_TOTAL_BYTES:,} bytes")
     for info in infos:
-        if info.is_dir() or info.file_size < len(_ZIP_MAGIC):
+        if info.is_dir() or info.file_size < _MIN_ZIP:
             continue
+        # Ask zipfile itself, as MarkItDown will: it finds the end record
+        # from the END of the data, so a zip behind any leading bytes still
+        # opens. Checking for "PK\x03\x04" at offset 0 missed exactly that.
+        # The member stream is seekable and stops at the declared size,
+        # which was capped above.
         with zf.open(info) as f:
-            if f.read(len(_ZIP_MAGIC)) != _ZIP_MAGIC:
+            if not zipfile.is_zipfile(f):
                 continue
-        if depth >= MAX_NESTING:
-            raise _Refused(f"archives nested more than {MAX_NESTING} deep")
-        with zf.open(info) as f, zipfile.ZipFile(f) as inner:
-            _check(inner, depth + 1, tally)
+            if depth >= MAX_NESTING:
+                raise _Refused(f"archives nested more than {MAX_NESTING} deep")
+            f.seek(0)
+            with zipfile.ZipFile(f) as inner:
+                _check(inner, depth + 1, tally)
 
 
 def refusal(path: Path) -> str | None:
