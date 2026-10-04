@@ -178,11 +178,14 @@ def is_safe_url(url: str) -> tuple[bool, str]:
     return ok, reason
 
 
-def _check(url: str) -> tuple[bool, str, str | None]:
-    """is_safe_url plus the address to connect to when it passes.
+def _check(url: str) -> tuple[bool, str, tuple[str, ...] | None]:
+    """is_safe_url plus the addresses to connect to when it passes.
 
-    The address returned is one the checks above approved, so a fetcher that
-    connects to it cannot be walked to a different answer by a second lookup.
+    Every address returned is one the checks above approved (all of them must
+    pass), in resolver order, so a fetcher that connects to them cannot be
+    walked to a different answer by a second lookup. All of them, not just
+    the first: a dead first record (an unreachable IPv6 answer, one bad CDN
+    node) must not fail a fetch that urllib3's own fallback would have saved.
     Never raises: anything it cannot evaluate is a refusal.
     """
     if not isinstance(url, str):
@@ -206,7 +209,7 @@ def _check(url: str) -> tuple[bool, str, str | None]:
         ip = ipaddress.ip_address(host)
         if _ip_is_internal(ip):
             return False, f"disallowed IP literal: {ip}", None
-        return True, "", str(ip)
+        return True, "", (str(ip),)
     except ValueError:
         pass  # Not an IP literal — fall through to DNS resolution.
     # Hostname path: resolve and reject if ANY answer is internal.
@@ -220,7 +223,7 @@ def _check(url: str) -> tuple[bool, str, str | None]:
                        f"{type(e).__name__}"), None
     if not infos:
         return False, f"DNS resolution returned no records for {host!r}", None
-    pinned: str | None = None
+    pinned: list[str] = []
     for info in infos:
         sockaddr = info[4]
         ip_str = sockaddr[0]
@@ -233,13 +236,17 @@ def _check(url: str) -> tuple[bool, str, str | None]:
         if _ip_is_internal(resolved):
             return False, (f"{host} resolves to internal address "
                            f"{ip_str}"), None
-        if pinned is None:
-            pinned = str(resolved)
-    return True, "", pinned
+        if str(resolved) not in pinned:
+            pinned.append(str(resolved))
+    return True, "", tuple(pinned)
 
 
-def _pinned_classes(ip: str, opened: list | None = None):
-    """Connection-pool classes whose TCP connect goes to `ip`.
+def _pinned_classes(ips: str | tuple[str, ...], opened: list | None = None,
+                    end: float | None = None):
+    """Connection-pool classes whose TCP connect goes to the approved `ips`,
+    tried in order (as urllib3 tries a name's answers) until one connects.
+    Each attempt's connect timeout is cut to what is left before `end`, a
+    time.monotonic() deadline, and no attempt starts after it.
 
     Only the socket's destination changes. urllib3 reads the connection's
     `host` for the Host header, TLS SNI and certificate hostname checks, so
@@ -252,16 +259,35 @@ def _pinned_classes(ip: str, opened: list | None = None):
     response is marked will-close (any HTTP/1.0 reply), while the response
     keeps reading from the socket itself.
     """
+    if isinstance(ips, str):
+        ips = (ips,)
+
     def _new_conn(self):
-        name = self._dns_host
-        self._dns_host = ip
+        name, timeout = self._dns_host, self.timeout
+        failure: Exception | None = None
         try:
-            sock = self._base_new_conn()
+            for addr in ips:
+                if end is not None:
+                    left = end - time.monotonic()
+                    if left <= 0:
+                        break
+                    if not isinstance(timeout, (int, float)) or timeout > left:
+                        self.timeout = left
+                self._dns_host = addr
+                try:
+                    sock = self._base_new_conn()
+                except urllib3.exceptions.ConnectTimeoutError as e:
+                    # NewConnectionError and NameResolutionError are
+                    # subclasses: refused, unreachable, timed out.
+                    failure = e
+                    continue
+                if opened is not None:
+                    opened.append(sock)
+                return sock
         finally:
-            self._dns_host = name
-        if opened is not None:
-            opened.append(sock)
-        return sock
+            self._dns_host, self.timeout = name, timeout
+        raise failure or urllib3.exceptions.ConnectTimeoutError(
+            self, "deadline reached before connecting")
 
     def connect(self):
         self._base_connect()
@@ -281,23 +307,27 @@ def _pinned_classes(ip: str, opened: list | None = None):
 
 
 class _PinnedAdapter(HTTPAdapter):
-    """A requests adapter that connects every request to one validated IP."""
+    """A requests adapter that connects only to the validated addresses."""
 
-    def __init__(self, ip: str, opened: list | None = None) -> None:
-        self._pinned_ip = ip
+    def __init__(self, ips: tuple[str, ...], opened: list | None = None,
+                 end: float | None = None) -> None:
+        self._pinned_ips = ips
         self._opened = opened
+        self._end = end
         super().__init__()
 
     def init_poolmanager(self, *args, **kwargs) -> None:
         super().init_poolmanager(*args, **kwargs)
-        http_pool, https_pool = _pinned_classes(self._pinned_ip, self._opened)
+        http_pool, https_pool = _pinned_classes(self._pinned_ips, self._opened,
+                                                self._end)
         self.poolmanager.pool_classes_by_scheme = {
             "http": http_pool, "https": https_pool}
 
 
-def _pinned_get(url: str, ip: str, *, timeout: int,
-                opened: list | None = None) -> requests.Response:
-    """GET one hop, connecting to `ip`, never following a redirect.
+def _pinned_get(url: str, ips: tuple[str, ...], *, timeout: int,
+                opened: list | None = None,
+                end: float | None = None) -> requests.Response:
+    """GET one hop, connecting only to `ips`, never following a redirect.
 
     trust_env is OFF. With it on, requests takes HTTP(S)_PROXY / ALL_PROXY
     (and macOS's system proxy settings) from the environment and sends the
@@ -312,7 +342,7 @@ def _pinned_get(url: str, ip: str, *, timeout: int,
     session.trust_env = False
     session.verify = (os.environ.get("REQUESTS_CA_BUNDLE")
                       or os.environ.get("CURL_CA_BUNDLE") or True)
-    adapter = _PinnedAdapter(ip, opened)
+    adapter = _PinnedAdapter(ips, opened, end)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     try:
@@ -408,8 +438,8 @@ def _walk(url: str, *, log: Logger, timeout: int, end: float):
     """
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        ok, reason, ip = _check(current)
-        if not ok or ip is None:
+        ok, reason, ips = _check(current)
+        if not ok or not ips:
             log(f"refusing {redact_url(current)}: {reason}")
             return
         remaining = end - time.monotonic()
@@ -420,7 +450,8 @@ def _walk(url: str, *, log: Logger, timeout: int, end: float):
         deadline = _Deadline(opened, remaining)
         try:
             # Connect to the address _check approved, not a fresh lookup.
-            resp = _pinned_get(current, ip, timeout=timeout, opened=opened)
+            resp = _pinned_get(current, ips, timeout=timeout, opened=opened,
+                               end=end)
         except _TRANSPORT_ERRORS as e:
             deadline.cancel()
             # The exception text is not logged: requests puts the full URL,

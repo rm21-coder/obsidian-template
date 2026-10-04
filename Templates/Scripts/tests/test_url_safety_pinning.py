@@ -131,14 +131,15 @@ def test_tls_keeps_the_name_for_sni_and_certificate_checks(
     assert conn.host == "videos.test.example"
 
 
-def test_check_returns_the_first_public_answer(
+def test_check_returns_every_public_answer_in_order(
         monkeypatch: pytest.MonkeyPatch) -> None:
     def resolve(host, p, *args, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC, 0)),
                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.35", 0))]
 
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
-    assert url_safety._check("https://cdn.test.example/x") == (True, "", PUBLIC)
+    assert url_safety._check("https://cdn.test.example/x") == (
+        True, "", (PUBLIC, "93.184.216.35"))
 
 
 def test_check_refuses_when_any_answer_is_internal(
@@ -204,11 +205,73 @@ def test_a_url_two_parsers_disagree_on_still_connects_to_the_checked_ip(
     log = _public_resolver(monkeypatch, {"pub.test": PUBLIC,
                                          "inner.test": "127.0.0.1"})
     url = f"http://inner.test:{port}\\@pub.test:{port}/x"
-    assert url_safety._check(url) == (True, "", PUBLIC)
+    assert url_safety._check(url) == (True, "", (PUBLIC,))
     assert url_safety.safe_fetch(url) is None
     assert _Recorder.hits == [], _Recorder.hits
     assert "inner.test" not in log["lookups"], log["lookups"]
     assert log["public"] == [PUBLIC]
+
+
+def test_a_dead_first_address_falls_through_to_the_next(
+        monkeypatch: pytest.MonkeyPatch, local_server: int) -> None:
+    """Round 2, item 1: the pin used only the first answer, where urllib3
+    tries each. A name answering [::1, 127.0.0.1] with nothing on ::1 (a
+    broken IPv6 path, one dead CDN node) then failed outright. Loopback is
+    let through the internal check for this test only."""
+    monkeypatch.setattr(url_safety, "_ip_is_internal", lambda ip: False)
+    real = socket.getaddrinfo
+
+    def dual(host, p, *a, **k):
+        if str(host) == "dual.test.example":
+            return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", p or 0, 0, 0)),
+                    (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", p or 0))]
+        # Literals resolve locally; the connect to [::1]:port is then
+        # refused for real, since the server listens on 127.0.0.1 only.
+        return real(host, p, *a, **k)
+
+    monkeypatch.setattr(socket, "getaddrinfo", dual)
+    assert url_safety._check(f"http://dual.test.example:{local_server}/c") == (
+        True, "", ("::1", "127.0.0.1"))
+    body = url_safety.safe_fetch(f"http://dual.test.example:{local_server}/c")
+    assert body == b"LOCAL-SERVICE-BODY"
+    assert _Recorder.hits == [("/c", f"dual.test.example:{local_server}")]
+
+
+def test_no_connect_attempt_starts_after_the_deadline(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    import urllib3.exceptions
+    import urllib3.util.connection as u3conn
+
+    seen: list = []
+    monkeypatch.setattr(u3conn, "create_connection",
+                        lambda *a, **k: seen.append(a) or None)
+    http_pool, _ = url_safety._pinned_classes((PUBLIC, "93.184.216.35"),
+                                              end=time.monotonic() - 1)
+    conn = http_pool.ConnectionCls("late.test.example", 80)
+    with pytest.raises(urllib3.exceptions.ConnectTimeoutError,
+                       match="deadline reached before connecting"):
+        conn._new_conn()
+    assert seen == []
+
+
+def test_each_connect_timeout_is_cut_to_the_time_left(
+        monkeypatch: pytest.MonkeyPatch) -> None:
+    import urllib3.util.connection as u3conn
+
+    timeouts: list[float] = []
+
+    def fake_create_connection(address, timeout, *a, **k):
+        timeouts.append(timeout)
+        raise OSError("test: refused")
+
+    monkeypatch.setattr(u3conn, "create_connection", fake_create_connection)
+    http_pool, _ = url_safety._pinned_classes((PUBLIC, "93.184.216.35"),
+                                              end=time.monotonic() + 2)
+    conn = http_pool.ConnectionCls("slow.test.example", 80, timeout=30)
+    with pytest.raises(Exception):
+        conn._new_conn()
+    assert len(timeouts) == 2 and all(t <= 2 for t in timeouts), timeouts
+    assert conn.timeout == 30            # restored for the rest of the request
 
 
 @pytest.mark.parametrize("addr", [
