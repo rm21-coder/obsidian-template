@@ -659,6 +659,14 @@ def strip_location_credentials(location_display: str | None,
 # People index and dedup (Pre-Pop Spec §8.1)
 # ============================================================
 
+def _fm_field_re(key: str) -> re.Pattern:
+    """`key: value` on one frontmatter line. [ \\t]*, not \\s*: \\s matches a
+    newline, so an empty `Email-Work:` used to capture the NEXT line
+    ("Mobile Phone: ...") as its value -- junk index keys, and a backfill
+    that saw every empty field as populated."""
+    return re.compile(rf'(?m)^{re.escape(key)}[ \t]*:[ \t]*(.*)$')
+
+
 class PeopleIndex:
     """Holds email -> filename and normalized-name -> filename maps,
     plus alias and preferred_name lookups, built from People/*.md."""
@@ -667,6 +675,10 @@ class PeopleIndex:
         self.email_to_stem: dict[str, str] = {}
         self.name_to_stem: dict[str, str] = {}
         self.stem_to_emptyfields: dict[str, set[str]] = {}
+        # The user's own org domains (load_org_domains); organic backfill
+        # writes only addresses in one of these or a domain already on the
+        # note. Empty means only the latter.
+        self.org_domains: frozenset[str] = frozenset()
         self._loaded = False
 
     def load(self) -> None:
@@ -692,8 +704,7 @@ class PeopleIndex:
 
             empties: set[str] = set()
             for key in ('Email-Work', 'Email-Personal'):
-                m = re.search(
-                    rf'(?m)^{re.escape(key)}\s*:\s*(.*)$', fm)
+                m = _fm_field_re(key).search(fm)
                 if not m:
                     continue
                 val = m.group(1).strip()
@@ -747,7 +758,7 @@ class PeopleIndex:
 
     @staticmethod
     def _parse_preferred_name(fm: str) -> str | None:
-        m = re.search(r'(?m)^preferred_name\s*:\s*(.+)$', fm)
+        m = _fm_field_re('preferred_name').search(fm)
         if not m:
             return None
         v = m.group(1).strip().strip("'").strip('"')
@@ -988,11 +999,24 @@ class GroupsIndex:
 # People stub creation / organic backfill (Pre-Pop Spec §8)
 # ============================================================
 
+def _email_domain(value: str) -> str:
+    v = value.strip().strip('"\'').lower()
+    return v.rsplit('@', 1)[1] if '@' in v else ''
+
+
 def organic_email_backfill(stem: str, email: str, dry_run: bool,
-                           is_personal: bool) -> bool:
+                           is_personal: bool,
+                           org_domains: frozenset[str] = frozenset()) -> bool:
     """If the existing People file `stem.md` has empty Email-Work / Email-
     Personal that corresponds to this email's category, write it. Returns
-    True if a change was made."""
+    True if a change was made.
+
+    The match that brings us here is by NAME, and an invite's display name is
+    whatever its sender typed. So an address is written only when its domain
+    is one of the user's org domains or a domain already on this note;
+    otherwise "Pat Quinn <pat@attacker.example>" would plant the attacker's
+    address on the real Pat Quinn, and every later invite from it would
+    email-match to that note."""
     target_field = 'Email-Personal' if is_personal else 'Email-Work'
     path = PEOPLE_DIR / f'{stem}.md'
     if not path.exists():
@@ -1001,8 +1025,11 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
         text = path.read_text(encoding='utf-8')
     except OSError:
         return False
-    fm_match = re.search(
-        rf'(?m)^{re.escape(target_field)}\s*:\s*(.*)$', text)
+    fm, _ = split_frontmatter(text)
+    if not fm:
+        return False
+    fm_end = 3 + len(fm)          # backfill only ever edits the frontmatter
+    fm_match = _fm_field_re(target_field).search(text, 0, fm_end)
     if not fm_match:
         return False
     current = fm_match.group(1).strip()
@@ -1010,6 +1037,17 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
         return False  # already populated, never overwrite
     email = templater_guard.neutralize(_yaml_email(email) or '')
     if not email:
+        return False
+    note_domains = set()
+    for key in ('Email-Work', 'Email-Personal'):
+        m = _fm_field_re(key).search(text, 0, fm_end)
+        if m and _email_domain(m.group(1)):
+            note_domains.add(_email_domain(m.group(1)))
+    domain = _email_domain(email)
+    if domain not in org_domains and domain not in note_domains:
+        log.info('  organic-backfill SKIPPED %s on %s.md: domain %s is not '
+                 'an org domain or already on the note',
+                 target_field, stem, domain)
         return False
     new_line = f'{target_field}: {email}'
     new_text = (text[:fm_match.start()] + new_line +
@@ -1175,7 +1213,8 @@ def resolve_or_create_person(attendee: dict, contact_by_email: dict,
         # Organic email backfill on the matched file
         if email:
             is_personal = email.split('@', 1)[1] in PERSONAL_DOMAINS
-            if organic_email_backfill(stem, email, dry_run, is_personal):
+            if organic_email_backfill(stem, email, dry_run, is_personal,
+                                      people_idx.org_domains):
                 counters['organic-email-backfill'] += 1
         return stem, 'name-match'
 
@@ -1280,6 +1319,40 @@ def load_admin_emails() -> set[str]:
     Config shape: {"admin_emails": ["assistant@example.com", ...]}
     """
     return {e.lower() for e in (load_config().get('admin_emails') or [])}
+
+
+def _domain_list(value) -> list[str]:
+    if isinstance(value, str):
+        value = value.split(',')
+    if not isinstance(value, list):
+        return []
+    return [d.strip().lower() for d in value
+            if isinstance(d, str) and d.strip()]
+
+
+def load_org_domains(user_email: str) -> frozenset[str]:
+    """The user's own organisation's email domains, from local config only.
+
+    Union of: the handoff user's own domain; `tenant_domains` in
+    .config/meeting_prepopulate.json (for producers other than meeting_pull);
+    and `tenant_domains` in .config/meeting_pull.json, which the installer
+    (54-meeting-pull / install.ps1) already writes for the MCP producer.
+    """
+    domains = set(_domain_list(load_config().get('tenant_domains')))
+    pull_cfg = CONFIG_FILE.parent / 'meeting_pull.json'   # i.e. CONFIG_DIR
+    if pull_cfg.is_file():
+        try:
+            cfg = json.loads(pull_cfg.read_text(encoding='utf-8-sig'))
+        except (OSError, ValueError) as e:
+            log.warning('config file unreadable, ignoring: %s (%s)',
+                        pull_cfg, e)
+        else:
+            if isinstance(cfg, dict):
+                domains.update(_domain_list(cfg.get('tenant_domains')))
+    own = _email_domain(user_email or '')
+    if own:
+        domains.add(own)
+    return frozenset(domains)
 
 
 DEFAULT_SKIP_SUBJECT_PREFIXES = ('fyi',)
@@ -1936,6 +2009,7 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
 
     people_idx = PeopleIndex()
     people_idx.load()
+    people_idx.org_domains = load_org_domains(user_email)
     groups_idx = GroupsIndex(people_idx)
     groups_idx.load()
     admin_emails = load_admin_emails()

@@ -159,6 +159,185 @@ def extract_video(location_display: str | None, body_preview: str | None) -> tup
     return False, None
 
 
+def _obj(value) -> dict:
+    """An object field as a dict. The events are model output from a session
+    that reads invite bodies, so a field the schema calls an object can arrive
+    as a string or a list; treat that as absent rather than crash on .get()."""
+    return value if isinstance(value, dict) else {}
+
+
+def _event_time(ev: dict, key: str) -> dict:
+    """start/end as a dict; a present but non-object value makes the event bad
+    (unlike organizer, a meeting without a usable time cannot be placed)."""
+    value = ev.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TypeError(f"{key} is not an object")
+    return value
+
+
+def _build_meeting(ev: dict, user_email: str, tenant_domains: frozenset,
+                   excluded_attendees: frozenset, seen: dict[str, dict]
+                   ) -> tuple[dict, dict[str, dict], dict[str, bool], dict[str, bool]]:
+    """One event -> (meeting, new contacts, excluded mailboxes, excluded admins).
+
+    Builds into its own containers so an event that raises part-way leaves
+    nothing behind in the shared ones; build_handoff merges only on success.
+    """
+    if not isinstance(ev, dict):
+        raise TypeError("event is not an object")
+    new_contacts: dict[str, dict] = {}
+    mailboxes: dict[str, bool] = {}
+    admins: dict[str, bool] = {}
+    raw_attendees = ev.get("attendees") or []
+    if not isinstance(raw_attendees, list):
+        raise TypeError("attendees is not a list")
+    attendees = []
+    n_req_human = n_optional = n_declined = n_resources = n_external = 0
+
+    # Decided before the attendee loop because the counters below need it.
+    # On a departmental-mailbox blast the coordinator is the lone
+    # `required` attendee and everyone else, the user included, is
+    # `optional` -- so a required-only count returns 1 and the event is
+    # hinted as a 1:1 with the coordinator. Counting non-declined optional
+    # attendees on these invites (and only these) keeps the hint honest.
+    # The consumer applies the identical rule in classify(); the two must
+    # agree or the note's `type:` and `people:` disagree.
+    org_pre = _obj(ev.get("organizer"))
+    org_is_group = is_group_mailbox(org_pre.get("name") or "",
+                                    lc(org_pre.get("address")))
+
+    for a in raw_attendees:
+        a = _obj(a)
+        email = lc(a.get("address"))
+        name = a.get("name") or ""
+        if not email:
+            continue
+        role = map_role(a.get("type"))
+        resp = a.get("responseStatus") or "none"
+        if is_group_mailbox(name, email):
+            mailboxes[name or email] = True
+            continue
+        if email in excluded_attendees:
+            # Scheduling assistants/EAs who show up as a required attendee
+            # on every meeting they book, but aren't real participants —
+            # dropped entirely (not counted, not in attendees[]/contacts[])
+            # so 1:1s they schedule classify as individual, not group.
+            admins[name or email] = True
+            continue
+        ext = is_external(email, tenant_domains)
+        resource = role == "resource"
+        optional = role == "optional"
+        declined = lc(resp) == "declined"
+        if resource:
+            n_resources += 1
+        if optional:
+            n_optional += 1
+        if declined:
+            n_declined += 1
+        if ext:
+            n_external += 1
+        counts_as_participant = not optional or org_is_group
+        if not resource and not declined and counts_as_participant and email != user_email:
+            n_req_human += 1
+        attendees.append({
+            "display_name": name or None, "email": email,
+            "response_status": resp, "role": role,
+            "is_resource": resource, "is_external": ext, "is_optional": optional,
+        })
+        if not resource and email not in seen and email not in new_contacts:
+            given, surname = split_name(name)
+            new_contacts[email] = {
+                "email": email, "display_name": name or None,
+                "given_name": given, "surname": surname,
+                "title": None, "department": None, "office": None, "phone": None,
+                "manager": None, "company": None, "is_external": ext,
+                "directory_source": "invite-fallback", "directory_object_id": None,
+            }
+
+    org = _obj(ev.get("organizer"))
+    org_email, org_name = lc(org.get("address")), org.get("name") or ""
+    if is_group_mailbox(org_name, org_email):
+        humans = [a for a in attendees
+                 if not a["is_resource"] and a["response_status"] != "declined"
+                 and a["email"] != user_email]
+        if len(humans) == 1:
+            organizer = {"display_name": humans[0]["display_name"], "email": humans[0]["email"],
+                        "is_me": humans[0]["email"] == user_email, "is_group_mailbox": False}
+        else:
+            organizer = {"display_name": org_name or None, "email": org_email or None,
+                        "is_me": False, "is_group_mailbox": True}
+    else:
+        organizer = {"display_name": org_name or None, "email": org_email or None,
+                    "is_me": org_email == user_email, "is_group_mailbox": False}
+
+    start = _event_time(ev, "start")
+    end = _event_time(ev, "end")
+    start_iso = to_utc_iso(start.get("dateTime"), start.get("timeZone"))
+    end_iso = to_utc_iso(end.get("dateTime"), end.get("timeZone"))
+
+    sensitivity = ev.get("sensitivity") or "normal"
+    body_preview = ev.get("bodyPreview") or ""
+    if sensitivity in ("private", "confidential"):
+        body_preview = f"[redacted: sensitivity={sensitivity}]"
+
+    if n_req_human == 0:
+        cls = "solo"
+    elif n_req_human == 1:
+        cls = "individual"
+    elif n_req_human >= 12:
+        cls = "broadcast"
+    else:
+        cls = "group"
+
+    # read_resource's full event detail has no top-level isOrganizer flag
+    # (only the search-summary view does) — derive it from the organizer
+    # address instead, which read_resource always provides.
+    is_organizer = org_email == user_email
+    my_resp = "organizer" if is_organizer else "none"
+    if not is_organizer:
+        for a in attendees:
+            if a["email"] == user_email:
+                my_resp = a["response_status"]
+                break
+
+    loc = ev.get("location") or {}
+    loc_display = loc.get("displayName") if isinstance(loc, dict) else loc
+    is_video, join_url = extract_video(loc_display, ev.get("bodyPreview"))
+
+    recurrence = ev.get("recurrence")
+    meeting = {
+        "uid": ev.get("id"), "series_uid": None,
+        "is_recurring_instance": recurrence is not None,
+        "instance_index": None, "recurrence_human": None, "rrule_raw": None,
+        "subject": ev.get("subject") or "", "subject_sensitivity": "normal",
+        "start": start_iso, "end": end_iso,
+        "duration_minutes": duration_minutes(start_iso, end_iso),
+        "is_all_day": bool(ev.get("isAllDay")),
+        "organizer": organizer, "my_response_status": my_resp, "attendees": attendees,
+        "attendee_counts": {
+            "required_non_declined_non_resource": n_req_human,
+            "optional_counted_as_required": org_is_group,
+            "optional": n_optional, "declined": n_declined,
+            "resources": n_resources, "external": n_external,
+        },
+        "location": {"display": loc_display, "is_teams_meeting": is_video, "teams_join_url": join_url},
+        "body_preview": body_preview, "body_format": "text",
+        "categories": ev.get("categories") or [], "sensitivity": sensitivity,
+        "is_cancelled": bool(ev.get("isCancelled")),
+        "is_private_appointment": sensitivity == "private",
+        "created_at": ev.get("createdDateTime"), "last_modified_at": ev.get("lastModifiedDateTime"),
+        "producer_classification_hint": {
+            "class": cls,
+            "rationale": f"{n_req_human} counted non-resource human attendees"
+                         f"{' (group-mailbox invite: optional counted)' if org_is_group else ' (required only)'}; "
+                         f"recurring={recurrence is not None}",
+        },
+    }
+    return meeting, new_contacts, mailboxes, admins
+
+
 def build_handoff(events: list[dict], user: dict, week: dict,
                   tenant_domains: frozenset,
                   excluded_attendees: frozenset = frozenset()) -> dict:
@@ -167,153 +346,35 @@ def build_handoff(events: list[dict], user: dict, week: dict,
     meetings = []
     excluded_mailboxes: dict[str, bool] = {}
     excluded_admins: dict[str, bool] = {}
+    skipped: list[str] = []
 
-    for ev in events:
-        raw_attendees = ev.get("attendees") or []
-        attendees = []
-        n_req_human = n_optional = n_declined = n_resources = n_external = 0
-
-        # Decided before the attendee loop because the counters below need it.
-        # On a departmental-mailbox blast the coordinator is the lone
-        # `required` attendee and everyone else, the user included, is
-        # `optional` -- so a required-only count returns 1 and the event is
-        # hinted as a 1:1 with the coordinator. Counting non-declined optional
-        # attendees on these invites (and only these) keeps the hint honest.
-        # The consumer applies the identical rule in classify(); the two must
-        # agree or the note's `type:` and `people:` disagree.
-        org_pre = ev.get("organizer") or {}
-        org_is_group = is_group_mailbox(org_pre.get("name") or "",
-                                        lc(org_pre.get("address")))
-
-        for a in raw_attendees:
-            email = lc(a.get("address"))
-            name = a.get("name") or ""
-            if not email:
-                continue
-            role = map_role(a.get("type"))
-            resp = a.get("responseStatus") or "none"
-            if is_group_mailbox(name, email):
-                excluded_mailboxes[name or email] = True
-                continue
-            if email in excluded_attendees:
-                # Scheduling assistants/EAs who show up as a required attendee
-                # on every meeting they book, but aren't real participants —
-                # dropped entirely (not counted, not in attendees[]/contacts[])
-                # so 1:1s they schedule classify as individual, not group.
-                excluded_admins[name or email] = True
-                continue
-            ext = is_external(email, tenant_domains)
-            resource = role == "resource"
-            optional = role == "optional"
-            declined = lc(resp) == "declined"
-            if resource:
-                n_resources += 1
-            if optional:
-                n_optional += 1
-            if declined:
-                n_declined += 1
-            if ext:
-                n_external += 1
-            counts_as_participant = not optional or org_is_group
-            if not resource and not declined and counts_as_participant and email != user_email:
-                n_req_human += 1
-            attendees.append({
-                "display_name": name or None, "email": email,
-                "response_status": resp, "role": role,
-                "is_resource": resource, "is_external": ext, "is_optional": optional,
-            })
-            if not resource and email not in seen:
-                given, surname = split_name(name)
-                seen[email] = {
-                    "email": email, "display_name": name or None,
-                    "given_name": given, "surname": surname,
-                    "title": None, "department": None, "office": None, "phone": None,
-                    "manager": None, "company": None, "is_external": ext,
-                    "directory_source": "invite-fallback", "directory_object_id": None,
-                }
-
-        org = ev.get("organizer") or {}
-        org_email, org_name = lc(org.get("address")), org.get("name") or ""
-        if is_group_mailbox(org_name, org_email):
-            humans = [a for a in attendees
-                     if not a["is_resource"] and a["response_status"] != "declined"
-                     and a["email"] != user_email]
-            if len(humans) == 1:
-                organizer = {"display_name": humans[0]["display_name"], "email": humans[0]["email"],
-                            "is_me": humans[0]["email"] == user_email, "is_group_mailbox": False}
-            else:
-                organizer = {"display_name": org_name or None, "email": org_email or None,
-                            "is_me": False, "is_group_mailbox": True}
-        else:
-            organizer = {"display_name": org_name or None, "email": org_email or None,
-                        "is_me": org_email == user_email, "is_group_mailbox": False}
-
-        start = ev.get("start") or {}
-        end = ev.get("end") or {}
-        start_iso = to_utc_iso(start.get("dateTime"), start.get("timeZone"))
-        end_iso = to_utc_iso(end.get("dateTime"), end.get("timeZone"))
-
-        sensitivity = ev.get("sensitivity") or "normal"
-        body_preview = ev.get("bodyPreview") or ""
-        if sensitivity in ("private", "confidential"):
-            body_preview = f"[redacted: sensitivity={sensitivity}]"
-
-        if n_req_human == 0:
-            cls = "solo"
-        elif n_req_human == 1:
-            cls = "individual"
-        elif n_req_human >= 12:
-            cls = "broadcast"
-        else:
-            cls = "group"
-
-        # read_resource's full event detail has no top-level isOrganizer flag
-        # (only the search-summary view does) — derive it from the organizer
-        # address instead, which read_resource always provides.
-        is_organizer = org_email == user_email
-        my_resp = "organizer" if is_organizer else "none"
-        if not is_organizer:
-            for a in attendees:
-                if a["email"] == user_email:
-                    my_resp = a["response_status"]
-                    break
-
-        loc = ev.get("location") or {}
-        loc_display = loc.get("displayName") if isinstance(loc, dict) else loc
-        is_video, join_url = extract_video(loc_display, ev.get("bodyPreview"))
-
-        recurrence = ev.get("recurrence")
-        meetings.append({
-            "uid": ev.get("id"), "series_uid": None,
-            "is_recurring_instance": recurrence is not None,
-            "instance_index": None, "recurrence_human": None, "rrule_raw": None,
-            "subject": ev.get("subject") or "", "subject_sensitivity": "normal",
-            "start": start_iso, "end": end_iso,
-            "duration_minutes": duration_minutes(start_iso, end_iso),
-            "is_all_day": bool(ev.get("isAllDay")),
-            "organizer": organizer, "my_response_status": my_resp, "attendees": attendees,
-            "attendee_counts": {
-                "required_non_declined_non_resource": n_req_human,
-                "optional_counted_as_required": org_is_group,
-                "optional": n_optional, "declined": n_declined,
-                "resources": n_resources, "external": n_external,
-            },
-            "location": {"display": loc_display, "is_teams_meeting": is_video, "teams_join_url": join_url},
-            "body_preview": body_preview, "body_format": "text",
-            "categories": ev.get("categories") or [], "sensitivity": sensitivity,
-            "is_cancelled": bool(ev.get("isCancelled")),
-            "is_private_appointment": sensitivity == "private",
-            "created_at": ev.get("createdDateTime"), "last_modified_at": ev.get("lastModifiedDateTime"),
-            "producer_classification_hint": {
-                "class": cls,
-                "rationale": f"{n_req_human} counted non-resource human attendees"
-                             f"{' (group-mailbox invite: optional counted)' if org_is_group else ' (required only)'}; "
-                             f"recurring={recurrence is not None}",
-            },
-        })
+    for i, ev in enumerate(events):
+        # One malformed event (an injected invite can steer the session into
+        # emitting `"dateTime": "TBD"` or a string organizer) used to raise out
+        # of the whole transform: no handoff, so no meeting notes that day,
+        # and a recurring invite repeated it daily. Skip it and say so.
+        try:
+            meeting, new_contacts, mailboxes, admins = _build_meeting(
+                ev, user_email, tenant_domains, excluded_attendees, seen)
+        except (ValueError, TypeError, AttributeError) as e:
+            ev_id = ev.get("id") if isinstance(ev, dict) else None
+            label = repr(str(ev_id)[:40]) if ev_id is not None else f"#{i}"
+            reason = f"{type(e).__name__}: {str(e)[:80]}"
+            print(f"[mcp-transform] WARNING: skipped malformed event {label} "
+                  f"({reason})", file=sys.stderr)
+            skipped.append(f"{label} ({reason})")
+            continue
+        meetings.append(meeting)
+        seen.update(new_contacts)
+        excluded_mailboxes.update(mailboxes)
+        excluded_admins.update(admins)
 
     contacts = list(seen.values())
     notes = []
+    if skipped:
+        notes.append({"level": "warning",
+                      "text": f"Skipped {len(skipped)} malformed event(s); the rest "
+                              f"of the day was transformed: {'; '.join(skipped)}."})
     if excluded_mailboxes:
         names = ", ".join(sorted(excluded_mailboxes))
         notes.append({"level": "info",
