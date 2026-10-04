@@ -76,3 +76,12 @@ semgrep  Templates/Scripts/run_logged.py   dangerous-subprocess-use-tainted-env-
 semgrep  Templates/Scripts/windows/dashboard_action.py   dangerous-subprocess-use-tainted-env-args   count=1   # list form, no shell; absolute powershell.exe from %SystemRoot%; the -Command text is built only from constants in ACTIONS -- nothing from the URL reaches it (tests pin that). re-check 2026-12-24
 bandit   Templates/Scripts/tests/test_source_mail_pull.py   B108   count=1   # test fixture: dry_run=True with root=/tmp, nothing is written. Tests are not deployed. re-check 2026-12-24
 bandit   Templates/Scripts/tests/test_meeting_prepopulate_paths.py   B108   count=1   # deliberately hostile fixture ("/tmp/absolute-evil") proving an attendee name cannot choose a path. re-check 2026-12-24
+
+# --- marshal on bytecode the integrity check exists to inspect (2026-10-03) --
+# integrity_monitor._pyc_problem unmarshals a cached .pyc to compare it with
+# its source. Those bytes are exactly what Python itself unmarshals and runs at
+# the next import of that module, so reading them adds no exposure beyond a
+# crafted file crashing the monitor -- which the scheduler records as a failed
+# run, not a pass. Line: the marshal.loads in _pyc_problem.
+bandit   Templates/Scripts/integrity_monitor.py   B302   count=1   # the bytecode check itself; see above. re-check 2027-01-03
+semgrep  Templates/Scripts/integrity_monitor.py   marshal-usage   count=1   # as above. re-check 2027-01-03
