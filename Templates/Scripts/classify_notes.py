@@ -500,9 +500,11 @@ def adjudicate(client, title: str, folder: str, body: str) -> dict | None:
     if tier not in TIER_RANK:
         print(f"     Warning: unknown tier {tier!r}")
         return None
+    confidence = str(data.get("confidence", "")).strip().lower()
     return {
         "tier": tier,
-        "confidence": str(data.get("confidence", "")).strip().lower() or "unknown",
+        "confidence": (confidence if confidence in ("high", "medium", "low")
+                       else "unknown"),
         "rationale": str(data.get("rationale", "")).strip(),
     }
 
@@ -735,7 +737,8 @@ def rule_on(files: list[Path], action: str, tier_filter: str | None,
 
     `accept` sets `classification` to the proposed tier and retires the
     suggestion keys — the same end state as editing the tier by hand and then
-    running --reconcile, in one step.
+    running --reconcile, in one step. It never lowers a tier: a note already at
+    or above its proposal keeps its tier and only has the proposal retired.
 
     `set` records a tier of the reviewer's own choosing — the common case where
     they agree the note should move but disagree with where the model wanted to
@@ -776,13 +779,22 @@ def rule_on(files: list[Path], action: str, tier_filter: str | None,
             continue
 
         rel = filepath.relative_to(VAULT_ROOT)
-        if action == "accept":
+        cur = current_tier(fm)
+        if (action == "accept" and cur is not None
+                and TIER_RANK[cur] >= TIER_RANK[suggested]):
+            # The note already sits at or above the proposal — L0 can raise a
+            # queued note past its stale suggestion. Accepting must never
+            # lower a tier, so this is a reconcile: retire the proposal, keep
+            # the tier.
+            updates = {"classification_reviewed": "true"}
+            drop = ("classification_suggested", "classification_rationale")
+            verb = f"accepted, kept {cur} (already at or above {suggested})"
+        elif action == "accept":
             updates = {"classification": suggested,
                        "classification_reviewed": "true"}
             drop = ("classification_suggested", "classification_rationale")
             verb = f"accepted -> {suggested}"
         elif action == "set":
-            cur = current_tier(fm)
             updates = {"classification": set_tier,
                        "classification_reviewed": "true"}
             drop = ("classification_suggested", "classification_rationale")
@@ -794,7 +806,7 @@ def rule_on(files: list[Path], action: str, tier_filter: str | None,
         else:
             updates = {"classification_reviewed": "true"}
             drop = ()
-            verb = f"rejected (stays {current_tier(fm) or 'unset'})"
+            verb = f"rejected (stays {cur or 'unset'})"
 
         preserve_updated(updates, fm_body)
         new_text = splice_frontmatter(text, updates, drop_keys=drop)
@@ -843,13 +855,22 @@ def write_report(records: list[dict], scanned: int, dry_run: bool) -> None:
         lines += ["| Note | From | To | Confidence | Rationale |",
                   "| --- | --- | --- | --- | --- |"]
         for r in rows:
-            note = r["rel"].replace("|", "\\|")
-            rationale = r["rationale"].replace("|", "\\|")
-            lines.append(f"| [[{Path(note).stem}]] | {r['from']} | {r['to']} "
-                         f"| {r['confidence']} | {rationale} |")
+            # The stem can come from outside text (an invitee's display name
+            # becomes a People/ filename) and the rationale and confidence are
+            # model output about clipped pages: rendered the way the review
+            # page renders them, so a row can neither break out of its link or
+            # cell nor carry a live Dataview query or Meta Bind field.
+            rel = Path(r["rel"]).as_posix()
+            note = (f"[[{Path(rel).stem}]]" if bindable(rel)
+                    else md_inert(Path(rel).stem, limit=120) or "(untitled)")
+            # From/To are tier names the script itself validated.
+            lines.append(f"| {note} | {r['from']} | {r['to']} "
+                         f"| {md_inert(r['confidence'], limit=20)} "
+                         f"| {md_inert(r['rationale'])} |")
         lines.append("")
     try:
-        REPORT_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        REPORT_FILE.write_text(templater_guard.neutralize("\n".join(lines) + "\n"),
+                               encoding="utf-8")
     except OSError as exc:
         print(f"  Warning: could not write report: {exc}")
 
@@ -1328,7 +1349,13 @@ def main() -> int:
                 print(f"       {record['from']} -> {record['to']} "
                       f"({record['layer']}, {record['confidence']}) "
                       f"{record['rationale']}")
-            if not args.dry_run:
+            # Only a note L1 actually adjudicated is recorded as done. A
+            # detectors-only pass never asked the model, and an error record is
+            # a response nobody could read; tracking either would make every
+            # later run skip the note until its body changed.
+            adjudicated = not args.detectors_only and not (
+                record and record["action"] == "error")
+            if not args.dry_run and adjudicated:
                 try:
                     tracking[filepath.relative_to(VAULT_ROOT).as_posix()] = content_hash(
                         filepath.read_text(encoding="utf-8"))

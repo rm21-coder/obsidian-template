@@ -91,7 +91,10 @@ WRITERS = {
     "strip_ads.py": ["templater_guard.neutralize(strip_ads(original))"],
     "meeting_prep.py": ["templater_guard.neutralize(build_block(now, mode, attendee_tasks))"],
     "tag_clippings.py": ["line = templater_guard.neutralize("],
-    "classify_notes.py": ["flat = templater_guard.neutralize(flat)"],
+    "classify_notes.py": [
+        "flat = templater_guard.neutralize(flat)",
+        'REPORT_FILE.write_text(templater_guard.neutralize("\\n".join(lines) + "\\n"),',
+    ],
     "meeting_group_backfill.py": ["text = templater_guard.neutralize('\\n'.join(out))"],
     "obsidian-rag-sync.py": ['templater_guard.neutralize("\\n".join(lines))'],
 }
