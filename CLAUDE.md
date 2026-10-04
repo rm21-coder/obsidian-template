@@ -116,7 +116,7 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
 
 ## Standing security checks
 
-This repository runs five security passes. They are configuration, not a
+This repository runs seven security passes. They are configuration, not a
 ritual: the point is that they run when the code changes rather than when
 someone remembers.
 
@@ -124,6 +124,8 @@ someone remembers.
     sast     semgrep + bandit   triggered by any .py
     shell    shellcheck         triggered by any .sh
     secrets  gitleaks           triggered by any tracked file
+    hooks    installed hooks    every run: the installed hooks match installers/lib/hooks
+    content  public-tree gates  classification audit + identity gate (full / .md changes)
     dast     dynamic checks     triggered by network / path / transport changes
 
 One entry point, `installers/lib/security-checks.sh`:
@@ -131,15 +133,18 @@ One entry point, `installers/lib/security-checks.sh`:
 ```bash
 installers/lib/security-checks.sh            # --full, every pass
 installers/lib/security-checks.sh --changed  # only what the diff implicates
-installers/lib/security-checks.sh --fast     # secrets + shell, ~1.5s
+installers/lib/security-checks.sh --fast     # secrets + shell + hooks, ~1.5s
 installers/lib/security-checks.sh --dast     # the dynamic checks alone
 ```
 
 **When it runs.**
 
 - **Every commit, automatically:** the `pre-commit` hook runs `--fast`. That is
-  secrets + shell only, the two passes that stop an *irreversible* mistake on a
-  public repo.
+  secrets + shell, the two passes that stop an *irreversible* mistake on a
+  public repo, plus the hook-freshness check: the hooks are installed as
+  copies, and a stale pre-push copy once meant the push gates never ran. After
+  changing anything in `installers/lib/hooks/`, re-run
+  `./installers/install-git-hooks.sh` or the next commit is refused.
 - **Every push, automatically:** the `pre-push` hook runs `--full` (~40s) and
   refuses the push on any FAIL. `--fast` alone once let the full suite sit
   failing on `main` unnoticed; a push is when code becomes public. Install both

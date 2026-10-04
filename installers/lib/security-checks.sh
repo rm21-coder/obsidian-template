@@ -2,19 +2,21 @@
 #
 # security-checks.sh - the standing security suite for this repository.
 #
-# Five passes over the code, each scoped to what a change actually touches:
+# Seven passes, each scoped to what a change actually touches:
 #
 #   sca      pip-audit    dependency vulnerabilities
 #   sast     semgrep + bandit   Python static analysis
 #   shell    shellcheck   shell static analysis
 #   secrets  gitleaks     credentials in the tree and in history
+#   hooks    check_hooks_fresh   the installed git hooks are the repo's own
+#   content  classification audit + identity gate over the public tree
 #   dast     dynamic      re-runnable versions of the packet's one-off checks
 #
 # Modes
 # -----
 #   --full      every pass (default)
 #   --changed   only the passes the working diff implicates
-#   --fast      secrets + shell only - cheap enough to gate every commit
+#   --fast      secrets + shell + hooks - cheap enough to gate every commit
 #   --dast      the dynamic checks alone
 #
 # --fast exists because a slow pre-commit hook is a hook people bypass with
@@ -138,7 +140,7 @@ changed_files() {
 want() {   # want <pass>
     case "$MODE" in
         full) return 0 ;;
-        fast) [[ "$1" == "secrets" || "$1" == "shell" ]] ;;
+        fast) [[ "$1" == "secrets" || "$1" == "shell" || "$1" == "hooks" ]] ;;
         dast) [[ "$1" == "dast" ]] ;;
         changed)
             local files; files="$(changed_files)"
@@ -148,6 +150,7 @@ want() {   # want <pass>
                 sast)    grep -qE '\.py$|security-suppressions\.txt' <<<"$files" ;;
                 shell)   grep -qE '\.sh$'                          <<<"$files" ;;
                 secrets) return 0 ;;
+                hooks)   return 0 ;;
                 content) grep -qE '\.md$|check_classification|check_identity_leak' <<<"$files" ;;
                 dast)    grep -qE 'url_safety|source_mail|handoff|plugins|integrity|rag-sync' <<<"$files" ;;
             esac
@@ -333,6 +336,28 @@ if want secrets; then
             record secrets FAIL "see gitleaks-*.json"
             _say "  FAIL: gitleaks reported findings (values redacted)."
         fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Hooks: the gates only exist if the installed hooks are the current ones
+# ---------------------------------------------------------------------------
+# install-git-hooks.sh installs copies, and a copy does not follow the repo:
+# the maintainer's pre-push hook was a 2026-09-25 copy until 2026-10-04, so
+# the per-commit push gates had never run on a push (added 2026-10-04). Every
+# mode runs this, --fast included, so a stale hook refuses the next commit:
+# even a stale hook calls this script from the working tree.
+if want hooks; then
+    expect hooks
+    _head "Hooks - installed copies match installers/lib/hooks"
+    python3 installers/lib/check_hooks_fresh.py --repo-root . >"$OUT/hooks.log" 2>&1
+    rc=$?
+    if [[ $rc -eq 0 ]]; then
+        record hooks PASS "$(tail -1 "$OUT/hooks.log")"
+    elif [[ $rc -eq 2 ]]; then
+        record hooks SKIP "not a git checkout - no hooks to check"
+    else
+        record hooks FAIL "$(head -1 "$OUT/hooks.log")"
     fi
 fi
 

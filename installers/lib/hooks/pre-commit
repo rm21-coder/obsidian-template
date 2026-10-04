@@ -78,8 +78,9 @@ fi
 CHECKS="$REPO_ROOT/installers/lib/security-checks.sh"
 if [[ -x "$CHECKS" ]]; then
     HOOK_ARTIFACTS="$(mktemp -d -t obsidian_precommit)"
-    if ! "$CHECKS" --fast --artifacts "$HOOK_ARTIFACTS" >/dev/null 2>&1; then
+    if ! "$CHECKS" --fast --artifacts "$HOOK_ARTIFACTS" >"$HOOK_ARTIFACTS/summary.txt" 2>&1; then
         echo "" >&2
+        grep -E "^\s+\S+\s+FAIL" "$HOOK_ARTIFACTS/summary.txt" >&2 || true
         echo "pre-commit: security checks FAILED. Commit refused." >&2
         echo "Details: $HOOK_ARTIFACTS" >&2
         echo "Re-run yourself with: installers/lib/security-checks.sh --fast" >&2
