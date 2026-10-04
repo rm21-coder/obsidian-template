@@ -34,7 +34,11 @@ from pathlib import Path
 
 VAULT = Path(os.path.expanduser("~/Obsidian"))
 MEETINGS = VAULT / "Meetings"
-EXCLUDE_DIRS = {".obsidian", ".trash", "Z_archive", "Z_attachments"}
+# Clippings/ is excluded because nothing in it is the user's own follow-up:
+# converted documents (markitdown), podcast transcripts and caption summaries
+# all land there, so a `- [ ] [[Person]]` line in it was written by an
+# outsider. The morning dashboard's to-do scan excludes it for the same reason.
+EXCLUDE_DIRS = {".obsidian", ".trash", "Clippings", "Z_archive", "Z_attachments"}
 
 BEGIN_MARK = "<!-- BEGIN: AUTO-INSERTED OPEN FOLLOW-UPS -->"
 END_MARK = "<!-- END: AUTO-INSERTED OPEN FOLLOW-UPS -->"
@@ -208,9 +212,21 @@ def find_open_tasks_for(person: str, skip_path: Path) -> list[tuple[str, str]]:
     return results
 
 
+def defuse_html_comments(text: str) -> str:
+    """Make quoted text unable to open or close an HTML comment.
+
+    The block's BEGIN/END/generated markers are HTML comments, so a quoted
+    task carrying `<!-- END: AUTO-INSERTED ... -->` would end the block early
+    on the next refresh and leave fragments behind. Entity-escaping the
+    delimiters renders the same characters in Obsidian but is never a comment.
+    """
+    return text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+
+
 def render_task_line(src: str, raw: str) -> str:
     cleaned = re.sub(r"^\s*- \[ \]\s*(#task\s+)?", "", raw)
-    return f"> - _from [[{src}]]:_ {cleaned}"
+    return (f"> - _from [[{defuse_html_comments(src)}]]:_ "
+            f"{defuse_html_comments(cleaned)}")
 
 
 def build_block(now: dt.datetime, mode: str,
@@ -242,10 +258,16 @@ def existing_block_mode(text: str) -> str | None:
 
 
 def strip_existing_block(text: str) -> str:
-    """Remove an existing BEGIN..END block (and surrounding blank lines) from text."""
+    """Remove an existing BEGIN..END block (and surrounding blank lines) from text.
+
+    Both markers must stand on a line of their own, as build_block writes
+    them; a marker quoted mid-line (blocks written before quoted text was
+    defused) can then neither start nor end the match.
+    """
     pattern = re.compile(
-        re.escape(BEGIN_MARK) + r".*?" + re.escape(END_MARK) + r"\n*",
-        re.DOTALL,
+        r"^" + re.escape(BEGIN_MARK) + r"[ \t]*\n.*?^"
+        + re.escape(END_MARK) + r"[ \t]*(?:\n|\Z)\n*",
+        re.DOTALL | re.MULTILINE,
     )
     return pattern.sub("", text, count=1)
 
