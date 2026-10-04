@@ -172,7 +172,8 @@ def test_a_tag_name_is_scanned(repo: Path) -> None:
     assert "name:1: deny-list: Fictionalname" in proc.stderr
 
 
-def _hand_commit(repo: Path, extra_headers: bytes, message: bytes) -> tuple[str, str]:
+def _hand_commit(repo: Path, extra_headers: bytes, message: bytes,
+                 literally: bool = False) -> tuple[str, str]:
     """A commit on HEAD built from raw bytes, so a test can hold a header or an
     encoding that porcelain will not write. Returns (commit, its parent)."""
     base = _git(repo, "rev-parse", "HEAD")
@@ -180,7 +181,8 @@ def _hand_commit(repo: Path, extra_headers: bytes, message: bytes) -> tuple[str,
     who = b"T <t@example.com> 1700000000 +0000"
     body = (b"tree " + tree.encode() + b"\nparent " + base.encode() + b"\nauthor " + who
             + b"\ncommitter " + who + b"\n" + extra_headers + b"\n" + message)
-    sha = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+    sha = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin",
+                          *(["--literally"] if literally else [])],
                          cwd=repo, input=body, capture_output=True,
                          check=True).stdout.decode().strip()
     return sha, base
@@ -254,7 +256,7 @@ def test_a_name_in_a_branch_name_is_scanned(repo: Path) -> None:
     proc = _push(repo, _git(repo, "rev-parse", "HEAD"),
                  lref="refs/heads/fictional-person-review")
     assert proc.returncode == 1
-    assert "pushed ref name:1: deny-list: Fictional Person" in proc.stderr
+    assert "pushed ref name (as words):1: deny-list: Fictional Person" in proc.stderr
 
 
 def test_a_latin1_byte_on_the_same_line_does_not_hide_a_utf8_name(repo: Path) -> None:
@@ -265,3 +267,73 @@ def test_a_latin1_byte_on_the_same_line_does_not_hide_a_utf8_name(repo: Path) ->
     proc = _push(repo, _git(repo, "rev-parse", "v5"), lref="refs/tags/v5")
     assert proc.returncode == 1
     assert "message:1: deny-list: Renée Fictional" in proc.stderr
+
+
+def test_a_word_inside_a_branch_name_is_not_a_name(repo: Path) -> None:
+    # "visual green" holds "al green" as a substring, not as words.
+    _deny(repo, "Al Green")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"),
+                 lref="refs/heads/fix/visual-green-ci")
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_a_wrong_declared_encoding_does_not_hide_utf8_text(repo: Path) -> None:
+    # git stores the bytes it is given under whatever commitEncoding says.
+    _deny(repo, "Fictional Person")
+    sha, base = _hand_commit(repo, b"encoding UTF-16\n",
+                             f"Fictional Person met {REAL}\n".encode("utf-8"))
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert "message:1: deny-list: Fictional Person" in proc.stderr
+
+
+def test_a_nul_in_the_encoding_header_does_not_crash(repo: Path) -> None:
+    _deny(repo, "Fictional Person")
+    sha, base = _hand_commit(repo, b"encoding utf\0\n", b"Fictional Person\n",
+                             literally=True)
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert "Traceback" not in proc.stderr
+    assert "message:1: deny-list: Fictional Person" in proc.stderr
+
+
+def test_a_merged_tag_declared_encoding_is_honoured(repo: Path) -> None:
+    _deny(repo, "Bo\u0159ek Fictional")
+    base = _git(repo, "rev-parse", "HEAD")
+    tag = (f"object {base}\ntype commit\ntag v8\ntagger T <t@example.com> "
+           "1700000000 +0000\nencoding ISO-8859-2\n\n").encode() + \
+        "for Bo\u0159ek Fictional\n".encode("iso-8859-2")
+    embedded = b"\n ".join(tag.rstrip(b"\n").split(b"\n"))
+    sha, base = _hand_commit(repo, b"mergetag " + embedded + b"\n", b"clean merge\n")
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert "mergetag 1 message:1: deny-list: Bo\u0159ek Fictional" in proc.stderr
+
+
+def test_a_colleague_author_line_is_scanned(repo: Path) -> None:
+    # Only the maintainer's own configured identity is skipped.
+    sha, base = _hand_commit(repo, b"", b"applied\n")
+    raw = subprocess.run(["git", "cat-file", "commit", sha], cwd=repo,
+                         capture_output=True, check=True).stdout
+    raw = raw.replace(b"author T <t@example.com>",
+                      b"author Jo <jo@" + REAL.encode() + b">")
+    sha = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                         cwd=repo, input=raw, capture_output=True,
+                         check=True).stdout.decode().strip()
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert f"author header:1: real-looking address: jo@{REAL}" in proc.stderr
+
+
+def test_the_maintainers_own_author_line_is_not_scanned(repo: Path) -> None:
+    _git(repo, "config", "user.name", "Jo")
+    _git(repo, "config", "user.email", f"jo@{REAL}")
+    sha, base = _hand_commit(repo, b"", b"applied\n")
+    raw = subprocess.run(["git", "cat-file", "commit", sha], cwd=repo,
+                         capture_output=True, check=True).stdout
+    raw = raw.replace(b"T <t@example.com>", b"Jo <jo@" + REAL.encode() + b">")
+    sha = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                         cwd=repo, input=raw, capture_output=True,
+                         check=True).stdout.decode().strip()
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 0, proc.stderr

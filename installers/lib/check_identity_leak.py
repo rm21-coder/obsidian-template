@@ -202,111 +202,117 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
     return out
 
 
-def _decode(raw: bytes, encoding: str | None = None) -> str:
-    """Bytes git stores verbatim, as text. A declared encoding (a commit's or
-    tag's `encoding` header, which `%B` used to honour) is used when it
-    decodes cleanly. Otherwise UTF-8, with each byte that is not valid UTF-8
-    read as Latin-1 -- per byte, so one stray Latin-1 byte cannot garble a
-    UTF-8 name next to it, as decoding a whole object or a whole line one
-    way did (review rounds 5-7, 2026-10-04)."""
-    if encoding and encoding.lower().replace("_", "-") not in ("utf-8", "utf8"):
-        try:
-            return raw.decode(encoding)
-        except (LookupError, UnicodeDecodeError):
-            pass
+def _decodings(raw: bytes, encoding: str | None = None) -> list[str]:
+    """Every reading of bytes git stores verbatim. Always UTF-8 with each byte
+    that is not valid UTF-8 read as Latin-1 -- per byte, so one stray Latin-1
+    byte cannot garble a UTF-8 name next to it (review rounds 5-7). Plus the
+    declared encoding (a commit's or tag's `encoding` header) when it decodes
+    and reads differently: in addition, never instead, because git writes the
+    bytes it was given under whatever i18n.commitEncoding says, so a declared
+    UTF-16 or ISO-8859-1 can sit over UTF-8 text and decode "cleanly" into
+    garbage (review round 8, 2026-10-04)."""
     text = raw.decode("utf-8", "surrogateescape")
-    return re.sub("[\udc80-\udcff]", lambda m: chr(ord(m.group()) - 0xDC00), text)
+    texts = [re.sub("[\udc80-\udcff]", lambda m: chr(ord(m.group()) - 0xDC00), text)]
+    if encoding:
+        try:
+            declared = raw.decode(encoding)
+        except Exception:       # unknown, malformed (a NUL), or not this text
+            declared = None
+        if declared is not None and declared != texts[0]:
+            texts.append(declared)
+    return texts
 
 
 # A header line is a lowercase key and a value; anything else ends the header
 # block, as a hand-built object with a stray "\r" separator line showed (round 7).
-_HEADER_RE = re.compile(r"^[a-z][a-z0-9-]* ")
+_HEADER_RE = re.compile(rb"^[a-z][a-z0-9-]* ")
 
-# The headers skipped are those carrying no free text a person wrote: hashes,
-# the declared encoding, and the maintainer's own published identity on every
-# commit. Each is skipped only in its strict form; anything else is scanned
-# whole, key included, so a message line that merely starts "author " is not.
-_IDENTITY_LINE = re.compile(
-    r"^(?:(?:tree|parent|object) [0-9a-f]{40,64}"
-    r"|(?:author|committer|tagger) [^<>\n]*<[^<>\n]*> \d+ [+-]\d{4}"
-    r"|type (?:commit|tree|blob|tag)"
-    r"|encoding [A-Za-z0-9._:-]+)$")
+# Header lines that carry no free text: hashes and the object type, each
+# skipped only in its strict form.
+_HASH_LINE = re.compile(r"^(?:(?:tree|parent|object) [0-9a-f]{40,64}"
+                        r"|type (?:commit|tree|blob|tag))$")
+# An identity line is skipped only when it is the maintainer's own, as git is
+# configured to write it: a colleague's patch applied with `git am`, or a
+# commit made under a work address, publishes that identity (round 8).
+_IDENT_LINE = re.compile(r"^(?:author|committer|tagger) ([^<>\n]*<[^<>\n]*>) \d+ [+-]\d{4}$")
 
 
-def _git_object(kind: str, sha: str) -> tuple[list[list[str]], str]:
-    """A raw tag or commit object: its header blocks (each a header line and
-    its continuation lines, unindented) and its message."""
-    raw = subprocess.run(("git", "cat-file", kind, sha), capture_output=True,
-                         check=False).stdout
+def _own_identity() -> str | None:
+    name = run_git("config", "user.name").strip()
+    email = run_git("config", "user.email").strip()
+    return f"{name} <{email}>" if name and email else None
+
+
+def _parse_object(raw: bytes) -> tuple[list[list[bytes]], bytes]:
+    """A tag or commit object's header blocks (a header line and its
+    continuation lines, unindented) and its message, as raw bytes."""
     lines = raw.split(b"\n")
-    blocks: list[list[str]] = []
-    n = 0
-    for n, line in enumerate(lines):
+    blocks: list[list[bytes]] = []
+    n = len(lines)
+    for k, line in enumerate(lines):
         if line.startswith(b" ") and blocks:
-            blocks[-1].append(_decode(line[1:]))
-        elif _HEADER_RE.match(_decode(line)):
-            blocks.append([_decode(line)])
+            blocks[-1].append(line[1:])
+        elif _HEADER_RE.match(line):
+            blocks.append([line])
         else:
+            n = k
             break
-    else:
-        n = len(lines)
     rest = lines[n:]
     if rest and rest[0] == b"":
         rest = rest[1:]            # the blank separator line itself
-    enc = next((b[0][9:] for b in blocks if b[0].startswith("encoding ")), None)
-    return blocks, _decode(b"\n".join(rest), enc)
+    return blocks, b"\n".join(rest)
 
 
-def _scan_headers(blocks: list[list[str]], label: str,
-                  out: list[tuple[str, int, str]]) -> None:
-    mergetags = 0
+def _scan_object(raw: bytes, label: str, own: str | None,
+                 out: list[tuple[str, int, str]]) -> str | None:
+    """Queue a tag or commit object's headers and message for scanning, and
+    any tag object a `mergetag` header embeds (merging a signed tag copies it
+    whole, round 5). Returns a tag's target object, else None."""
+    blocks, body = _parse_object(raw)
+    encoding = next((b[0][9:].decode("latin-1") for b in blocks
+                     if b[0].startswith(b"encoding ") and len(b) == 1), None)
+    target, mergetags = None, 0
     for block in blocks:
-        if len(block) == 1 and _IDENTITY_LINE.match(block[0]):
-            continue
-        if block[0].startswith("mergetag "):
-            # Merging a signed tag copies the whole tag object here (round 5).
+        first = _decodings(block[0])[0]
+        if len(block) == 1:
+            m = re.match(r"^object ([0-9a-f]{40,64})$", first)
+            if m:
+                target = m.group(1)
+            if _HASH_LINE.match(first):
+                continue
+            ident = _IDENT_LINE.match(first)
+            if ident and own is not None and ident.group(1) == own:
+                continue
+            if first.startswith("encoding "):
+                continue
+            if first.startswith("tag "):
+                for text in _decodings(block[0][4:], encoding):
+                    out.append((f"{label} name", 1, text))
+                continue
+        if block[0].startswith(b"mergetag "):
             mergetags += 1
-            _scan_tag_text("\n".join([block[0][9:]] + block[1:]),
-                           f"{label} mergetag {mergetags}", out)
+            embedded = b"\n".join([block[0][9:]] + block[1:])
+            _scan_object(embedded, f"{label} mergetag {mergetags}", own, out)
             continue
-        key = block[0].partition(" ")[0]
+        key = first.partition(" ")[0]
         for i, line in enumerate(block, 1):
-            out.append((f"{label} {key} header", i, line))
-
-
-def _scan_tag_text(text: str, label: str,
-                   out: list[tuple[str, int, str]]) -> str | None:
-    """Queue an embedded tag object's headers and message for scanning; return
-    the object it points at. The tagger line is the maintainer's own identity,
-    as the author and committer fields are, and is skipped in its strict form."""
-    head, _, body = text.partition("\n\n")
-    blocks: list[list[str]] = []
-    for line in head.split("\n"):
-        if line.startswith(" ") and blocks:
-            blocks[-1].append(line[1:])
-        else:
-            blocks.append([line])
-    return _scan_tag(blocks, body, label, out)
-
-
-def _scan_tag(blocks: list[list[str]], body: str, label: str,
-              out: list[tuple[str, int, str]]) -> str | None:
-    target = None
-    for block in blocks:
-        m = re.match(r"^object ([0-9a-f]{40,64})$", block[0])
-        if m and len(block) == 1:
-            target = m.group(1)
-        if block[0].startswith("tag ") and len(block) == 1:
-            out.append((f"{label} name", 1, block[0][4:]))
-            continue
-        if len(block) == 1 and _IDENTITY_LINE.match(block[0]):
-            continue
-        key = block[0].partition(" ")[0]
-        for i, line in enumerate(block, 1):
-            out.append((f"{label} {key} header", i, line))
-    for i, line in enumerate(body.splitlines(), 1):
-        out.append((f"{label} message", i, line))
+            for text in _decodings(line, encoding):
+                out.append((f"{label} {key} header", i, text))
+    for text in _decodings(body, encoding):
+        for i, line in enumerate(text.splitlines(), 1):
+            out.append((f"{label} message", i, line))
     return target
+
+
+def _cat_file(kind: str, sha: str) -> bytes:
+    return subprocess.run(("git", "cat-file", kind, sha), capture_output=True,
+                          check=False).stdout
+
+
+# The separators-as-spaces form of a ref name is matched as whole words only:
+# as a substring, a branch "visual-green-ci" matched a two-word name entry
+# whose first word is the last letters of "visual" (round 8).
+REF_WORDS = "pushed ref name (as words)"
 
 
 class RangeError(RuntimeError):
@@ -319,6 +325,7 @@ def range_added_lines(rev_range: str,
     push publishes, intermediate commits included (a name committed and then
     removed is still in the pushed history)."""
     out: list[tuple[str, int, str]] = []
+    own = _own_identity()
     # The ref names a push creates are published too: a branch or tag name,
     # including a lightweight tag's and a renamed push's `src:refs/tags/X`
     # (review round 6, 2026-10-04).
@@ -326,7 +333,7 @@ def range_added_lines(rev_range: str,
     # tried against the name with its separators read as spaces (round 7).
     for name in ref_names or []:
         out.append(("pushed ref name", 1, name))
-        out.append(("pushed ref name", 1, re.sub(r"[-_./]+", " ", name)))
+        out.append((REF_WORDS, 1, re.sub(r"[-_./]+", " ", name)))
     listing = subprocess.run(("git", "rev-list", *rev_range.split()), capture_output=True,
                              text=True, encoding="utf-8", check=False)
     if listing.returncode != 0:
@@ -349,8 +356,7 @@ def range_added_lines(rev_range: str,
         obj, seen = tip, set()
         while obj not in seen and run_git("cat-file", "-t", obj).strip() == "tag":
             seen.add(obj)
-            blocks, body = _git_object("tag", obj)
-            target = _scan_tag(blocks, body, f"tag {obj[:9]}", out)
+            target = _scan_object(_cat_file("tag", obj), f"tag {obj[:9]}", own, out)
             if not target:
                 break
             obj = target
@@ -361,10 +367,7 @@ def range_added_lines(rev_range: str,
         # every commit. Everything else is: a merged signed tag's whole object
         # sits in a `mergetag` header (round 5), and signature armor carries
         # free-text Comment: lines (round 6).
-        blocks, message = _git_object("commit", commit)
-        for i, line in enumerate(message.splitlines(), 1):
-            out.append((f"commit {commit[:9]} message", i, line))
-        _scan_headers(blocks, f"commit {commit[:9]}", out)
+        _scan_object(_cat_file("commit", commit), f"commit {commit[:9]}", own, out)
         # -m / --diff-merges=separate: a merge's own changes, per parent.
         names = [p for p in dict.fromkeys(run_git(
             "diff-tree", "-m", "--no-commit-id", "-r", "-z", "--root",
@@ -415,6 +418,8 @@ def scan(lines, rules, allowed) -> list[tuple[str, int, str, str]]:
     findings = []
     for path, lineno, text in lines:
         for label, pat in rules:
+            if path == REF_WORDS:
+                pat = re.compile(rf"(?<![^\W_])(?:{pat.pattern})(?![^\W_])", pat.flags)
             m = pat.search(text)
             if m:
                 findings.append((path, lineno, f"deny-list: {label}",
