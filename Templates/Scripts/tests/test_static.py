@@ -129,11 +129,13 @@ class TestUrlSafetyAST:
         """requests.get must be called with allow_redirects=False to
         force the manual redirect walk."""
         text = (scripts_dir / "url_safety.py").read_text(encoding="utf-8")
-        get_calls = text.count("requests.get(")
+        # session.get is the pinned fetch (_pinned_get); requests.get would be
+        # an unpinned one. Both count, so either kind must carry the flag.
+        get_calls = text.count("requests.get(") + text.count("session.get(")
         guarded = text.count("allow_redirects=False")
-        assert get_calls > 0, "no requests.get calls — SSRF fix backed out?"
+        assert get_calls > 0, "no GET calls — SSRF fix backed out?"
         assert guarded >= get_calls, (
-            f"requests.get appears {get_calls} times but allow_redirects="
+            f"GET appears {get_calls} times but allow_redirects="
             f"False appears only {guarded} — at least one auto-redirect "
             "fetcher remains.")
 
@@ -159,14 +161,10 @@ class TestFetchersRouteThroughUrlSafety:
     use -- it only shows up when someone points a hostile redirect at it.
     """
 
-    # youtube_summarize.py is deliberately absent. It no longer makes a model
-    # HTTP call of its own (that goes through the SDK via llm_endpoint now), so
-    # the only urlopen left is its *caption-track* fetch -- which IS an SSRF
-    # surface, and still validates-then-urlopens (so a redirect is unvalidated)
-    # against its own duplicate copy of is_safe_url. Tracked as a follow-up;
-    # adding it here before that is fixed would just mean a failing test with
-    # no fix attached.
-    FETCHERS = ("podcast_transcribe.py",)
+    # youtube_summarize.py joined 2026-10-04: its caption-track fetch used to
+    # validate with a duplicate is_safe_url and then urlopen, which followed
+    # redirects unchecked and read the body uncapped (M-DASH 224/358).
+    FETCHERS = ("podcast_transcribe.py", "youtube_summarize.py")
 
     @pytest.mark.parametrize("name", FETCHERS)
     def test_does_not_use_urlopen(self, scripts_dir: Path, name: str) -> None:

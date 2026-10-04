@@ -27,7 +27,7 @@ Templates\Scripts\.venv\Scripts\python.exe Templates\Scripts\youtube_summarize.p
 Naming the venv interpreter explicitly, as above, is still the clearest way to invoke it. But you no longer have to: the script re-execs itself into `Templates/Scripts/.venv` when it finds it is running outside a virtualenv. That matters because the shebang is `#!/usr/bin/env python3`, so any launcher with the stock macOS `PATH` — an Obsidian plugin, a `launchd` job, a `.app` wrapper — resolves to `/usr/bin/python3`, Apple's system Python 3.9, which carries none of the dependencies in `requirements.txt`. Before the guard existed that failed with `ModuleNotFoundError: No module named 'dotenv'` on the first third-party import. `tag_clippings_rag.py` carries the same guard.
 
 1. Fetches the video's metadata and caption tracks via `yt-dlp` (no video/audio download — captions only).
-2. Picks the best available English track: manual captions first, then auto-generated, preferring plain `en` over `en-*` variants.
+2. Picks the best available English track: manual captions first, then auto-generated, preferring plain `en` over `en-*` variants. The track is fetched through `url_safety.safe_fetch`, like every other untrusted URL in the vault: each redirect hop is re-checked against loopback/private/link-local addresses, the connection goes to the address that was checked, and the body is capped at 5 MB.
 3. Sends the transcript through [`llm_endpoint.py`](../Templates/Scripts/llm_endpoint.py) (`claude-sonnet-5` by default) with a fixed prompt asking for a short overview, a "Key takeaways" bullet list, a "Notable points" section, and 3–7 suggested topic tags. The call is metered in `usage_log`, so it shows up in the morning dashboard's cost view alongside the tagger and classifier.
 4. Writes a markdown note with frontmatter (`title`, `source`, `author`, `published`, `duration`, `description`, `classification: public`, `tags`) into `Clippings/YouTube/`. The `tags` list always includes `youtube` plus whatever the model suggested.
 5. Skips videos that already have a note in the output directory — safe to re-run over a list without duplicating work.
@@ -39,7 +39,7 @@ youtube_summarize.py --playlist "https://www.youtube.com/playlist?list=YYYY"
 youtube_summarize.py --max 5 --playlist "https://www.youtube.com/playlist?list=YYYY"   # cap at 5 videos
 ```
 
-Each video in the playlist is processed independently; one failure doesn't stop the rest. The summary line at the end (`done: N ok, M failed`) and exit code 2 tell you if anything needs attention.
+Playlist entries come from the remote playlist or feed, so each must be an `http(s)` URL to a public host; anything else (a LAN address, a value that would read as a `yt-dlp` option) is skipped with a `skipping playlist entry` line on stderr. Each video in the playlist is processed independently; one failure doesn't stop the rest. The summary line at the end (`done: N ok, M failed`) and exit code 2 tell you if anything needs attention.
 
 ### Flags
 
