@@ -355,3 +355,81 @@ def test_old_rss_091_with_a_plain_doctype_still_parses() -> None:
             b'type="audio/mpeg" length="1"/></item></channel></rss>')
     title, items = pt.parse_rss(feed)
     assert title == "Old Show" and items and items[0]["enclosure_url"].endswith("1.mp3")
+
+
+class TestTranscriptOutputSafety:
+    """Findings 182, 183, 333: the episode title is the publisher's text, and
+    the transcript lands in Clippings beside notes the user wrote."""
+
+    @staticmethod
+    def _write(tmp_path, title="Show — Ep", text="spoken words."):
+        return pt.write_transcript_md(
+            out_dir=tmp_path, title=title, source_url="https://e.test/x",
+            result={"segments": [{"start": 0.0, "text": text}], "language": "en"},
+            audio_seconds=90.0, model="test-model")
+
+    @staticmethod
+    def _frontmatter(md):
+        lines = md.splitlines()
+        assert lines[0] == "---"
+        return lines[1:lines.index("---", 1)]
+
+    # 183 -- never overwrite
+    def test_existing_note_with_the_same_name_is_not_overwritten(self, tmp_path):
+        existing = tmp_path / "Quarterly Strategy Notes.md"
+        existing.write_text("my annotations\n", encoding="utf-8")
+        out = self._write(tmp_path, title="Quarterly Strategy Notes")
+        assert existing.read_text(encoding="utf-8") == "my annotations\n"
+        assert out != existing
+        assert out.name.startswith("Quarterly Strategy Notes-")
+        assert "spoken words." in out.read_text(encoding="utf-8")
+
+    def test_two_untitled_transcripts_both_survive(self, tmp_path):
+        first = self._write(tmp_path, title="日本語のタイトル", text="first episode.")
+        second = self._write(tmp_path, title="別のエピソード", text="second episode.")
+        assert first.name == "Untitled.md"
+        assert first != second
+        assert "first episode." in first.read_text(encoding="utf-8")
+        assert "second episode." in second.read_text(encoding="utf-8")
+
+    def test_ordinary_title_keeps_its_plain_name(self, tmp_path):
+        assert self._write(tmp_path, title="Show - Ep 5").name == "Show - Ep 5.md"
+
+    # 182 -- a title cannot end the frontmatter
+    @pytest.mark.parametrize("title", [
+        "Ep 5\n---\nanything", "Ep 5\r\n---\r\nanything", "Ep 5\r---\ranything",
+        "Ep 5 --- anything", "Ep 5\x85---\x0banything"])
+    def test_title_line_breaks_cannot_close_the_frontmatter(self, tmp_path, title):
+        md = self._write(tmp_path, title=title).read_text(encoding="utf-8")
+        fm = self._frontmatter(md)
+        assert fm[0] == "title: Ep 5 --- anything"
+        assert "classification: internal-use-only" in fm
+        assert "- podcast" in fm
+
+    def test_yaml_escape_strips_control_characters(self):
+        assert pt.yaml_escape("a\nb\tc\x00d") == "a b c d"
+        assert pt.yaml_escape("Ep: 5\n---") == '"Ep: 5 ---"'
+        assert pt.yaml_escape("\n") == '""'
+
+    def test_yaml_escape_ordinary_values_unchanged(self):
+        assert pt.yaml_escape("Plain Title") == "Plain Title"
+        assert pt.yaml_escape("Show: Ep") == '"Show: Ep"'
+        assert pt.yaml_escape("") == '""'
+
+    # 333 -- not labelled public
+    def test_transcript_is_labelled_internal_use_only(self, tmp_path):
+        fm = self._frontmatter(self._write(tmp_path).read_text(encoding="utf-8"))
+        assert "classification: internal-use-only" in fm
+        assert "classification: public" not in fm
+
+
+def test_ffprobe_call_has_a_timeout(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(kw)
+        raise pt.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+
+    monkeypatch.setattr(pt.subprocess, "run", fake_run)
+    assert pt.audio_duration(tmp_path / "a.mp3") == 0.0
+    assert seen["timeout"] == 60

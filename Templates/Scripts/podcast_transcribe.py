@@ -32,7 +32,9 @@ Flags:
     --verbose         Log progress to stderr
 
 Output: a single .md file at OUT/<title>.md containing minimal frontmatter
-and the verbatim transcript. Path is printed to stdout on success.
+(classification: internal-use-only) and the verbatim transcript. An existing
+note of that name is never replaced: the new file gets a -YYYY-MM-DD-HHMMSS
+suffix instead. Path is printed to stdout on success.
 
 Requires:
     - Python 3.10+
@@ -69,7 +71,7 @@ import urllib.error
 # 2026-09-25.
 import defusedxml.ElementTree as SafeET
 from defusedxml import DefusedXmlException
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -536,16 +538,24 @@ def audio_duration(audio_path: Path) -> float:
         out = subprocess.run(
             ["ffprobe", "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
-            capture_output=True, text=True, check=True,
+            capture_output=True, text=True, check=True, timeout=60,
         )
         return float(out.stdout.strip())
-    except (subprocess.CalledProcessError, ValueError, FileNotFoundError):
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            ValueError, FileNotFoundError):
         return 0.0
 
 
 # ---------- Output ----------------------------------------------------------
 
+# Line breaks (YAML also counts NEL, LS and PS) and other control characters.
+# An episode title comes from the publisher's feed; a newline in it would let
+# a "---" line close the frontmatter early.
+_YAML_CONTROL = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]+")
+
+
 def yaml_escape(value: str) -> str:
+    value = _YAML_CONTROL.sub(" ", value or "").strip()
     if not value:
         return '""'
     needs_quote = any(c in value for c in ":#&*!|>'\"%@`")
@@ -569,11 +579,30 @@ MARKER_MAX = 45.0
 SENTENCE_ENDINGS = (".", "?", "!", '."', '?"', '!"', ".'", "?'", "!'", "\u2026")
 
 
+def _write_new(out_dir: Path, stem: str, text: str) -> Path:
+    """Create OUT/<stem>.md, never replacing a file already there.
+
+    The title is the publisher's, and Clippings is shared with web clips and
+    converted documents, so a matching name must not overwrite a note. Same
+    suffix as markitdown_convert._unique, but taken with an exclusive create
+    so the check and the write cannot be split.
+    """
+    stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+    names = [stem, f"{stem}-{stamp}"] + [f"{stem}-{stamp}-{n}" for n in range(2, 100)]
+    for name in names:
+        path = out_dir / f"{name}.md"
+        try:
+            with open(path, "x", encoding="utf-8") as fh:
+                fh.write(text)
+        except FileExistsError:
+            continue
+        return path
+    raise FileExistsError(f"no free transcript name for {stem!r} in {out_dir}")
+
+
 def write_transcript_md(*, out_dir: Path, title: str, source_url: str,
                         result: dict, audio_seconds: float, model: str) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
-    fname = safe_filename(title) + ".md"
-    path = out_dir / fname
 
     # ffprobe may be absent on Windows; faster-whisper reports duration itself.
     if not audio_seconds:
@@ -592,9 +621,11 @@ def write_transcript_md(*, out_dir: Path, title: str, source_url: str,
         f"transcription_time: {yaml_escape(format_duration(transcribe_seconds))}" if transcribe_seconds else 'transcription_time: ""',
         f"realtime_speedup: {speedup:.1f}x" if speedup else 'realtime_speedup: ""',
         f"language: {yaml_escape(result.get('language') or 'unknown')}",
-        # Matches the other clippers: externally published material defaults to
-        # public. Raise it by hand for a private recording.
-        "classification: public",
+        # Matches the Clipping template: captured content starts at the working
+        # default, never public. A dropped local recording is private material,
+        # and the export gate and RAG sync trust this label before the nightly
+        # classifier has seen the note. See docs/Data-Classification.md.
+        "classification: internal-use-only",
         "tags:",
         "- podcast",
         "- transcript",
@@ -648,8 +679,8 @@ def write_transcript_md(*, out_dir: Path, title: str, source_url: str,
         # Fall back to raw "text"
         lines.append((result.get("text") or "").strip())
 
-    path.write_text(templater_guard.neutralize("\n".join(lines) + "\n"), encoding="utf-8")
-    return path
+    return _write_new(out_dir, safe_filename(title),
+                      templater_guard.neutralize("\n".join(lines) + "\n"))
 
 
 # ---------- Main ------------------------------------------------------------
