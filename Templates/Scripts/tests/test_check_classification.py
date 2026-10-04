@@ -287,3 +287,75 @@ class TestStagedCopyIsAudited:
         _write(content_repo, rel, CONFIDENTIAL)      # unstaged, not committed
         proc = _run_audit(content_repo, "--staged")
         assert proc.returncode == 0, proc.stderr
+
+
+class TestDefaultDeny:
+    """Every .md must be public except named scaffolding: the gate used to
+    audit a list of content folders, so Z_archive/, an unknown top-level
+    folder or a note at the root passed unaudited (review, 2026-10-04)."""
+
+    @pytest.mark.parametrize("rel", ["Z_archive/old.md", "Inbox/new.md",
+                                      "stray note.md", "Knowledge/upper.MD"])
+    def test_a_confidential_note_outside_the_old_list_is_refused(
+            self, content_repo: Path, rel: str, allow_subprocess: None) -> None:
+        _write(content_repo, rel, CONFIDENTIAL)
+        proc = _run_audit(content_repo)
+        assert proc.returncode == 1, proc.stderr
+        assert f"VIOLATION  {Path(rel)}" in proc.stderr
+        subprocess.run(["git", "add", "--", rel], cwd=content_repo, check=True)
+        staged = _run_audit(content_repo, "--staged")
+        assert staged.returncode == 1 and f"VIOLATION  {Path(rel)}" in staged.stderr
+
+    @pytest.mark.parametrize("rel", ["README.md", "CLAUDE.md", "ONBOARDING.md",
+                                      "docs/x.md", "Templates/T.md", ".obsidian/n.md",
+                                      "installers/i.md", "Z_attachments/a.md"])
+    def test_scaffolding_is_exempt(self, content_repo: Path, rel: str,
+                                   allow_subprocess: None) -> None:
+        _write(content_repo, rel, CONFIDENTIAL)
+        assert _run_audit(content_repo).returncode == 0
+
+    def test_a_symlink_replaced_by_a_confidential_file_is_audited(
+            self, content_repo: Path, allow_subprocess: None) -> None:
+        """A type change (symlink -> file) is diff-filter T, not M."""
+        rel = Path("Knowledge/t.md")
+        (content_repo / "Knowledge" / "target.txt").write_text("x", encoding="utf-8")
+        (content_repo / rel).symlink_to("target.txt")
+        subprocess.run(["git", "add", "-A"], cwd=content_repo, check=True)
+        subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=T",
+                        "commit", "-qm", "seed", "--no-verify"], cwd=content_repo, check=True)
+        (content_repo / rel).unlink()
+        _write(content_repo, rel, CONFIDENTIAL)
+        subprocess.run(["git", "add", "--", rel.as_posix()], cwd=content_repo, check=True)
+        proc = _run_audit(content_repo, "--staged")
+        assert proc.returncode == 1 and f"VIOLATION  {rel}" in proc.stderr
+
+
+class TestPushedRange:
+    """Pre-push audits every pushed commit, not the working tree: a note
+    committed with --no-verify and removed or relabelled by a later commit is
+    still published by the push (review, 2026-10-04)."""
+
+    def _commit(self, root: Path, msg: str) -> str:
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        subprocess.run(["git", "-c", "user.email=t@example.com", "-c", "user.name=T",
+                        "commit", "-qm", msg, "--no-verify"], cwd=root, check=True)
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, check=True,
+                              capture_output=True, text=True).stdout.strip()
+
+    def test_a_note_removed_by_a_later_commit_is_still_refused(
+            self, content_repo: Path, allow_subprocess: None) -> None:
+        _write(content_repo, "Knowledge/ok.md", PUBLIC)
+        base = self._commit(content_repo, "base")
+        _write(content_repo, "Knowledge/leak.md", CONFIDENTIAL)
+        self._commit(content_repo, "leak")
+        (content_repo / "Knowledge" / "leak.md").unlink()
+        tip = self._commit(content_repo, "remove")
+        proc = _run_audit(content_repo, "--range", f"{base}..{tip}")
+        assert proc.returncode == 1, proc.stderr
+        assert "VIOLATION  Knowledge/leak.md @ " in proc.stderr
+
+    def test_a_clean_range_passes_and_a_new_branch_range_works(
+            self, content_repo: Path, allow_subprocess: None) -> None:
+        _write(content_repo, "Knowledge/ok.md", PUBLIC)
+        tip = self._commit(content_repo, "base")
+        assert _run_audit(content_repo, "--range", f"{tip} --not --remotes").returncode == 0

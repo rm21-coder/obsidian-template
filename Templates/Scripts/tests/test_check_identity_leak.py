@@ -404,3 +404,61 @@ class TestNonAsciiPaths:
         assert m._diff_path('+++ "b/tab\\there.md"') == "tab\there.md"
         assert m._diff_path('+++ "b/Jos\\303\\251.md"') == "José.md"
         assert m._diff_path("+++ /dev/null") is None
+
+
+class TestReviewRoundTwo:
+    """Second review of the identity gate (2026-10-04)."""
+
+    def test_unquoting_survives_non_latin_with_a_quote(self, monkeypatch, lib) -> None:
+        """Latin-1 re-encoding raised UnicodeEncodeError on a non-Latin name
+        that git still quotes (it holds a quote), killing the commit gate."""
+        m = load_module(monkeypatch, lib)
+        assert m._diff_path('+++ "b/日本 \\"q\\".md"') == '日本 "q".md'
+        assert m._diff_path('+++ "b/Jos\\303\\251\\tx.md"') == "José\tx.md"
+
+    def test_a_staged_file_git_calls_binary_is_still_scanned(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        (repo / "n.md").write_bytes(b"x\x00y\nHOST = \"acme-tenant.edu\"\n")
+        subprocess.run(("git", "add", "n.md"), cwd=repo, check=True, capture_output=True)
+        hits = m.scan(m.staged_added_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert any(h[0] == "n.md" and "acme-tenant.edu" in h[2] for h in hits), hits
+
+    def test_a_non_utf8_file_is_still_scanned(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        (repo / "l1.md").write_bytes("café bob@realcorp.com\n".encode("latin-1"))
+        hits = m.scan(m.worktree_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert [(h[0], h[2]) for h in hits] == [("l1.md", "real-looking address: bob@realcorp.com")]
+
+    def test_a_type_change_is_scanned(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        (repo / "t.md").symlink_to("nowhere")
+        subprocess.run(("git", "add", "t.md"), cwd=repo, check=True, capture_output=True)
+        subprocess.run(("git", "commit", "-qm", "s", "--no-verify"), cwd=repo, check=True, capture_output=True)
+        (repo / "t.md").unlink()
+        stage(repo, "t.md", 'HOST = "acme-tenant.edu"\n')
+        hits = m.scan(m.staged_added_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert any(h[0] == "t.md" and h[1] == 1 for h in hits), hits
+
+
+class TestPushedRange:
+    def test_a_name_added_then_removed_is_still_found(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        stage(repo, "a.md", "clean\n")
+        subprocess.run(("git", "commit", "-qm", "base", "--no-verify"), cwd=repo, check=True, capture_output=True)
+        base = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+        stage(repo, "a.md", 'clean\nc = "Ackerman, Dana"\n')
+        subprocess.run(("git", "commit", "-qm", "leak", "--no-verify"), cwd=repo, check=True, capture_output=True)
+        stage(repo, "a.md", "clean\n")
+        subprocess.run(("git", "commit", "-qm", "fix", "--no-verify"), cwd=repo, check=True, capture_output=True)
+        hits = m.scan(m.range_added_lines(f"{base}..HEAD"), m.load_denylist(), m.load_allowed_domains())
+        assert [(h[0], h[1]) for h in hits] == [("a.md", 2)]
+
+    def test_the_pre_push_hook_runs_both_gates_over_the_pushed_range(self) -> None:
+        hook = (LIB / "hooks" / "pre-push").read_text(encoding="utf-8")
+        assert 'check_classification.py" --repo-root "$REPO_ROOT" --quiet --range "$r"' in hook
+        assert 'check_identity_leak.py" --quiet --range "$r"' in hook
+        assert hook.index("--range") < hook.index('"$CHECKS" --full')

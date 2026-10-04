@@ -351,6 +351,25 @@ content. It remains the gate. It checks files one at a time, so a `public` note
 embedding a non-public one passes it; `disclosure_check.py` covers that case.
 They are complementary.
 
+What it checks, since 2026-10-04:
+
+- **Every `.md` file, in any letter case, by default.** Only the template's
+  own scaffolding is exempt: `Templates/`, `docs/`, `installers/`,
+  `Z_attachments/`, dot-folders, and the root `README.md`, `CLAUDE.md` and
+  `ONBOARDING.md`. Before that, it audited a list of content folders, so a
+  note in `Z_archive/`, in a new top-level folder or at the root went
+  unchecked.
+- **At commit,** the staged copy of each file — what the commit will hold,
+  not the working copy — including files whose names have accented characters
+  (git quotes those, and they used to drop out of the list) and a symlink
+  replaced by a file.
+- **At push,** every version of every note in every commit being pushed. A
+  note committed with `--no-verify` and removed or relabelled in a later
+  commit is still published by the push, because history is public too. The
+  identity gate does the same for real names and addresses.
+- **In the full security suite** (`security-checks.sh`), the whole working
+  tree, as the `content` pass.
+
 ## Endpoint and model
 
 Both scripts resolve credentials through `llm_endpoint.py`: stock Anthropic with

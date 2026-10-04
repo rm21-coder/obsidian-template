@@ -82,9 +82,35 @@ def _diff_path(header: str) -> str | None:
     if rest == "/dev/null":
         return None
     if rest.startswith('"') and rest.endswith('"'):
-        rest = (rest[1:-1].encode("latin-1", "backslashreplace")
-                .decode("unicode_escape").encode("latin-1").decode("utf-8", "replace"))
+        rest = _c_unquote(rest[1:-1])
     return rest[2:] if rest.startswith("b/") else rest
+
+
+_C_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13,
+              '"': 34, "\\": 92}
+
+
+def _c_unquote(body: str) -> str:
+    """Undo git's C-quoting at the byte level: octal escapes are raw UTF-8
+    bytes, and unescaped characters may be any Unicode (with quotePath off),
+    so they are re-encoded as UTF-8 rather than Latin-1."""
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        c = body[i]
+        if c == "\\" and i + 1 < len(body):
+            nxt = body[i + 1]
+            if nxt in "01234567" and i + 3 < len(body) + 0 and body[i + 1:i + 4].isdigit():
+                out.append(int(body[i + 1:i + 4], 8) & 0xFF)
+                i += 4
+                continue
+            if nxt in _C_ESCAPES:
+                out.append(_C_ESCAPES[nxt])
+                i += 2
+                continue
+        out += c.encode("utf-8")
+        i += 1
+    return out.decode("utf-8", "replace")
 
 
 def _name_lines(paths: list[str]) -> list[tuple[str, int, str]]:
@@ -152,10 +178,13 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
     nothing and reports clean. That exact sequence is how identity strings got
     within one keystroke of a public commit three times in one session.
     """
-    diff = run_git("diff", "--cached", "--unified=0", "--no-color",
-                   "--diff-filter=ACMR")
+    # --text: a file git thinks is binary (one NUL byte) showed only "Binary
+    # files differ", and none of its added lines was scanned. ACMRT: a
+    # symlink replaced by a file is a type change.
+    diff = run_git("diff", "--cached", "--unified=0", "--no-color", "--text",
+                   "--diff-filter=ACMRT")
     names = [p for p in run_git("diff", "--cached", "--name-only", "-z",
-                                "--diff-filter=ACMR").split("\0") if p]
+                                "--diff-filter=ACMRT").split("\0") if p]
     out: list[tuple[str, int, str]] = _name_lines(names)
     path, lineno = None, 0
     for line in diff.splitlines():
@@ -173,6 +202,33 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
     return out
 
 
+def range_added_lines(rev_range: str) -> list[tuple[str, int, str]]:
+    """Added lines and names from every commit in a rev-list range: what a
+    push publishes, intermediate commits included (a name committed and then
+    removed is still in the pushed history)."""
+    out: list[tuple[str, int, str]] = []
+    for commit in run_git("rev-list", *rev_range.split()).split():
+        names = [p for p in run_git("diff-tree", "--no-commit-id", "-r", "-z", "--root",
+                                    "--name-only", "--diff-filter=ACMRT", commit).split("\0") if p]
+        out += _name_lines(names)
+        diff = run_git("show", "--format=", "--unified=0", "--no-color", "--text",
+                       "--diff-filter=ACMRT", "--root", commit)
+        path, lineno = None, 0
+        for line in diff.splitlines():
+            if line.startswith("+++ "):
+                path = _diff_path(line)
+                continue
+            if line.startswith("@@"):
+                m = re.search(r"\+(\d+)", line)
+                lineno = int(m.group(1)) if m else 0
+                continue
+            if line.startswith("+") and not line.startswith("+++"):
+                if path and not skip_path(path):
+                    out.append((path, lineno, line[1:]))
+                lineno += 1
+    return out
+
+
 def worktree_lines(paths: list[str] | None = None) -> list[tuple[str, int, str]]:
     """Every line of tracked and untracked-but-not-ignored files."""
     if paths is None:
@@ -184,8 +240,11 @@ def worktree_lines(paths: list[str] | None = None) -> list[tuple[str, int, str]]
         if skip_path(p):
             continue
         try:
-            text = Path(p).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+            # errors="replace": a Latin-1 or otherwise non-UTF-8 file was
+            # skipped outright; its ASCII content (addresses, most names) is
+            # what the scan needs, and survives the replacement.
+            text = Path(p).read_text(encoding="utf-8", errors="replace")
+        except OSError:
             continue
         for i, line in enumerate(text.splitlines(), 1):
             out.append((p, i, line))
@@ -358,6 +417,8 @@ def init_denylist(vault: Path, config: Path) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--range", metavar="REVS",
+                      help="scan every commit in a git rev-list range (pre-push hook)")
     mode.add_argument("--staged", action="store_true",
                       help="scan added lines in the index (what the hook uses)")
     mode.add_argument("--worktree", action="store_true",
@@ -383,7 +444,9 @@ def main() -> int:
     rules = load_denylist()
     allowed = load_allowed_domains()
 
-    if args.staged:
+    if args.range:
+        lines = range_added_lines(args.range)
+    elif args.staged:
         lines = staged_added_lines()
     elif args.worktree:
         lines = worktree_lines()

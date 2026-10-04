@@ -351,11 +351,13 @@ if want content; then
     else
         record content FAIL "classification audit - see classification-audit.log"
     fi
-    if [[ ! -f installers/lib/identity-denylist.local ]]; then
-        record content SKIP "identity gate: no local deny-list (run check_identity_leak.py --init)"
-    elif python3 installers/lib/check_identity_leak.py --worktree --quiet \
+    # Run even without the local deny-list: the real-address scan needs none.
+    scope="names and addresses"
+    [[ -f installers/lib/identity-denylist.local ]] || \
+        scope="addresses only - no local deny-list (run check_identity_leak.py --init)"
+    if python3 installers/lib/check_identity_leak.py --worktree --quiet \
             >"$OUT/identity-gate.log" 2>&1; then
-        record content PASS "identity gate: tracked and untracked files clean"
+        record content PASS "identity gate ($scope): tracked and untracked files clean"
     else
         # The log names file and rule, and quotes the matching line; it stays
         # in the artifact directory, outside the repo.
