@@ -225,7 +225,7 @@ function Remove-RetiredPlugins {
 }
 
 # Obsidian's settings JSON checked out before .gitattributes made it LF
-# (2bf2afb) is still CRLF on disk. Obsidian re-saves it as LF, and git then
+# (2bb80b9) is still CRLF on disk. Obsidian re-saves it as LF, and git then
 # reports the file modified with no diff, so the next update refuses. Rewrite
 # those files from git as LF now. Only a file whose content already matches
 # git apart from line endings is touched; anything else is left alone.

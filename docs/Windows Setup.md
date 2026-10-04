@@ -587,11 +587,11 @@ x64 box that can offload to a discrete GPU.
   one implementation, `installers/lib/quickadd_patch.py`.
 - **`Templates/Scripts/tests/`** — the security-controls pytest suite now
   runs on Windows. Last measured 2026-08-25 on Windows 11 ARM64 at commit
-  `75986f8`: **573 passed, 4 skipped, 9 failed, 0 errors** of 586 collected,
+  `78536a2`: **573 passed, 4 skipped, 9 failed, 0 errors** of 586 collected,
   against a macOS reference of 577 passed / 9 skipped on the same suite.
   Collection totals match exactly, so the whole gap is Windows-specific.
 
-  That run was itself a re-measurement. The previous one, at `2d97440`, was
+  That run was itself a re-measurement. The previous one, at `be665d4`, was
   545 passed / 3 skipped / 4 failed / **33 errors**. The 33 were a single
   fixture redirecting only `HOME`, when this platform derives its state
   directory from `%LOCALAPPDATA%` — so the fixture's own guard correctly

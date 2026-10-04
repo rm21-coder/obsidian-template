@@ -337,7 +337,7 @@ def test_no_stale_templater_entries_remain() -> None:
     assert "templater" not in (REPO / ".obsidian" / "ribbon-config.json").read_text(encoding="utf-8").lower()
 
 
-# ---- the ARM laptop run of 9b39b8a (2026-10-03) -----------------------------
+# ---- the ARM laptop run of b7b0560 (2026-10-03) -----------------------------
 
 @needs_node
 @pytest.mark.parametrize("scenario,marker", [
