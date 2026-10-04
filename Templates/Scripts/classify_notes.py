@@ -65,6 +65,7 @@ import os
 import re
 import sys
 import templater_guard  # noqa: E402
+import classification_tier  # noqa: E402
 
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -779,7 +780,16 @@ def rule_on(files: list[Path], action: str, tier_filter: str | None,
             continue
 
         rel = filepath.relative_to(VAULT_ROOT)
-        cur = current_tier(fm)
+        # The tier every gate acts on: the most restrictive declared value.
+        # PyYAML (parse_fm) takes the LAST of duplicate keys, so reading the
+        # current tier from it could let a ruling write below the real one.
+        cur, unknown = classification_tier.effective(text)
+        if unknown and action in ("accept", "set"):
+            # A duplicate or malformed declaration: what this would write
+            # cannot be compared with what the gates read. Do not guess.
+            print(f"  not ruled: classification cannot be read reliably: "
+                  f"{rel.as_posix()}")
+            continue
         if (action == "accept" and cur is not None
                 and TIER_RANK[cur] >= TIER_RANK[suggested]):
             # The note already sits at or above the proposal — L0 can raise a
