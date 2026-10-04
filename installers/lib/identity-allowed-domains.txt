@@ -28,6 +28,7 @@ icloud.com
 outlook.com
 hotmail.com
 yahoo.com
+proton.me
 
 # Anthropic's no-reply, which appears in commit trailers
 anthropic.com
