@@ -398,23 +398,40 @@ class TestTranscriptOutputSafety:
     # 182 -- a title cannot end the frontmatter
     @pytest.mark.parametrize("title", [
         "Ep 5\n---\nanything", "Ep 5\r\n---\r\nanything", "Ep 5\r---\ranything",
-        "Ep 5 --- anything", "Ep 5\x85---\x0banything"])
+        "Ep 5\u2028---\u2029anything", "Ep 5\x85---\x0banything"])
     def test_title_line_breaks_cannot_close_the_frontmatter(self, tmp_path, title):
         md = self._write(tmp_path, title=title).read_text(encoding="utf-8")
         fm = self._frontmatter(md)
-        assert fm[0] == "title: Ep 5 --- anything"
+        assert fm[0] == 'title: "Ep 5 --- anything"'
         assert "classification: internal-use-only" in fm
         assert "- podcast" in fm
 
     def test_yaml_escape_strips_control_characters(self):
-        assert pt.yaml_escape("a\nb\tc\x00d") == "a b c d"
+        assert pt.yaml_escape("a\nb\tc\x00d") == '"a b c d"'
         assert pt.yaml_escape("Ep: 5\n---") == '"Ep: 5 ---"'
         assert pt.yaml_escape("\n") == '""'
+        for bad in ("\x80", "\x9f", "\x85", "\u2028", "\u2029", "\ufffe",
+                    "\uffff", "\ufdd0", "\U0001fffe", "\ud800"):
+            assert pt.yaml_escape(f"a{bad}b") == '"a b"', repr(bad)
 
-    def test_yaml_escape_ordinary_values_unchanged(self):
-        assert pt.yaml_escape("Plain Title") == "Plain Title"
-        assert pt.yaml_escape("Show: Ep") == '"Show: Ep"'
-        assert pt.yaml_escape("") == '""'
+    @pytest.mark.parametrize("value", [
+        ", leading comma", "] bracket", "} brace", "null", "~", "yes", "No",
+        "123", "1.5e3", "2026-10-04", "0x1F", "Plain Title", "Show: Ep",
+        'quote " and \\ backslash', "Caf\u00e9 \u2014 \u00c9pisode 5", "- dash",
+        "# hash", "&anchor", "*alias", "!tag", "%directive", "@at", "`tick",
+        "'single'", ""])
+    def test_yaml_escape_loads_back_as_the_exact_string(self, value):
+        yaml = pytest.importorskip("yaml")
+        assert yaml.safe_load(f"k: {pt.yaml_escape(value)}") == {"k": value}
+
+    def test_whole_frontmatter_loads_with_hostile_title(self, tmp_path):
+        yaml = pytest.importorskip("yaml")
+        title = "] null\n---\n\x9fyes\ufffe"
+        md = self._write(tmp_path, title=title).read_text(encoding="utf-8")
+        data = yaml.safe_load("\n".join(self._frontmatter(md)))
+        assert data["title"] == "] null --- yes"
+        assert data["classification"] == "internal-use-only"
+        assert data["tags"] == ["podcast", "transcript"]
 
     # 333 -- not labelled public
     def test_transcript_is_labelled_internal_use_only(self, tmp_path):

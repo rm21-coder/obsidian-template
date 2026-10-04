@@ -548,20 +548,29 @@ def audio_duration(audio_path: Path) -> float:
 
 # ---------- Output ----------------------------------------------------------
 
-# Line breaks (YAML also counts NEL, LS and PS) and other control characters.
-# An episode title comes from the publisher's feed; a newline in it would let
-# a "---" line close the frontmatter early.
-_YAML_CONTROL = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]+")
+# Characters a frontmatter value must never carry: C0 and C1 controls (the
+# line breaks among them, NEL included), DEL, the Unicode line and paragraph
+# separators, lone surrogates, and noncharacters (U+FDD0-FDEF and the last two
+# code points of every plane), which js-yaml -- what Obsidian parses with --
+# rejects. An episode title comes from the publisher's feed; a newline in it
+# would let a "---" line close the frontmatter early.
+_YAML_UNSAFE = re.compile(
+    "(?:[\x00-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff\ufdd0-\ufdef]|["
+    + "".join(chr(plane * 0x10000 + 0xFFFE) + chr(plane * 0x10000 + 0xFFFF)
+              for plane in range(17))
+    + "])+")
 
 
 def yaml_escape(value: str) -> str:
-    value = _YAML_CONTROL.sub(" ", value or "").strip()
-    if not value:
-        return '""'
-    needs_quote = any(c in value for c in ":#&*!|>'\"%@`")
-    if needs_quote or value[0] in "[{?-":
-        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return value
+    """Return `value` as a YAML double-quoted scalar.
+
+    Always quoted: a plain scalar would turn "null", "yes", "123" or a date
+    into another type, and one opening with "," "]" or "}" is not valid YAML
+    at all. A JSON string is a valid YAML double-quoted scalar, so json.dumps
+    does the escaping once the unsafe characters are folded to a space.
+    """
+    return json.dumps(_YAML_UNSAFE.sub(" ", value or "").strip(),
+                      ensure_ascii=False)
 
 
 def format_duration(seconds: float) -> str:
