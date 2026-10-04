@@ -20,6 +20,12 @@ If markitdown_cleanup is not importable, a conversion is refused rather than
 written raw: the cleanup pass is what gives the note the pipeline's own
 frontmatter and tier, and without it a document's own frontmatter block would
 become the note's (review, 2026-10-04).
+
+A zip container (.zip/.docx/.xlsx/.pptx) is checked by archive_limits.py
+BEFORE MarkItDown opens it, and refused when its declared member sizes or
+count are over the limits: MarkItDown reads members whole, so a
+small-but-inflating archive would otherwise exhaust memory inside convert().
+Other formats are not size-checked.
 """
 
 from __future__ import annotations
@@ -71,6 +77,7 @@ except ImportError:
 _vault = Path(os.environ.get("OBSIDIAN_VAULT", str(Path.home() / "Obsidian"))).expanduser()
 sys.path.insert(0, str(_vault / "Templates" / "Scripts"))
 import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+import archive_limits  # noqa: E402  -- refuse an inflating archive before convert()
 
 try:
     from markitdown_cleanup import clean as cleanup_clean
@@ -112,6 +119,9 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
         return False, f"Not found: {src}"
     if src.is_dir():
         return False, f"Skipped folder: {src.name}"
+    refused = archive_limits.refusal(src)
+    if refused:
+        return False, f"{src.name}: {refused}"
 
     out = unique_destination(dest_dir, src.stem)
     try:

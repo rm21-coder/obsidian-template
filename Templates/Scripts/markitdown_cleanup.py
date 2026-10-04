@@ -79,6 +79,7 @@ import base64
 import json
 import re
 import zipfile
+import zlib
 from datetime import date
 from pathlib import Path
 
@@ -121,8 +122,17 @@ def fence_source_frontmatter(block: str) -> str:
 
 # Control characters, every line break included, and the three characters
 # that are line breaks to YAML 1.1 but not to Obsidian's YAML 1.2. Same rule
-# as meeting_prepopulate's _YAML_CTRL_RE, plus the rest of C1.
-_YAML_CTRL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+# as meeting_prepopulate's _YAML_CTRL_RE, plus the rest of C1, and the
+# characters YAML does not allow in a document at all: Unicode noncharacters
+# (U+FDD0-U+FDEF and U+xFFFE/U+xFFFF in every plane) and lone surrogates (a
+# filename that is not valid UTF-8 arrives as them). Obsidian's js-yaml and
+# PyYAML both reject the whole block on U+FFFE/U+FFFF, so the note would
+# show no properties.
+_YAML_CTRL_RE = re.compile(
+    "[\x00-\x1f\x7f-\x9f\u2028\u2029\ufdd0-\ufdef\ud800-\udfff"
+    + "".join(chr(p | 0xFFFE) + chr(p | 0xFFFF) for p in range(0, 0x110000, 0x10000))
+    + "]+"
+)
 
 
 def yaml_quoted(value: str) -> str:
@@ -166,6 +176,10 @@ def generate_frontmatter(source_path: Path) -> str:
 # media member inflates to gigabytes was read whole into memory and written
 # into the vault. Past a limit an image is not written: an inline one becomes
 # OMITTED_TEXT, an archive one is skipped (its stub then gets the placeholder).
+#
+# These limits cover only THIS pass. MarkItDown's own conversion runs first
+# and reads archive members whole; the converters guard that separately with
+# archive_limits.refusal() before calling md.convert().
 
 MAX_INLINE_IMAGES = 200                   # inline data: images per document
 MAX_INLINE_BYTES = 100 * 1024 * 1024      # decoded bytes, all inline images
@@ -364,7 +378,15 @@ def extract_archive_images(
                     continue
                 total += written
                 extracted.append(out_path)
-    except (zipfile.BadZipFile, OSError):
+    except (zipfile.BadZipFile, OSError, EOFError, zlib.error,
+            RuntimeError, NotImplementedError):
+        # A damaged member (CRC error, truncated deflate stream, encryption)
+        # aborts the whole recovery. Remove what this run already wrote:
+        # the caller gets [] and so would never reference those files, and
+        # every re-run would leave another orphaned copy in Z_attachments.
+        for p in extracted:
+            p.unlink(missing_ok=True)
+        skip(len(extracted) + 1)
         return []
     return extracted
 

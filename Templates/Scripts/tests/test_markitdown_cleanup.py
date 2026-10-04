@@ -234,3 +234,50 @@ def test_cli_keeps_an_existing_notes_frontmatter(tmp_path):
     assert out.startswith(note.split("\n\n")[0])
     assert summary["frontmatter_added"] is False
     assert summary["source_frontmatter"] is False
+
+
+# ─── Review round 2 ──────────────────────────────────────────────────────────
+
+def _corrupt_member(path: Path, name: str) -> None:
+    """Flip one data byte of a STORED member so reading it fails its CRC."""
+    with zipfile.ZipFile(path) as zf:
+        off = zf.getinfo(name).header_offset
+    raw = bytearray(path.read_bytes())
+    n_len = int.from_bytes(raw[off + 26:off + 28], "little")
+    x_len = int.from_bytes(raw[off + 28:off + 30], "little")
+    data = off + 30 + n_len + x_len
+    raw[data + 10] ^= 0xFF
+    path.write_bytes(bytes(raw))
+
+
+def test_archive_failure_removes_images_already_written(tmp_path):
+    """A CRC error on a later member used to return [] but leave the earlier
+    images in Z_attachments, unreferenced; every re-run added another copy."""
+    src = tmp_path / "broken.docx"
+    with zipfile.ZipFile(src, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("word/media/image1.png", TINY_PNG)
+        zf.writestr("word/media/image2.png", TINY_PNG)
+    _corrupt_member(src, "word/media/image2.png")
+    att = tmp_path / "att"
+    for _ in range(2):
+        out, summary = mc.clean(f"{STUB}\n\n{STUB}\n", src, att)
+        assert list(att.iterdir()) == []
+        assert summary["source_images"] == []
+        assert summary["images_skipped"] == 2
+        assert out.count(mc.PLACEHOLDER_TEXT) == 2
+
+
+@pytest.mark.parametrize("name, clean_name", [
+    ("a￾b￿c.docx", "a b c.docx"),
+    ("plane\U0001fffe\U0010ffff.docx", "plane .docx"),
+    ("non﷐char.docx", "non char.docx"),
+    ("bad\udce9bytes.docx", "bad bytes.docx"),
+])
+def test_frontmatter_strips_yaml_forbidden_characters(tmp_path, name, clean_name):
+    """U+FFFE/U+FFFF make js-yaml (Obsidian) and PyYAML reject the whole
+    block; a lone surrogate (a non-UTF-8 filename) cannot even be written."""
+    out, _ = mc.clean("Body\n", tmp_path / name, tmp_path / "att")
+    out.encode("utf-8")
+    fm = _fm(out)
+    assert fm["source_file"] == clean_name
+    assert classification_tier.effective(out) == ("internal-use-only", [])
