@@ -94,9 +94,10 @@ Other plugins run code from note text too, and the guard defuses those
 triggers the same way (since 2026-10-03):
 
 - **Tasks.** A `tasks` block's `filter by function`, `sort by function` and
-  `group by function` lines are JavaScript. Tasks runs them whenever the block
-  renders, in Live Preview as well as reading view, and has no setting to turn
-  them off.
+  `group by function` lines are JavaScript, run whenever the block renders, in
+  Live Preview as well as reading view. Tasks 8, the pinned version,
+  refuses them unless its scripting setting is turned on; 7.x ran them always.
+  For Tasks the guard is the second layer, for anyone who turns scripting on.
 - **Dataview.** `` `= …` `` inline queries are on by default, and their result
   renders as markdown. A crafted query could build a remote image URL out of
   another note's text, so opening the note sends that text to an outside

@@ -26,7 +26,8 @@ the protection, and other plugins run code from note text too. neutralize()
 also defuses those triggers in outside text:
 
   * fenced blocks a plugin renders -- ```tasks (its "filter/sort/group by
-    function" lines are JavaScript, and Tasks has no switch for them),
+    function" lines are JavaScript; Tasks 8 refuses them unless its scripting
+    setting is on, and 7.x ran them always),
     ```dataview / ```dataviewjs, every ```meta-bind-*, ```mdm (Metadata Menu),
     ```excalidraw-script-install (a button that downloads a script) and
     Obsidian's own ```base (Bases formulas can build an image URL from note
