@@ -216,14 +216,26 @@ def range_added_lines(rev_range: str) -> list[tuple[str, int, str]]:
     if listing.returncode != 0:
         # Fail closed: an unlistable range is not a clean one.
         raise RangeError(listing.stderr.strip() or f"git rev-list {rev_range} failed")
-    # Annotated tags being pushed: their messages are published too.
+    # Annotated tags being pushed: their messages are published too -- every
+    # tag in a tag-on-tag chain, and the new side of an updated tag ref, whose
+    # range lists no commits at all (review round 4, 2026-10-04).
+    tips = []
     for word in rev_range.split():
-        if word.startswith("-") or ".." in word:
+        if word.startswith("-"):
             continue
-        if run_git("cat-file", "-t", word).strip() == "tag":
-            body = run_git("cat-file", "tag", word).split("\n\n", 1)
-            for i, line in enumerate(body[1].splitlines() if len(body) > 1 else [], 1):
-                out.append((f"tag {word[:9]} message", i, line))
+        tips.append(word.split("..")[-1] if ".." in word else word)
+    for tip in tips:
+        obj, seen = tip, set()
+        while obj not in seen and run_git("cat-file", "-t", obj).strip() == "tag":
+            seen.add(obj)
+            raw = run_git("cat-file", "tag", obj)
+            head, _, body = raw.partition("\n\n")
+            for i, line in enumerate(body.splitlines(), 1):
+                out.append((f"tag {obj[:9]} message", i, line))
+            target = re.search(r"(?m)^object ([0-9a-f]+)$", head)
+            if not target:
+                break
+            obj = target.group(1)
     for commit in listing.stdout.split():
         # The commit message is published with the commit (review round 3,
         # 2026-10-04). Author and committer fields are not scanned: they are
@@ -502,7 +514,8 @@ def main() -> int:
         return 1
 
     if not args.quiet:
-        scope = "staged" if args.staged else "worktree"
+        scope = ("pushed" if args.range else
+                 "staged" if args.staged else "worktree")
         print(f"check_identity_leak: {scope} content clean "
               f"({len(rules)} deny-list rule(s), {len(lines)} line(s) scanned).")
         if not rules:

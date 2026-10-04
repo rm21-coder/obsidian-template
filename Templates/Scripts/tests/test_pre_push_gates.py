@@ -104,3 +104,22 @@ def test_an_annotated_tag_message_is_scanned(repo: Path) -> None:
     proc = _push(repo, tag, lref="refs/tags/v1")
     assert proc.returncode == 1
     assert f"real-looking address: dave@{REAL}" in proc.stderr
+
+
+def test_every_message_in_a_tag_on_a_tag_is_scanned(repo: Path) -> None:
+    # The remote receives the whole chain, so the inner message is published too.
+    _git(repo, "tag", "-a", "inner", "-m", f"cut by erin@{REAL}")
+    _git(repo, "tag", "-a", "outer", "-m", "plain release", "inner")
+    proc = _push(repo, _git(repo, "rev-parse", "outer"), lref="refs/tags/outer")
+    assert proc.returncode == 1
+    assert f"real-looking address: erin@{REAL}" in proc.stderr
+
+
+def test_an_updated_tag_message_is_scanned(repo: Path) -> None:
+    # Same commit, new tag object: the range lists no commits at all.
+    _git(repo, "tag", "-a", "v2", "-m", "plain release")
+    old = _git(repo, "rev-parse", "v2")
+    _git(repo, "tag", "-f", "-a", "v2", "-m", f"re-cut by frank@{REAL}")
+    proc = _push(repo, _git(repo, "rev-parse", "v2"), old, lref="refs/tags/v2")
+    assert proc.returncode == 1
+    assert f"real-looking address: frank@{REAL}" in proc.stderr
