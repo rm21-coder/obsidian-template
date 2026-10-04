@@ -30,6 +30,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
 ZERO="0000000000000000000000000000000000000000"
 publishes=0
 ranges=()
+refnames=()
 REMOTE="${1:-origin}"
 while read -r _lref lsha _rref rsha; do
     [[ -n "${lsha:-}" && "$lsha" != "$ZERO" ]] || continue
@@ -46,6 +47,7 @@ while read -r _lref lsha _rref rsha; do
     else
         ranges+=("$rsha..$lsha")
     fi
+    refnames+=("$_rref")   # the name is published too (review round 6)
 done
 if [[ $publishes -eq 0 ]]; then
     exit 0
@@ -56,10 +58,12 @@ fi
 # removed by a later commit, is still published by this push (review,
 # 2026-10-04). History is public too.
 LIB="$REPO_ROOT/installers/lib"
-for r in "${ranges[@]}"; do
+for i in "${!ranges[@]}"; do
+    r="${ranges[$i]}"
     # Each range is passed as one argument; the tools split it into rev-list words.
     if ! python3 "$LIB/check_classification.py" --repo-root "$REPO_ROOT" --quiet --range "$r" \
-         || ! (cd "$REPO_ROOT" && python3 "$LIB/check_identity_leak.py" --quiet --range "$r"); then
+         || ! (cd "$REPO_ROOT" && python3 "$LIB/check_identity_leak.py" --quiet --range "$r" \
+                   --ref-name "${refnames[$i]}"); then
         echo "pre-push: a pushed commit carries non-public content (see above). Push refused." >&2
         echo "Override with --no-verify only if you know why." >&2
         exit 1

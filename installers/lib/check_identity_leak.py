@@ -202,16 +202,29 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
     return out
 
 
-def _raw_object(kind: str, sha: str) -> str:
-    """A raw git object as text. Tag objects are not re-encoded the way
-    `git log` re-encodes commit messages, so a Latin-1 message decoded as
-    UTF-8 would hide an accented name from the deny-list (review round 5)."""
-    raw = subprocess.run(("git", "cat-file", kind, sha), capture_output=True,
-                         check=False).stdout
+def _decode_line(raw: bytes) -> str:
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         return raw.decode("latin-1")
+
+
+def _raw_object(kind: str, sha: str) -> str:
+    """A raw git object as text, decoded line by line: UTF-8, else Latin-1.
+    Git re-encodes neither tag nor commit bodies for `cat-file`, and `%B`
+    leaves a commit with no encoding header as raw bytes too, so a Latin-1
+    line read as UTF-8 hid an accented name from the deny-list. Per line,
+    because one stray Latin-1 byte (an author line, a (c) sign) must not
+    flip the whole object and garble every UTF-8 name in it (review rounds
+    5-6, 2026-10-04)."""
+    raw = subprocess.run(("git", "cat-file", kind, sha), capture_output=True,
+                         check=False).stdout
+    return "\n".join(_decode_line(line) for line in raw.split(b"\n"))
+
+
+# Commit headers that carry no free text a person wrote for this commit:
+# hashes, and the maintainer's own published identity on every commit.
+_IDENTITY_HEADERS = {"tree", "parent", "author", "committer", "encoding"}
 
 
 def _scan_tag_text(text: str, label: str,
@@ -233,11 +246,17 @@ class RangeError(RuntimeError):
     """A pushed range git could not list."""
 
 
-def range_added_lines(rev_range: str) -> list[tuple[str, int, str]]:
+def range_added_lines(rev_range: str,
+                      ref_names: list[str] | None = None) -> list[tuple[str, int, str]]:
     """Added lines and names from every commit in a rev-list range: what a
     push publishes, intermediate commits included (a name committed and then
     removed is still in the pushed history)."""
     out: list[tuple[str, int, str]] = []
+    # The ref names a push creates are published too: a branch or tag name,
+    # including a lightweight tag's and a renamed push's `src:refs/tags/X`
+    # (review round 6, 2026-10-04).
+    for name in ref_names or []:
+        out.append(("pushed ref name", 1, name))
     listing = subprocess.run(("git", "rev-list", *rev_range.split()), capture_output=True,
                              text=True, encoding="utf-8", check=False)
     if listing.returncode != 0:
@@ -266,19 +285,32 @@ def range_added_lines(rev_range: str) -> list[tuple[str, int, str]]:
             obj = target
     for commit in listing.stdout.split():
         # The commit message is published with the commit (review round 3,
-        # 2026-10-04). Author and committer fields are not scanned: they are
-        # the maintainer's own published identity, on every commit.
-        message = run_git("log", "-1", "--format=%B", commit)
+        # 2026-10-04), and so is every header. Author and committer fields are
+        # not scanned: they are the maintainer's own published identity, on
+        # every commit. Everything else is: a merged signed tag's whole object
+        # sits in a `mergetag` header (round 5), and signature armor carries
+        # free-text Comment: lines (round 6).
+        head, _, message = _raw_object("commit", commit).partition("\n\n")
         for i, line in enumerate(message.splitlines(), 1):
             out.append((f"commit {commit[:9]} message", i, line))
-        # Merging a signed tag copies the whole tag object into the merge
-        # commit's `mergetag` header; %B does not include it (review round 5).
-        headers = _raw_object("commit", commit).partition("\n\n")[0]
-        for n, block in enumerate(re.findall(r"(?m)^mergetag (.*\n(?: .*\n?)*)",
-                                             headers + "\n"), 1):
-            embedded = "\n".join(l[1:] if l.startswith(" ") else l
-                                  for l in block.splitlines())
-            _scan_tag_text(embedded, f"commit {commit[:9]} mergetag {n}", out)
+        blocks: list[tuple[str, list[str]]] = []
+        for line in head.split("\n"):
+            if line.startswith(" ") and blocks:
+                blocks[-1][1].append(line[1:])
+            else:
+                key, _, value = line.partition(" ")
+                blocks.append((key, [value]))
+        mergetags = 0
+        for key, values in blocks:
+            if key in _IDENTITY_HEADERS:
+                continue
+            if key == "mergetag":
+                mergetags += 1
+                _scan_tag_text("\n".join(values),
+                               f"commit {commit[:9]} mergetag {mergetags}", out)
+                continue
+            for i, line in enumerate(values, 1):
+                out.append((f"commit {commit[:9]} {key} header", i, line))
         # -m / --diff-merges=separate: a merge's own changes, per parent.
         names = [p for p in dict.fromkeys(run_git(
             "diff-tree", "-m", "--no-commit-id", "-r", "-z", "--root",
@@ -504,6 +536,8 @@ def main() -> int:
                     help="--init: real vault root (default: ~/Obsidian)")
     ap.add_argument("--config", default=None,
                     help="--init: meeting_pull.json path")
+    ap.add_argument("--ref-name", action="append", default=[], metavar="REF",
+                    help="--range: a ref name the push publishes (repeatable)")
     ap.add_argument("--quiet", action="store_true",
                     help="print nothing when clean")
     args = ap.parse_args()
@@ -519,7 +553,7 @@ def main() -> int:
 
     if args.range:
         try:
-            lines = range_added_lines(args.range)
+            lines = range_added_lines(args.range, args.ref_name)
         except RangeError as exc:
             print(f"check_identity_leak: cannot list commits in {args.range!r}: {exc}",
                   file=sys.stderr)

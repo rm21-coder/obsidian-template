@@ -170,3 +170,60 @@ def test_a_tag_name_is_scanned(repo: Path) -> None:
                  lref="refs/tags/Fictionalname-v1")
     assert proc.returncode == 1
     assert "name:1: deny-list: Fictionalname" in proc.stderr
+
+
+def _hand_commit(repo: Path, extra_headers: bytes, message: bytes) -> tuple[str, str]:
+    """A commit on HEAD built from raw bytes, so a test can hold a header or an
+    encoding that porcelain will not write. Returns (commit, its parent)."""
+    base = _git(repo, "rev-parse", "HEAD")
+    tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    who = b"T <t@example.com> 1700000000 +0000"
+    body = (b"tree " + tree.encode() + b"\nparent " + base.encode() + b"\nauthor " + who
+            + b"\ncommitter " + who + b"\n" + extra_headers + b"\n" + message)
+    sha = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                         cwd=repo, input=body, capture_output=True,
+                         check=True).stdout.decode().strip()
+    return sha, base
+
+
+def _deny(repo: Path, entry: str) -> None:
+    (repo / "installers" / "lib" / "identity-denylist.local").write_text(
+        entry + "\n", encoding="utf-8")
+
+
+def test_a_stray_latin1_byte_does_not_hide_a_utf8_name(repo: Path) -> None:
+    _deny(repo, "Renée Fictional")
+    # A tag object is decoded from raw bytes; one Latin-1 byte used to flip
+    # the whole object to Latin-1 and garble the UTF-8 name above it.
+    msg = repo.parent / "msg"
+    msg.write_bytes("for Renée Fictional\n".encode("utf-8") + b"(\xa9 Nimbus)\n")
+    _git(repo, "tag", "-a", "v4", "-F", str(msg))
+    proc = _push(repo, _git(repo, "rev-parse", "v4"), lref="refs/tags/v4")
+    assert proc.returncode == 1
+    assert "message:1: deny-list: Renée Fictional" in proc.stderr
+
+
+def test_a_latin1_commit_message_is_scanned(repo: Path) -> None:
+    _deny(repo, "Renée Fictional")
+    sha, base = _hand_commit(repo, b"", "for Renée Fictional\n".encode("latin-1"))
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert "message:1: deny-list: Renée Fictional" in proc.stderr
+
+
+def test_a_signature_comment_is_scanned(repo: Path) -> None:
+    sig = (b"gpgsig -----BEGIN PGP SIGNATURE-----\n Comment: key of hal@"
+           + REAL.encode() + b"\n \n iQEz\n -----END PGP SIGNATURE-----\n")
+    sha, base = _hand_commit(repo, sig, b"signed\n")
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert f"gpgsig header:2: real-looking address: hal@{REAL}" in proc.stderr
+
+
+def test_a_pushed_ref_name_is_scanned(repo: Path) -> None:
+    # A lightweight tag has no tag object, so only the ref names it.
+    _deny(repo, "Fictionalname")
+    head = _git(repo, "rev-parse", "HEAD")
+    proc = _push(repo, head, lref="refs/tags/Fictionalname-v1")
+    assert proc.returncode == 1
+    assert "pushed ref name:1: deny-list: Fictionalname" in proc.stderr
