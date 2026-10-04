@@ -207,14 +207,15 @@ class TestNonAsciiPathsAreAudited:
     def test_staged_file_missing_from_disk_is_a_violation(
             self, content_repo: Path, allow_subprocess: None) -> None:
         """Staged, then deleted from the working tree: it is still being
-        committed, so it must not quietly fall out of the audit."""
+        committed, so it must not quietly fall out of the audit. The staged
+        copy is what is audited, so it is judged on its content."""
         rel = _write(content_repo, ACCENTED, CONFIDENTIAL)
         subprocess.run(["git", "add", "--", rel.as_posix()],
                        cwd=content_repo, check=True)
         (content_repo / rel).unlink()
         proc = _run_audit(content_repo, "--staged")
         assert proc.returncode == 1, proc.stderr
-        assert f"VIOLATION  {rel}  could not read file" in proc.stderr
+        assert f"VIOLATION  {rel}\n           classification: confidential" in proc.stderr
 
 
 class TestOnlyTheRootReadmeIsExempt:
@@ -263,3 +264,26 @@ class TestSkippedFolderNamesOnlyAtTopLevel:
         proc = _run_audit(content_repo)
         assert proc.returncode == 0, proc.stderr
         assert "1 file(s) audited, 0 violation(s)" in proc.stderr
+
+
+class TestStagedCopyIsAudited:
+    """The staged audit read the working-tree copy: stage a confidential
+    version, make the working copy public, and the commit carried the
+    confidential one past the gate (review, 2026-10-04)."""
+
+    def test_a_confidential_staged_copy_fails_under_a_public_working_copy(
+            self, content_repo: Path, allow_subprocess: None) -> None:
+        rel = _write(content_repo, "Knowledge/plan.md", CONFIDENTIAL)
+        subprocess.run(["git", "add", "--", rel.as_posix()], cwd=content_repo, check=True)
+        _write(content_repo, rel, PUBLIC)            # unstaged edit
+        proc = _run_audit(content_repo, "--staged")
+        assert proc.returncode == 1, proc.stderr
+        assert f"VIOLATION  {rel}" in proc.stderr
+
+    def test_a_public_staged_copy_passes_under_a_confidential_working_copy(
+            self, content_repo: Path, allow_subprocess: None) -> None:
+        rel = _write(content_repo, "Knowledge/plan.md", PUBLIC)
+        subprocess.run(["git", "add", "--", rel.as_posix()], cwd=content_repo, check=True)
+        _write(content_repo, rel, CONFIDENTIAL)      # unstaged, not committed
+        proc = _run_audit(content_repo, "--staged")
+        assert proc.returncode == 0, proc.stderr

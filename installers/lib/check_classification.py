@@ -267,10 +267,21 @@ def all_md_files(repo_root: Path) -> list[Path]:
     return [p for p in paths if p not in ignored]
 
 
+def staged_text(repo_root: Path, rel: Path) -> str:
+    """The staged (index) copy of a file -- what the commit will contain.
+    Reading the working tree instead let a partly staged file pass on a
+    clean working copy while a confidential version was committed."""
+    return subprocess.run(
+        ["git", "show", f":{rel.as_posix()}"], cwd=repo_root, check=True,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    ).stdout
+
+
 def audit_files(
-    repo_root: Path, paths: list[Path], quiet: bool
+    repo_root: Path, paths: list[Path], quiet: bool, staged: bool = False
 ) -> tuple[int, int]:
-    """Audit the given paths. Return (violations, audited_count)."""
+    """Audit the given paths, their staged copies when `staged`. Return
+    (violations, audited_count)."""
     violations = 0
     audited = 0
     for rel in paths:
@@ -279,8 +290,9 @@ def audit_files(
         audited += 1
         full = repo_root / rel
         try:
-            text = full.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
+            text = (staged_text(repo_root, rel) if staged
+                    else full.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, subprocess.CalledProcessError) as exc:
             print(f"VIOLATION  {rel}  could not read file: {exc}",
                   file=sys.stderr)
             violations += 1
@@ -342,7 +354,8 @@ def main() -> int:
         return 2
 
     paths = git_staged_files(repo_root) if args.staged else all_md_files(repo_root)
-    violations, _ = audit_files(repo_root, paths, quiet=args.quiet)
+    violations, _ = audit_files(repo_root, paths, quiet=args.quiet,
+                                staged=args.staged)
     return 0 if violations == 0 else 1
 
 

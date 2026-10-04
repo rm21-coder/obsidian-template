@@ -148,6 +148,7 @@ want() {   # want <pass>
                 sast)    grep -qE '\.py$|security-suppressions\.txt' <<<"$files" ;;
                 shell)   grep -qE '\.sh$'                          <<<"$files" ;;
                 secrets) return 0 ;;
+                content) grep -qE '\.md$|check_classification|check_identity_leak' <<<"$files" ;;
                 dast)    grep -qE 'url_safety|source_mail|handoff|plugins|integrity|rag-sync' <<<"$files" ;;
             esac
             ;;
@@ -332,6 +333,33 @@ if want secrets; then
             record secrets FAIL "see gitleaks-*.json"
             _say "  FAIL: gitleaks reported findings (values redacted)."
         fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Content: the two public-tree gates, again before a push
+# ---------------------------------------------------------------------------
+# Both run per commit from the pre-commit hook, which `--no-verify` skips and
+# which audits only what that commit stages. A push is when content becomes
+# public, so the whole tree is audited here too (added 2026-10-04).
+if want content; then
+    expect content
+    _head "Content - classification audit + identity gate"
+    if python3 installers/lib/check_classification.py --repo-root . \
+            >"$OUT/classification-audit.log" 2>&1; then
+        record content PASS "classification audit: $(tail -1 "$OUT/classification-audit.log" | sed 's/^classification audit: //')"
+    else
+        record content FAIL "classification audit - see classification-audit.log"
+    fi
+    if [[ ! -f installers/lib/identity-denylist.local ]]; then
+        record content SKIP "identity gate: no local deny-list (run check_identity_leak.py --init)"
+    elif python3 installers/lib/check_identity_leak.py --worktree --quiet \
+            >"$OUT/identity-gate.log" 2>&1; then
+        record content PASS "identity gate: tracked and untracked files clean"
+    else
+        # The log names file and rule, and quotes the matching line; it stays
+        # in the artifact directory, outside the repo.
+        record content FAIL "identity gate - see identity-gate.log"
     fi
 fi
 
