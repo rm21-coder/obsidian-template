@@ -210,6 +210,12 @@ skip the cache it is checking.
 A baseline taken before a scope existed reports `NOT_BASELINED` once for that
 scope, not every file in it as new. Review, then adopt with `--update`.
 
+On Windows, if the `\Obsidian\` scheduled tasks cannot be enumerated
+(PowerShell fails, times out, or returns no or malformed output), a check
+reports one `SCAN_FAILED` finding for that scope, and `--update` refuses
+with exit 2 and leaves the baseline unchanged rather than adopting "no
+tasks" as the trusted state.
+
 ### What the integrity monitor cannot see
 
 It runs as you, so it is a tripwire, not a boundary. Code already running as
@@ -311,7 +317,8 @@ Finding kinds you'll see:
   `BUNDLE_CHANGE` means a plugin's `main.js` changed **without a version bump** —
   the strongest supply-chain signal; investigate before adopting.
 - **Workflow:** `NEW_FILE`, `CONTENT_CHANGE`, `DELETED`, and `BULK_DELETE`
-  (vault Markdown count dropped by at least `max(50, 5%)`).
+  (vault Markdown count dropped by at least `max(50, 5%)`); `SCAN_FAILED`
+  when the Windows scheduled-task scan could not run.
 - **Process:** each suspicious spawn, with the offending binary path.
 
 ## Manual / on-demand use

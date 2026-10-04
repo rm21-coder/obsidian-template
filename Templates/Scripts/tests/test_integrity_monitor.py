@@ -349,6 +349,59 @@ class TestEndToEnd:
         assert any("ALERT" in t or "alpha" in m.lower()
                    for t, m in silent_notify)
 
+    # -- Windows task enumeration failing (M-DASH #68/#270) ---------------
+    # The PowerShell scan used to return {} on any failure, the same as "no
+    # tasks", so an --update while it was failing saved an empty baseline.
+    # main() is driven through the real scan_scheduled_tasks() on any host by
+    # pointing scan_persistence at it and faking the PowerShell result.
+
+    @staticmethod
+    def _windows_scan(monkeypatch, *, stdout: bytes = b"", rc: int = 0) -> None:
+        monkeypatch.setattr(im, "scan_persistence",
+                            lambda _la: im.scan_scheduled_tasks())
+        monkeypatch.setattr(
+            im.subprocess, "run",
+            lambda *a, **k: subprocess.CompletedProcess(a[0], rc, stdout, b""))
+
+    def test_update_refuses_when_task_enumeration_fails(
+            self, sandbox: dict, silent_notify: list, monkeypatch,
+            capsys: pytest.CaptureFixture) -> None:
+        self._windows_scan(monkeypatch, stdout=b"")
+        rc = im.main(self._argv(sandbox, "--update"))
+        assert rc == 2
+        assert "REFUSED --update: could not enumerate the scheduled tasks" \
+            in capsys.readouterr().out
+        assert not im.STATE_PATH.exists(), "an empty task baseline was saved"
+
+    def test_check_reports_scan_failed_not_a_deleted_per_task(
+            self, sandbox: dict, silent_notify: list, monkeypatch) -> None:
+        task = json.dumps({"Obsidian Tagger": "<Task>x</Task>"}).encode()
+        self._windows_scan(monkeypatch, stdout=task)
+        assert im.main(self._argv(sandbox, "--update")) == 0
+        assert list(im.load_state()["launchagents"]) == ["Obsidian Tagger"]
+
+        self._windows_scan(monkeypatch, stdout=b"", rc=1)
+        assert im.main(self._argv(sandbox)) == 1, "a failed scan must stay loud"
+        alert = " ".join(m for _, m in silent_notify)
+        assert "launchagents: scan failed (PowerShell exited 1)" in alert
+        assert "DELETED" not in alert
+
+    @pytest.mark.parametrize("stdout,rc,marker", [
+        (b"", 0, "PowerShell returned no output"),
+        (b"{}", 3, "PowerShell exited 3"),
+        (b"not json", 0, "unparseable task list"),
+        (b"[1, 2]", 0, "task list is a list, not an object"),
+    ])
+    def test_every_enumeration_failure_is_distinct_from_no_tasks(
+            self, monkeypatch, stdout: bytes, rc: int, marker: str) -> None:
+        self._windows_scan(monkeypatch, stdout=stdout, rc=rc)
+        with pytest.raises(im.PersistenceScanError, match=marker):
+            im.scan_scheduled_tasks()
+
+    def test_no_tasks_is_still_an_empty_scan(self, monkeypatch) -> None:
+        self._windows_scan(monkeypatch, stdout=b"{}")
+        assert im.scan_scheduled_tasks() == {}
+
 
 # ---------------------------------------------------------------------------
 # Coverage added 2026-10-03: templates, venv, agent config, secrets, bytecode.
