@@ -337,3 +337,80 @@ def test_the_maintainers_own_author_line_is_not_scanned(repo: Path) -> None:
                          check=True).stdout.decode().strip()
     proc = _push(repo, sha, base)
     assert proc.returncode == 0, proc.stderr
+
+
+def test_free_text_in_the_encoding_header_is_scanned(repo: Path) -> None:
+    # git writes i18n.commitEncoding into the header unchecked.
+    _deny(repo, "Fictional Person")
+    sha, base = _hand_commit(repo, b"encoding Fictional Person\n", b"t1\n")
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert "encoding header:1: deny-list: Fictional Person" in proc.stderr
+
+
+def test_the_maintainer_identity_is_read_from_where_git_takes_it(repo: Path) -> None:
+    # author.* overrides user.*; the maintainer's own commit must still pass.
+    _git(repo, "config", "author.name", "Jo")
+    _git(repo, "config", "author.email", f"Jo@{REAL}")
+    _git(repo, "config", "committer.name", "Jo")
+    _git(repo, "config", "committer.email", f"jo@{REAL}")
+    sha, base = _hand_commit(repo, b"", b"mine\n")
+    raw = subprocess.run(["git", "cat-file", "commit", sha], cwd=repo,
+                         capture_output=True, check=True).stdout
+    raw = raw.replace(b"T <t@example.com>", b"Jo <jo@" + REAL.encode() + b">")
+    sha = subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                         cwd=repo, input=raw, capture_output=True,
+                         check=True).stdout.decode().strip()
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_an_inline_flag_entry_does_not_crash_the_word_match(repo: Path) -> None:
+    (repo / "installers" / "lib" / "identity-denylist.local").write_text(
+        "re:(?i)fictional person\n", encoding="utf-8")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"))
+    assert "Traceback" not in proc.stderr
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_deeply_nested_mergetags_are_refused_not_a_traceback(repo: Path) -> None:
+    head = _git(repo, "rev-parse", "HEAD")
+    inner = (f"object {head}\ntype commit\ntag v0\n"
+             "tagger T <t@example.com> 1700000000 +0000\n\nx\n").encode()
+    for k in range(20):
+        nested = b"\n ".join(inner.rstrip(b"\n").split(b"\n"))
+        inner = (f"object {head}\ntype commit\ntag v{k + 1}\n").encode() + \
+            b"mergetag " + nested + b"\n\nx\n"
+    embedded = b"\n ".join(inner.rstrip(b"\n").split(b"\n"))
+    sha, base = _hand_commit(repo, b"mergetag " + embedded + b"\n", b"deep\n")
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert "Traceback" not in proc.stderr
+    assert "mergetags nested more than 16 deep" in proc.stderr
+
+
+def test_a_tag_object_name_is_read_as_words(repo: Path) -> None:
+    _deny(repo, "Fictional Person")
+    _git(repo, "tag", "-a", "Fictional_Person", "-m", "plain")
+    proc = _push(repo, _git(repo, "rev-parse", "Fictional_Person"), lref="refs/tags/v1")
+    assert proc.returncode == 1
+    assert "name (as words):1: deny-list: Fictional Person" in proc.stderr
+
+
+def test_a_file_name_is_read_as_words(repo: Path) -> None:
+    _deny(repo, "Fictional Person")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "Knowledge" / "fictional-person.md").write_text(PUBLIC, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add", "--no-verify")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"), base)
+    assert proc.returncode == 1
+    assert "fictional-person.md (as words):0: deny-list: Fictional Person" in proc.stderr
+
+
+def test_any_ref_separator_is_read_as_a_space(repo: Path) -> None:
+    _deny(repo, "Fictional Person")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"),
+                 lref="refs/heads/Fictional+Person")
+    assert proc.returncode == 1
+    assert "pushed ref name (as words):1: deny-list: Fictional Person" in proc.stderr

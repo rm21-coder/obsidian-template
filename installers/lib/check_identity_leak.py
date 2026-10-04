@@ -113,10 +113,26 @@ def _c_unquote(body: str) -> str:
     return out.decode("utf-8", "replace")
 
 
+# A name entry ("First Last") holds a space, which a ref name cannot and a
+# file name rarely does, so names are also read with every run of separators
+# as one space and matched as whole words only -- as a substring, a branch
+# "visual-green-ci" matched a two-word entry whose first word is the end of
+# "visual" (review rounds 7-9, 2026-10-04).
+WORDS_SUFFIX = " (as words)"
+
+
+def _as_words(name: str) -> str:
+    return re.sub(r"[\W_]+", " ", name).strip()
+
+
+def _with_words(label: str, lineno: int, name: str) -> list[tuple[str, int, str]]:
+    return [(label, lineno, name), (label + WORDS_SUFFIX, lineno, _as_words(name))]
+
+
 def _name_lines(paths: list[str]) -> list[tuple[str, int, str]]:
     """Each path as a line of its own (line 0): a file NAMED after a real
     person publishes the name as surely as its contents would."""
-    return [(p, 0, p) for p in paths if not skip_path(p)]
+    return [line for p in paths if not skip_path(p) for line in _with_words(p, 0, p)]
 
 
 def load_allowed_domains() -> set[str]:
@@ -230,17 +246,31 @@ _HEADER_RE = re.compile(rb"^[a-z][a-z0-9-]* ")
 # Header lines that carry no free text: hashes and the object type, each
 # skipped only in its strict form.
 _HASH_LINE = re.compile(r"^(?:(?:tree|parent|object) [0-9a-f]{40,64}"
-                        r"|type (?:commit|tree|blob|tag))$")
+                        r"|type (?:commit|tree|blob|tag)"
+                        r"|encoding [A-Za-z0-9._:-]+)$")
 # An identity line is skipped only when it is the maintainer's own, as git is
 # configured to write it: a colleague's patch applied with `git am`, or a
 # commit made under a work address, publishes that identity (round 8).
 _IDENT_LINE = re.compile(r"^(?:author|committer|tagger) ([^<>\n]*<[^<>\n]*>) \d+ [+-]\d{4}$")
 
 
-def _own_identity() -> str | None:
-    name = run_git("config", "user.name").strip()
-    email = run_git("config", "user.email").strip()
-    return f"{name} <{email}>" if name and email else None
+def _own_identities() -> set[str]:
+    """The identities git writes for this maintainer, from wherever git takes
+    them (user.*, author.* / committer.*, or GIT_AUTHOR_* in the environment),
+    with the timestamp dropped and the address lowercased. Reading user.*
+    alone flagged the maintainer's own commits whenever git got the identity
+    elsewhere (review round 9)."""
+    out = set()
+    for var in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+        m = re.match(r"^([^<>\n]*<[^<>\n]*>) \d+ [+-]\d{4}$", run_git("var", var).strip())
+        if m:
+            out.add(_ident_key(m.group(1)))
+    return out
+
+
+def _ident_key(ident: str) -> str:
+    name, _, email = ident.partition("<")
+    return f"{name.strip()} <{email.lower()}"
 
 
 def _parse_object(raw: bytes) -> tuple[list[list[bytes]], bytes]:
@@ -263,11 +293,13 @@ def _parse_object(raw: bytes) -> tuple[list[list[bytes]], bytes]:
     return blocks, b"\n".join(rest)
 
 
-def _scan_object(raw: bytes, label: str, own: str | None,
-                 out: list[tuple[str, int, str]]) -> str | None:
+def _scan_object(raw: bytes, label: str, own: set[str],
+                 out: list[tuple[str, int, str]], depth: int = 0) -> str | None:
     """Queue a tag or commit object's headers and message for scanning, and
     any tag object a `mergetag` header embeds (merging a signed tag copies it
     whole, round 5). Returns a tag's target object, else None."""
+    if depth > MAX_MERGETAG_DEPTH:
+        raise RangeError(f"mergetags nested more than {MAX_MERGETAG_DEPTH} deep")
     blocks, body = _parse_object(raw)
     encoding = next((b[0][9:].decode("latin-1") for b in blocks
                      if b[0].startswith(b"encoding ") and len(b) == 1), None)
@@ -281,18 +313,16 @@ def _scan_object(raw: bytes, label: str, own: str | None,
             if _HASH_LINE.match(first):
                 continue
             ident = _IDENT_LINE.match(first)
-            if ident and own is not None and ident.group(1) == own:
-                continue
-            if first.startswith("encoding "):
+            if ident and _ident_key(ident.group(1)) in own:
                 continue
             if first.startswith("tag "):
                 for text in _decodings(block[0][4:], encoding):
-                    out.append((f"{label} name", 1, text))
+                    out += _with_words(f"{label} name", 1, text)
                 continue
         if block[0].startswith(b"mergetag "):
             mergetags += 1
             embedded = b"\n".join([block[0][9:]] + block[1:])
-            _scan_object(embedded, f"{label} mergetag {mergetags}", own, out)
+            _scan_object(embedded, f"{label} mergetag {mergetags}", own, out, depth + 1)
             continue
         key = first.partition(" ")[0]
         for i, line in enumerate(block, 1):
@@ -309,10 +339,9 @@ def _cat_file(kind: str, sha: str) -> bytes:
                           check=False).stdout
 
 
-# The separators-as-spaces form of a ref name is matched as whole words only:
-# as a substring, a branch "visual-green-ci" matched a two-word name entry
-# whose first word is the last letters of "visual" (round 8).
-REF_WORDS = "pushed ref name (as words)"
+# A mergetag can embed a tag object that itself carries mergetags; real ones
+# nest once. Past this the push is refused, not a traceback (round 9).
+MAX_MERGETAG_DEPTH = 16
 
 
 class RangeError(RuntimeError):
@@ -325,15 +354,12 @@ def range_added_lines(rev_range: str,
     push publishes, intermediate commits included (a name committed and then
     removed is still in the pushed history)."""
     out: list[tuple[str, int, str]] = []
-    own = _own_identity()
+    own = _own_identities()
     # The ref names a push creates are published too: a branch or tag name,
     # including a lightweight tag's and a renamed push's `src:refs/tags/X`
     # (review round 6, 2026-10-04).
-    # A ref name cannot hold a space, so a name entry ("First Last") is also
-    # tried against the name with its separators read as spaces (round 7).
     for name in ref_names or []:
-        out.append(("pushed ref name", 1, name))
-        out.append((REF_WORDS, 1, re.sub(r"[-_./]+", " ", name)))
+        out += _with_words("pushed ref name", 1, name)
     listing = subprocess.run(("git", "rev-list", *rev_range.split()), capture_output=True,
                              text=True, encoding="utf-8", check=False)
     if listing.returncode != 0:
@@ -413,13 +439,29 @@ def worktree_lines(paths: list[str] | None = None) -> list[tuple[str, int, str]]
     return out
 
 
+_BOUNDED: dict[str, re.Pattern] = {}
+
+
+def _bounded(pat: re.Pattern) -> re.Pattern:
+    """`pat` as whole words only. A `re:` entry whose inline flags cannot be
+    wrapped keeps its plain, stricter form rather than crashing the scan
+    (round 9)."""
+    if pat.pattern not in _BOUNDED:
+        try:
+            _BOUNDED[pat.pattern] = re.compile(
+                rf"(?<![^\W_])(?:{pat.pattern})(?![^\W_])", pat.flags)
+        except re.error:
+            _BOUNDED[pat.pattern] = pat
+    return _BOUNDED[pat.pattern]
+
+
 def scan(lines, rules, allowed) -> list[tuple[str, int, str, str]]:
     """Return (path, line_no, rule, excerpt) for every hit."""
     findings = []
     for path, lineno, text in lines:
         for label, pat in rules:
-            if path == REF_WORDS:
-                pat = re.compile(rf"(?<![^\W_])(?:{pat.pattern})(?![^\W_])", pat.flags)
+            if path.endswith(WORDS_SUFFIX):
+                pat = _bounded(pat)
             m = pat.search(text)
             if m:
                 findings.append((path, lineno, f"deny-list: {label}",
