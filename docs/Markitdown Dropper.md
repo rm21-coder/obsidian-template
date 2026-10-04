@@ -35,23 +35,28 @@ After Markitdown converts a file, the dropper imports `markitdown_cleanup.py` fr
 
 1. **Extracts inline base64 images** — Markitdown converts embedded images in `.docx` / `.pdf` files into giant `![Image](data:image/png;base64,...)` blobs. The cleanup decodes each, saves it as `<source-stem>-img-N.png` in `Z_attachments/`, and replaces the inline blob with an Obsidian wiki-link `![[name.png]]`. Images still render in Obsidian and the markdown becomes RAG-indexable.
 2. **Recovers images from source archives when Markitdown emits stubs** — sometimes Markitdown can't extract an image and emits `![](data:image/png;base64...)` (literal `...`, no real data). For `.docx`, `.pptx`, and `.xlsx` sources, the cleanup opens the source as a ZIP, pulls images from `word/media/` (or `ppt/media/` / `xl/media/`), saves them as `<source-stem>-source-img-N.<ext>`, and uses them to replace stubs in document order. Any extracted images that didn't match a stub are appended in a `## Images from source` section so nothing silently disappears. Stubs without a matching extracted image become a clear text placeholder. Non-renderable formats (WMF, EMF) are skipped.
+
+   Both steps are bounded, because a dropped file usually came from someone else: at most 200 inline images and 100 MB decoded per document (any past that become an "Embedded image omitted" placeholder), and from an archive at most 500 media members, 25 MB per decompressed image and 200 MB in total (anything over is skipped, so its stub gets the placeholder). Sizes are counted while streaming, not taken from the archive's own header.
 3. **Normalizes bullet markers** — converts Outlook/Word's `•`, `○`, `▪`, `▸`, `▹`, `‣`, `◦`, `●`, `⁃` to standard `-`. Tab indentation becomes two-space indentation while preserving nesting depth.
 4. **Promotes two strict heading patterns to `##`** — used because RAG chunkers (Open WebUI's Markdown Header Splitter, etc.) need header anchors:
     - `N. **Heading text**` on its own line (numbered + entirely bold)
     - `**Heading text:**` on its own line (bold label ending in colon)
    Anything ambiguous is left alone. Inline `**bold emphasis**` inside paragraphs is never promoted.
 5. **Normalizes whitespace** — strips trailing spaces, collapses any run of blank lines to a single blank, trims leading and trailing blanks.
-6. **Adds minimal YAML frontmatter** when the file has none:
+6. **Writes the note's YAML frontmatter:**
     ```yaml
     ---
-    title: <derived from source filename>
+    title: "<derived from source filename>"
     created: <today>
     source: markitdown
-    source_file: <original filename with extension>
+    source_file: "<original filename with extension>"
+    classification: internal-use-only
     tags: []
     ---
     ```
-   The empty `tags: []` lets the semantic auto-tagger fill it in on its next 30-minute LaunchAgent pass.
+   The empty `tags: []` lets the semantic auto-tagger fill it in on its next 30-minute LaunchAgent pass. `title` and `source_file` are always quoted: the filename is the sender's, and names like `[DRAFT] Budget` or `Report #3` are otherwise invalid YAML.
+
+   If the converted document starts with its own `---` frontmatter block, that block does **not** become the note's frontmatter: a document could otherwise declare its own `classification: public`. It is kept, visibly, as a fenced `yaml` code block at the top of the body under "Frontmatter from the source document (kept as text, not applied)". The standalone CLI below is the exception: it re-cleans notes already in the vault, so it keeps the file's existing frontmatter.
 
 **What it does NOT do** (intentionally):
 

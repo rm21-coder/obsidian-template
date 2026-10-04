@@ -26,8 +26,15 @@ OPERATIONS (in order)
      Promotion is skipped inside fenced code blocks.
   6. Normalize whitespace: strip trailing spaces, collapse blank-line runs
      to a single blank, trim leading and trailing blanks.
-  7. If the file had no frontmatter, prepend a minimal block:
-       title, created (today), source: markitdown, source_file, tags: []
+  7. Prepend the pipeline's own frontmatter block:
+       title, created (today), source: markitdown, source_file,
+       classification: internal-use-only, tags: []
+     A converted document is outsider text, so its OWN leading frontmatter
+     never becomes the note's: it could set `classification: public` or any
+     other property. That block is kept visibly, as a fenced code block at the
+     top of the body, so nothing in the document silently disappears. (The CLI
+     keeps a file's existing frontmatter, because it re-cleans notes that are
+     already in the vault; see `keep_frontmatter`.)
 
 WHAT IT DOES NOT DO (intentionally)
   - Aggressive heading inference from inline labels surrounded by prose.
@@ -48,7 +55,11 @@ PUBLIC API
       headings_promoted   int          lines turned into ## headings
       stubs_replaced      int          stubs replaced with extracted images
       stubs_placeheld     int          stubs replaced with placeholder text
-      frontmatter_added   bool         True if no frontmatter existed
+      frontmatter_added   bool         True if the pipeline wrote the block
+      source_frontmatter  bool         True if the document's own block was
+                                       fenced into the body
+      images_skipped      int          images not written: over a size or
+                                       count limit (see Limits below)
 
 CLI (for spot-checking and retroactive cleanup of existing vault files)
 
@@ -65,6 +76,7 @@ Default attachments dir is ~/Obsidian/Z_attachments — override with
 from __future__ import annotations
 
 import base64
+import json
 import re
 import zipfile
 from datetime import date
@@ -81,11 +93,47 @@ FRONTMATTER_RE = re.compile(r"\A(---\s*\n.*?\n---\s*\n)", re.DOTALL)
 
 
 def split_frontmatter(content: str) -> tuple[str, str]:
-    """Return (frontmatter_block, body). Empty frontmatter if none present."""
-    m = FRONTMATTER_RE.match(content)
+    """Return (frontmatter_block, body). Empty frontmatter if none present.
+
+    Leading byte-order marks are ignored, as Obsidian ignores them.
+    """
+    stripped = content.lstrip("\ufeff")
+    m = FRONTMATTER_RE.match(stripped)
     if m:
-        return m.group(1), content[m.end():]
+        return m.group(1), stripped[m.end():]
     return "", content
+
+
+def fence_source_frontmatter(block: str) -> str:
+    """The document's own frontmatter as inert text at the top of the body.
+
+    The fence is longer than any backtick run inside the block, so the block
+    cannot close it early and put its lines back into the note as markdown.
+    """
+    inner = block.rstrip("\n")
+    longest = max((len(r) for r in re.findall(r"`+", inner)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return (
+        "Frontmatter from the source document (kept as text, not applied):\n\n"
+        f"{fence}yaml\n{inner}\n{fence}\n\n"
+    )
+
+
+# Control characters, every line break included, and the three characters
+# that are line breaks to YAML 1.1 but not to Obsidian's YAML 1.2. Same rule
+# as meeting_prepopulate's _YAML_CTRL_RE, plus the rest of C1.
+_YAML_CTRL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+")
+
+
+def yaml_quoted(value: str) -> str:
+    """Outside text as one double-quoted YAML scalar.
+
+    The source filename belongs to whoever sent the file. Unquoted, names
+    such as `[DRAFT] Budget`, `Q3: plan` or `Report #3` are invalid YAML or
+    lose text, and Obsidian then shows no properties for the note. A JSON
+    string is a valid YAML double-quoted scalar with every escape correct.
+    """
+    return json.dumps(_YAML_CTRL_RE.sub(" ", value).strip(), ensure_ascii=False)
 
 
 def generate_frontmatter(source_path: Path) -> str:
@@ -100,14 +148,33 @@ def generate_frontmatter(source_path: Path) -> str:
     title = source_path.stem.replace("_", " ").replace("-", " ").strip()
     return (
         "---\n"
-        f"title: {title}\n"
+        f"title: {yaml_quoted(title)}\n"
         f"created: {date.today().isoformat()}\n"
         "source: markitdown\n"
-        f"source_file: {source_path.name}\n"
+        f"source_file: {yaml_quoted(source_path.name)}\n"
         "classification: internal-use-only\n"
         "tags: []\n"
         "---\n\n"
     )
+
+
+# ─── Limits ──────────────────────────────────────────────────────────────────
+#
+# A converted document comes from outside (an emailed attachment dropped on the
+# dropper). Without limits, ~30 bytes of repeated `![](data:image/png;base64,
+# AAAA)` text made one file each in Z_attachments, and an Office archive whose
+# media member inflates to gigabytes was read whole into memory and written
+# into the vault. Past a limit an image is not written: an inline one becomes
+# OMITTED_TEXT, an archive one is skipped (its stub then gets the placeholder).
+
+MAX_INLINE_IMAGES = 200                   # inline data: images per document
+MAX_INLINE_BYTES = 100 * 1024 * 1024      # decoded bytes, all inline images
+MAX_ARCHIVE_MEMBERS = 500                 # media members considered per archive
+MAX_ARCHIVE_MEMBER_BYTES = 25 * 1024 * 1024    # one decompressed member
+MAX_ARCHIVE_TOTAL_BYTES = 200 * 1024 * 1024    # all members, decompressed
+_COPY_CHUNK = 1024 * 1024
+
+OMITTED_TEXT = "*[Embedded image omitted — over the per-document image limit]*"
 
 
 # ─── Inline base64 image extraction ──────────────────────────────────────────
@@ -120,27 +187,41 @@ B64_IMAGE_RE = re.compile(
 
 
 def extract_base64_images(
-    body: str, source_stem: str, attachments_dir: Path
+    body: str, source_stem: str, attachments_dir: Path,
+    skipped: list[int] | None = None,
 ) -> tuple[str, list[Path]]:
     """Decode each inline base64 image, save to attachments_dir, replace the
     inline blob with an Obsidian wiki-link.
 
     Output filenames: `<source_stem>-img-<N>.<ext>` (with `-2`, `-3`... suffix
     on collision so prior runs aren't clobbered).
+
+    At most MAX_INLINE_IMAGES files and MAX_INLINE_BYTES decoded bytes are
+    written; any image past either limit is replaced with OMITTED_TEXT and
+    counted in `skipped[0]` when a counter is passed.
     """
     attachments_dir.mkdir(parents=True, exist_ok=True)
     extracted: list[Path] = []
     counter = [0]
+    total = [0]
 
     def replace(m: re.Match) -> str:
         counter[0] += 1
         n = counter[0]
         ext = m.group("ext").lower().replace("jpeg", "jpg")
         b64 = m.group("data")
+        # Size from the encoded length first, so an oversized blob is never
+        # decoded at all.
+        if (len(extracted) >= MAX_INLINE_IMAGES
+                or total[0] + len(b64) * 3 // 4 > MAX_INLINE_BYTES):
+            if skipped is not None:
+                skipped[0] += 1
+            return OMITTED_TEXT
         try:
             img_bytes = base64.b64decode(b64, validate=False)
         except Exception:
             return m.group(0)  # leave intact on decode failure
+        total[0] += len(img_bytes)
 
         out_path = attachments_dir / f"{source_stem}-img-{n}.{ext}"
         attempt = 1
@@ -189,8 +270,33 @@ ARCHIVE_MEDIA_PREFIXES = {
 }
 
 
+def _copy_bounded(src_f, out_path: Path, limit: int) -> int | None:
+    """Stream src_f into out_path. Returns bytes written, or None (and no
+    file left behind) when more than `limit` bytes arrive. The declared
+    file_size is checked before this, but it is the archive's own claim."""
+    written = 0
+    try:
+        with out_path.open("xb") as out_f:
+            while True:
+                chunk = src_f.read(min(_COPY_CHUNK, limit - written + 1))
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > limit:
+                    break
+                out_f.write(chunk)
+    except BaseException:
+        out_path.unlink(missing_ok=True)
+        raise
+    if written > limit:
+        out_path.unlink(missing_ok=True)
+        return None
+    return written
+
+
 def extract_archive_images(
-    source_path: Path, source_stem: str, attachments_dir: Path
+    source_path: Path, source_stem: str, attachments_dir: Path,
+    skipped: list[int] | None = None,
 ) -> list[Path]:
     """Pull all images from a .docx / .pptx / .xlsx archive into
     `attachments_dir`. Returns extracted Path objects in archive order
@@ -199,6 +305,13 @@ def extract_archive_images(
 
     Returns [] if the source isn't an Office archive, doesn't exist, or is
     unreadable as a ZIP.
+
+    Bounded against a zip bomb: only the first MAX_ARCHIVE_MEMBERS media
+    members are considered, a member over MAX_ARCHIVE_MEMBER_BYTES is
+    skipped, and nothing more is written once MAX_ARCHIVE_TOTAL_BYTES have
+    been. Sizes are checked against the declared file_size and again while
+    streaming, since the declared size is the archive's own claim. Skipped
+    members are counted in `skipped[0]` when a counter is passed.
     """
     if not source_path.exists():
         return []
@@ -208,17 +321,33 @@ def extract_archive_images(
 
     attachments_dir.mkdir(parents=True, exist_ok=True)
     extracted: list[Path] = []
+    total = 0
+
+    def skip(n: int = 1) -> None:
+        if skipped is not None:
+            skipped[0] += n
+
     try:
         with zipfile.ZipFile(source_path) as zf:
-            members = sorted(
-                m for m in zf.namelist()
-                if m.startswith(prefix) and not m.endswith("/")
+            infos = sorted(
+                (m for m in zf.infolist()
+                 if m.filename.startswith(prefix) and not m.filename.endswith("/")),
+                key=lambda m: m.filename,
             )
-            for i, member in enumerate(members, 1):
+            if len(infos) > MAX_ARCHIVE_MEMBERS:
+                skip(len(infos) - MAX_ARCHIVE_MEMBERS)
+                infos = infos[:MAX_ARCHIVE_MEMBERS]
+            for i, info in enumerate(infos, 1):
+                member = info.filename
                 ext = Path(member).suffix.lower().lstrip(".")
                 if ext == "jpeg":
                     ext = "jpg"
                 if ext not in RENDERABLE_EXTS:
+                    continue
+                limit = min(MAX_ARCHIVE_MEMBER_BYTES,
+                            MAX_ARCHIVE_TOTAL_BYTES - total)
+                if info.file_size > limit:
+                    skip()
                     continue
                 out_path = attachments_dir / f"{source_stem}-source-img-{i}.{ext}"
                 attempt = 1
@@ -228,8 +357,12 @@ def extract_archive_images(
                         attachments_dir
                         / f"{source_stem}-source-img-{i}-{attempt}.{ext}"
                     )
-                with zf.open(member) as src_f:
-                    out_path.write_bytes(src_f.read())
+                with zf.open(info) as src_f:
+                    written = _copy_bounded(src_f, out_path, limit)
+                if written is None:
+                    skip()
+                    continue
+                total += written
                 extracted.append(out_path)
     except (zipfile.BadZipFile, OSError):
         return []
@@ -237,7 +370,8 @@ def extract_archive_images(
 
 
 def handle_stub_images(
-    body: str, source_path: Path, attachments_dir: Path
+    body: str, source_path: Path, attachments_dir: Path,
+    skipped: list[int] | None = None,
 ) -> tuple[str, int, int, list[Path]]:
     """Find Markitdown image stubs (and any prior placeholders), replace each
     with either a wiki-link to a recovered source-archive image or a clean
@@ -252,7 +386,7 @@ def handle_stub_images(
 
     # Try to recover images from the source archive (.docx/.pptx/.xlsx).
     source_images = extract_archive_images(
-        source_path, source_path.stem, attachments_dir
+        source_path, source_path.stem, attachments_dir, skipped
     )
 
     iter_images = iter(source_images)
@@ -392,7 +526,8 @@ def normalize_whitespace(body: str) -> str:
 # ─── Public entrypoint ───────────────────────────────────────────────────────
 
 def clean(
-    content: str, source_path: Path, attachments_dir: Path
+    content: str, source_path: Path, attachments_dir: Path,
+    keep_frontmatter: bool = False,
 ) -> tuple[str, dict]:
     """Run the full cleanup pipeline on Markitdown output.
 
@@ -403,23 +538,35 @@ def clean(
             source-archive image recovery when Markitdown emitted stubs.
         attachments_dir: where to drop extracted images, typically
             ~/Obsidian/Z_attachments
+        keep_frontmatter: keep `content`'s own leading frontmatter as the
+            note's. Only for re-cleaning a note already in the vault (the
+            CLI). The converters leave it False: a converted document is
+            outsider text, and its own block could declare
+            `classification: public`.
 
     Returns:
         (cleaned_markdown, summary_dict)
     """
     fm, body = split_frontmatter(content)
 
+    skipped = [0]
     body, inline_images = extract_base64_images(
-        body, source_path.stem, attachments_dir
+        body, source_path.stem, attachments_dir, skipped
     )
     body, stubs_replaced, stubs_placeheld, source_images = handle_stub_images(
-        body, source_path, attachments_dir
+        body, source_path, attachments_dir, skipped
     )
     body, bullets = normalize_bullets(body)
     body, headings = promote_headings(body)
     body = normalize_whitespace(body)
 
     fm_added = False
+    source_fm = False
+    if fm and not keep_frontmatter:
+        # The document's block stays readable, but only as body text.
+        body = fence_source_frontmatter(fm) + body
+        fm = ""
+        source_fm = True
     if not fm:
         fm = generate_frontmatter(source_path)
         fm_added = True
@@ -433,6 +580,8 @@ def clean(
         "stubs_replaced": stubs_replaced,
         "stubs_placeheld": stubs_placeheld,
         "frontmatter_added": fm_added,
+        "source_frontmatter": source_fm,
+        "images_skipped": skipped[0],
     }
     return cleaned, summary
 
@@ -473,7 +622,10 @@ def _main() -> int:
     src_for_cleanup = args.source if args.source else args.file
 
     raw = args.file.read_text(encoding="utf-8")
-    cleaned, summary = clean(raw, src_for_cleanup, args.attachments_dir)
+    # The CLI re-cleans a file the user already has; its frontmatter is kept.
+    cleaned, summary = clean(
+        raw, src_for_cleanup, args.attachments_dir, keep_frontmatter=True
+    )
     # A converted document is text from outside the vault.
     cleaned = templater_guard.neutralize(cleaned)
 
@@ -500,6 +652,7 @@ def _main() -> int:
     print(f"  bullets normalized:    {summary['bullets_normalized']}", file=sys.stderr)
     print(f"  headings promoted:     {summary['headings_promoted']}", file=sys.stderr)
     print(f"  frontmatter added:     {summary['frontmatter_added']}", file=sys.stderr)
+    print(f"  images skipped:        {summary['images_skipped']}", file=sys.stderr)
     return 0
 
 
