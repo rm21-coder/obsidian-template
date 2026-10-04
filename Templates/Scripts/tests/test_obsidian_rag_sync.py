@@ -271,7 +271,10 @@ def test_push_file_propagates_duplicate_content(rag, monkeypatch, tmp_path):
 OWUI_NOT_FOUND = '{"detail":"We could not find what you\'re looking for :/"}'
 
 
-@pytest.mark.parametrize("code, body", [(400, OWUI_NOT_FOUND), (404, "")])
+@pytest.mark.parametrize("code, body", [
+    (400, OWUI_NOT_FOUND),
+    (400, '{"detail":"We could not find what you\\u0027re looking for :/"}'),  # escaped
+])
 def test_remove_treats_already_gone_as_success(rag, monkeypatch, code, body):
     monkeypatch.setattr(rag.session, "post",
                         lambda url, **kw: FakeResponse(code, body))
@@ -282,6 +285,9 @@ def test_remove_treats_already_gone_as_success(rag, monkeypatch, code, body):
     (500, ""),
     (400, '{"detail":"[ERROR: Something went wrong]"}'),
     (400, '{"detail":"You do not have permission to access this resource."}'),
+    (404, ""),                                   # a bare 404 proves nothing
+    (404, '{"detail":"Not Found"}'),             # FastAPI: the route moved
+    (400, "We could not find what you're looking for :/"),  # not a JSON detail
 ])
 def test_remove_still_raises_on_a_real_error(rag, monkeypatch, code, body):
     monkeypatch.setattr(rag.session, "post",
@@ -294,6 +300,16 @@ def test_delete_treats_404_as_gone(rag, monkeypatch):
     monkeypatch.setattr(rag.session, "delete",
                         lambda url, **kw: FakeResponse(404, OWUI_NOT_FOUND))
     rag.delete_file("file-1")
+
+
+@pytest.mark.parametrize("body", ["", '{"detail":"Not Found"}', "<html>404</html>"])
+def test_delete_404_without_open_webuis_detail_is_a_failure(rag, monkeypatch, body):
+    """A proxy or an upgrade that moves the route also answers 404. Read as
+    gone, a deindex-only run would clear restricted copies still indexed."""
+    monkeypatch.setattr(rag.session, "delete",
+                        lambda url, **kw: FakeResponse(404, body))
+    with pytest.raises(requests.HTTPError, match="404 from /files/"):
+        rag.delete_file("file-1")
 
 
 def test_delete_400_is_a_failure_not_gone(rag, monkeypatch):

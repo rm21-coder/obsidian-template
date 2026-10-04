@@ -171,6 +171,12 @@ EXCLUDE_FILENAME_PREFIXES = ("RAG-Sync-",)
 MIN_BODY_CHARS = 100
 MAX_FAILURES = 3
 
+# Pending purges retried per run, oldest first. Each costs up to two 60s
+# requests before any normal work, so an outage that piled up hundreds must
+# not turn every later run into hours of retries. The rest stay pending and
+# are reported as errors until their turn comes.
+MAX_PURGE_RETRIES_PER_RUN = 25
+
 # Open WebUI 0.11.0 made upload processing asynchronous: POST /api/v1/files/
 # returns as soon as the bytes land, with data.status == "pending", and text
 # extraction happens on a background queue. How long to wait for that queue
@@ -412,41 +418,51 @@ def add_to_collection(file_id: str) -> None:
             f"{r.status_code} from /file/add: {r.text[:200]}", response=r)
 
 
-# Open WebUI's ERROR_MESSAGES.NOT_FOUND ("We could not find what you're looking
-# for :/"). /knowledge/{id}/file/remove answers a missing file, or one not in
-# the collection, with a 400 carrying this detail (v0.11.3,
-# routers/knowledge.py). It answers other refusals -- ACCESS_PROHIBITED -- with
-# a 400 too, and generic server faults surface as 400s elsewhere, so a bare 400
-# is NOT evidence the copy is gone. Matched without the apostrophe, which JSON
-# may or may not escape.
-_NOT_FOUND_DETAIL = "We could not find what"
+# Open WebUI's ERROR_MESSAGES.NOT_FOUND, exactly as v0.11.3 defines it
+# (open_webui/constants.py). It is the only evidence a copy is already gone:
+#   - /knowledge/{id}/file/remove sends it with a 400 for a missing file or
+#     one not in the collection, but ALSO sends 400s for refusals
+#     (ACCESS_PROHIBITED), so a bare 400 proves nothing;
+#   - DELETE /files/{id} sends it with a 404, but a moved route, a proxy, or
+#     an upgrade that renames the API also answers 404 -- FastAPI's own
+#     {"detail":"Not Found"} -- so a bare 404 proves nothing either.
+# The detail is compared exactly after JSON decoding, so it does not matter
+# whether the apostrophe arrives escaped.
+_NOT_FOUND_DETAIL = "We could not find what you're looking for :/"
+
+
+def _is_not_found(r) -> bool:
+    """Whether a 400/404 carries Open WebUI's own not-found detail."""
+    if r.status_code not in (400, 404):
+        return False
+    try:
+        body = json.loads(r.text or "")
+    except ValueError:
+        return False
+    return isinstance(body, dict) and body.get("detail") == _NOT_FOUND_DETAIL
 
 
 def remove_from_collection(file_id: str) -> None:
-    """Remove a file from the collection. Already gone -- 404, or the 400 whose
-    body is Open WebUI's not-found message -- is success; any other 400 raises."""
+    """Remove a file from the collection. Success, or Open WebUI's not-found
+    detail (already gone), returns; any other non-2xx raises."""
     url = f"{WEBUI_URL}/api/v1/knowledge/{COLLECTION_ID}/file/remove"
     r = session.post(url, json={"file_id": file_id}, timeout=60)
-    if r.status_code == 404:
+    if r.ok or _is_not_found(r):
         return
-    if r.status_code == 400 and _NOT_FOUND_DETAIL in (r.text or ""):
-        return
-    if not r.ok:
-        raise requests.HTTPError(
-            f"{r.status_code} from /file/remove: {(r.text or '')[:200]}", response=r)
+    raise requests.HTTPError(
+        f"{r.status_code} from /file/remove: {(r.text or '')[:200]}", response=r)
 
 
 def delete_file(file_id: str) -> None:
-    """Delete a file. 404 is success (already gone). DELETE /files/{id} answers
-    a missing file with 404 and uses 400 for a failed delete ("Error deleting
-    files"), so a 400 here is a failure, never "gone"."""
+    """Delete a file. Success, or Open WebUI's not-found detail (already
+    gone), returns; any other non-2xx raises -- including a 400 "Error
+    deleting files" and a 404 that is not Open WebUI's own."""
     url = f"{WEBUI_URL}/api/v1/files/{file_id}"
     r = session.delete(url, timeout=60)
-    if r.status_code == 404:
+    if r.ok or _is_not_found(r):
         return
-    if not r.ok:
-        raise requests.HTTPError(
-            f"{r.status_code} from /files/{{id}}: {(r.text or '')[:200]}", response=r)
+    raise requests.HTTPError(
+        f"{r.status_code} from /files/{{id}}: {(r.text or '')[:200]}", response=r)
 
 
 def quarantine_blocks(entry: dict | None, current_hash: str) -> bool:
@@ -954,8 +970,24 @@ def main() -> int:
             f"still in the index, purge pending ({kind}): {path}")
         log.error(f"{kind} FAILED, purge pending: {path} | {detail}")
 
-    # Retry copies an earlier run could not purge, before anything else.
-    for file_id in sorted(pending_purge):
+    # Retry copies an earlier run could not purge, before anything else --
+    # at most MAX_PURGE_RETRIES_PER_RUN of them, oldest first.
+    queue = sorted(pending_purge, key=lambda fid: (
+        str(pending_purge[fid].get("first_failed", "")), fid))
+    deferred = queue[MAX_PURGE_RETRIES_PER_RUN:]
+    for file_id in deferred:
+        entry = pending_purge[file_id]
+        path = entry.get("path", "?")
+        errors += 1
+        summary["purge_failures"].append(
+            (path, f"not retried this run (cap {MAX_PURGE_RETRIES_PER_RUN}); "
+                   f"last error: {str(entry.get('last_error', ''))[:120]}"))
+    if deferred:
+        msg = (f"{len(deferred)} pending purge(s) not retried this run "
+               f"(cap {MAX_PURGE_RETRIES_PER_RUN}); still in the index")
+        summary["warnings"].append(msg)
+        log.error(msg)
+    for file_id in queue[:MAX_PURGE_RETRIES_PER_RUN]:
         entry = pending_purge[file_id]
         path = entry.get("path", "?")
         kind = entry.get("kind", "deleted")
