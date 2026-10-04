@@ -23,8 +23,13 @@ gemini-2.5-flash, so the second API key bought nothing.
 Single video:
     youtube_summarize.py "https://www.youtube.com/watch?v=XXXX"
 
-Playlist (or any yt-dlp-recognized collection):
+Playlist:
     youtube_summarize.py --playlist "https://www.youtube.com/playlist?list=YYYY"
+
+Only YouTube URLs are accepted (youtube.com, www./m./music.youtube.com,
+youtu.be), and yt-dlp runs with its YouTube extractors alone. yt-dlp's generic
+extractor would otherwise fetch whatever a pasted page or feed names --
+including loopback and LAN addresses -- with no SSRF guard of ours in the way.
 
 Flags:
     --model NAME      model id (default: claude-sonnet-5; env: YOUTUBE_MODEL)
@@ -57,6 +62,7 @@ import templater_guard  # noqa: E402  -- outside text must not run as Templater 
 import textwrap
 from datetime import date, datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 # ---------- venv bootstrap --------------------------------------------------
 #
@@ -136,6 +142,48 @@ is_safe_url = url_safety.is_safe_url
 # hostile track served as an endless stream from growing the process.
 CAPTION_MAX_BYTES = 5 * 1024 * 1024
 
+# yt-dlp makes its own requests, outside url_safety, so it is held to YouTube:
+# the operator's URL and every playlist entry must name one of these hosts,
+# and yt-dlp loads only its YouTube extractors (--use-extractors matches each
+# name exactly). With the default set, the generic extractor follows a page's
+# <video><source> or a 302 anywhere, 127.0.0.1 included.
+YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com",
+                           "music.youtube.com", "youtu.be"})
+VIDEO_EXTRACTORS = "youtube"
+PLAYLIST_EXTRACTORS = "youtube,youtube:tab,youtube:playlist"
+YTDLP_TIMEOUT_SECONDS = 600
+
+
+def youtube_url(url: object) -> tuple[str | None, str]:
+    """(url fit to hand to yt-dlp, "") or (None, reason).
+
+    The fragment is dropped: yt-dlp reads "#__youtubedl_smuggle=..." from a
+    URL's fragment as extractor options, and a feed entry could carry one.
+    Userinfo, an explicit port, backslashes, whitespace and control
+    characters are refused outright -- each is a way for two URL parsers to
+    disagree about which host a string names.
+    """
+    if not isinstance(url, str):
+        return None, f"not a string: {type(url).__name__}"
+    if "\\" in url or any(ord(c) <= 0x20 or 0x7f <= ord(c) <= 0x9f for c in url):
+        return None, "backslash, whitespace or control character in URL"
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        return None, "unparseable URL"
+    if parts.scheme not in ("http", "https"):
+        return None, f"disallowed scheme: {parts.scheme!r}"
+    if "@" in parts.netloc:
+        return None, "userinfo in URL"
+    if port is not None:
+        return None, "explicit port in URL"
+    if host not in YOUTUBE_HOSTS:
+        return None, f"not a YouTube host: {host!r}"
+    return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                       parts.query, "")), ""
+
 
 # ---------- Logging ----------------------------------------------------------
 
@@ -158,7 +206,12 @@ def run_ytdlp(args: list[str]) -> dict | list[dict]:
     # Invoke via the interpreter's module so it works when yt-dlp is a pip dep
     # in the venv but its console script isn't on PATH (common on Windows).
     cmd = [sys.executable, "-m", "yt_dlp", "-J", "--no-warnings", *args]
-    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True,
+                              timeout=YTDLP_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"yt-dlp timed out after {YTDLP_TIMEOUT_SECONDS}s") from None
     if proc.returncode != 0:
         raise RuntimeError(f"yt-dlp failed: {proc.stderr.strip()}")
     return json.loads(proc.stdout)
@@ -167,24 +220,24 @@ def run_ytdlp(args: list[str]) -> dict | list[dict]:
 def enumerate_playlist(url: str) -> list[str]:
     """Return ordered video URLs for a playlist, unsafe entries dropped.
 
-    Entry URLs come from the remote playlist or feed (yt-dlp copies an RSS
-    item's enclosure/link verbatim), and each one is handed back to yt-dlp,
-    which fetches it. So each must be an http(s) URL to a public host:
-    otherwise a feed could point yt-dlp at the LAN, or name a yt-dlp option
-    ("--cookies-from-browser=...") in place of a URL.
+    Entry URLs come from remote playlist metadata, and each one is handed
+    back to yt-dlp, which fetches it. So each must be a YouTube URL (see
+    youtube_url): otherwise an entry could point yt-dlp at the LAN, name a
+    yt-dlp option ("--cookies-from-browser=...") in place of a URL, or
+    smuggle extractor options in its fragment.
     """
-    data = run_ytdlp(["--flat-playlist", "--", url])
-    if isinstance(data, dict) and "entries" in data:
+    data = run_ytdlp(["--flat-playlist", "--use-extractors",
+                      PLAYLIST_EXTRACTORS, "--", url])
+    if isinstance(data, dict) and isinstance(data.get("entries"), list):
         urls = []
         for e in data["entries"]:
-            if not e:
+            if not isinstance(e, dict):
                 continue
-            u = str(e.get("url") or
-                    f"https://www.youtube.com/watch?v={e.get('id')}")
-            ok, reason = is_safe_url(u)
-            if not ok:
+            raw = e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
+            u, reason = youtube_url(raw)
+            if u is None:
                 print(f"[yt-sum] skipping playlist entry "
-                      f"{url_safety.redact_url(u)}: {reason}",
+                      f"{url_safety.redact_url(raw)}: {reason}",
                       file=sys.stderr, flush=True)
                 continue
             urls.append(u)
@@ -203,8 +256,9 @@ def fetch_video(url: str) -> dict:
     data = run_ytdlp([
         "--skip-download",
         "--no-playlist",
+        "--use-extractors", VIDEO_EXTRACTORS,
         # Everything after "--" is a URL, never an option, whatever it starts
-        # with. Playlist entries come from remote feeds.
+        # with. Playlist entries come from remote metadata.
         "--",
         url,
     ])
@@ -224,15 +278,24 @@ def extract_transcript(info: dict) -> str:
     candidates = []
     for source in ("subtitles", "automatic_captions"):
         tracks = info.get(source) or {}
+        if not isinstance(tracks, dict):
+            continue
         # Prefer "en", then any en-* (en-US, en-GB, en-orig, etc.)
-        keys = sorted(tracks.keys(), key=lambda k: (k != "en", not k.startswith("en"), k))
+        keys = sorted((k for k in tracks if isinstance(k, str)),
+                      key=lambda k: (k != "en", not k.startswith("en"), k))
         for k in keys:
             if not (k == "en" or k.startswith("en")):
                 continue
-            for fmt in tracks[k]:
+            fmts = tracks[k] if isinstance(tracks[k], list) else []
+            for fmt in fmts:
+                if not isinstance(fmt, dict):
+                    continue
                 ext = fmt.get("ext", "")
-                if ext in ("json3", "vtt", "srt", "ttml"):
-                    candidates.append((source, k, ext, fmt.get("url")))
+                url = fmt.get("url")
+                # A track that is not a well-formed entry is skipped, never
+                # an exception that loses the remaining tracks.
+                if ext in ("json3", "vtt", "srt", "ttml") and isinstance(url, str):
+                    candidates.append((source, k, ext, url))
 
     for source, lang, ext, url in candidates:
         # The URLs come from yt-dlp's parsed response -- a remote input, and
@@ -240,7 +303,7 @@ def extract_transcript(info: dict) -> str:
         # perimeter. safe_fetch checks every hop (redirects included) with
         # is_safe_url, connects to the address it checked, and caps the body.
         raw = url_safety.safe_fetch(
-            url or "", max_bytes=CAPTION_MAX_BYTES,
+            url, max_bytes=CAPTION_MAX_BYTES,
             log=lambda m: log(f"caption track: {m}", verbose=True))
         if raw is None:
             continue
@@ -407,39 +470,46 @@ def strip_suggested_tags_section(summary_md: str) -> str:
 # characters). Nothing YAML reads as syntax at the start of a plain scalar.
 SAFE_TAG = re.compile(r"[^\W_][\w/-]{0,63}")
 
-# Line breaks (YAML and str.splitlines both honour \x85, \u2028, \u2029) and
-# the other control characters. One in a title could end the frontmatter early.
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]")
+# Line breaks (YAML and str.splitlines both honour \x85, \u2028, \u2029), the
+# other C0/C1 control characters, and code points PyYAML refuses to read at
+# all (lone surrogates, U+FFFE/U+FFFF). One in a title could end the
+# frontmatter early or make the whole block unreadable.
+_CONTROL_CHARS = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u2028\u2029\ud800-\udfff\ufffe\uffff]")
 
 
-def yaml_escape(value: str) -> str:
-    """One-line YAML scalar: control characters (newlines included) become
-    spaces, and the value is quoted if it has YAML-significant characters.
+def yaml_escape(value: object) -> str:
+    """A double-quoted YAML string for any value, on one line.
 
-    Titles and uploaders come from the page yt-dlp read, so a newline in one
-    would otherwise close the frontmatter after it and push the
-    classification line into the body (M-DASH 223).
+    Always quoted: a plain scalar is read as syntax or as another type far
+    too easily -- a leading ',' ']' '}' or ' - ' breaks the block, and
+    null / ~ / yes / 123 / 2026-09-01 come back as None, True, an int or a
+    date. A JSON string is a valid YAML double-quoted scalar, so json.dumps
+    does the escaping. Control characters become spaces first: titles and
+    uploaders come from the page yt-dlp read, and a newline in one would
+    close the frontmatter early (M-DASH 223).
     """
-    if value == "" or value is None:
-        return '""'
-    value = _CONTROL_CHARS.sub(" ", str(value))
-    needs_quote = any(c in value for c in ":#&*!|>'\"%@`")
-    if needs_quote or value[0] in "[{?-":
-        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return value
+    if value is None:
+        value = ""
+    return json.dumps(_CONTROL_CHARS.sub(" ", str(value)), ensure_ascii=False)
 
 
 def build_frontmatter(info: dict, suggested_tags: list[str], description: str) -> str:
-    title = info.get("title") or "Untitled"
-    url = info.get("webpage_url") or info.get("original_url") or ""
-    author = info.get("uploader") or info.get("channel") or ""
-    upload_date = info.get("upload_date") or ""
-    if upload_date and re.fullmatch(r"\d{8}", upload_date):
+    # Every field is remote metadata of whatever type the page produced, so
+    # each is coerced to text here rather than trusted to be a str.
+    title = str(info.get("title") or "Untitled")
+    url = str(info.get("webpage_url") or info.get("original_url") or "")
+    author = str(info.get("uploader") or info.get("channel") or "")
+    upload_date = str(info.get("upload_date") or "")
+    if re.fullmatch(r"\d{8}", upload_date):
         published = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}"
     else:
-        published = upload_date or "null"
+        published = upload_date or None
     duration = info.get("duration")
-    duration_str = format_duration(duration) if duration else ""
+    try:
+        duration_str = format_duration(duration) if duration else ""
+    except (TypeError, ValueError, OverflowError):
+        duration_str = ""
 
     # 'clippings' tag retired 2026-05-27; keep the meaningful 'youtube' axis.
     base_tags = ["youtube"]
@@ -455,7 +525,7 @@ def build_frontmatter(info: dict, suggested_tags: list[str], description: str) -
         f"title: {yaml_escape(title)}",
         f"source: {yaml_escape(url)}",
         f"author: {yaml_escape(author)}",
-        f"published: {published if published == 'null' else yaml_escape(published)}",
+        f"published: {'null' if published is None else yaml_escape(published)}",
         f"created: {date.today().isoformat()}",
         f"duration: {yaml_escape(duration_str)}",
         f"description: {yaml_escape(description)}",
@@ -465,7 +535,7 @@ def build_frontmatter(info: dict, suggested_tags: list[str], description: str) -
         "tags:",
     ]
     for t in all_tags:
-        lines.append(f"- {t}")
+        lines.append(f"- {yaml_escape(t)}")
     lines.append("---")
     return "\n".join(lines) + "\n"
 
@@ -495,7 +565,7 @@ def process_video(url: str, *, out_dir: Path, model: str,
     log(f"fetching metadata: {url}", verbose=verbose)
     info = fetch_video(url)
 
-    title = info.get("title") or info.get("id") or "Untitled"
+    title = str(info.get("title") or info.get("id") or "Untitled")
     note_path = out_dir / f"{safe_filename(title)}.md"
     if note_path.exists():
         log(f"already exists, skipping: {note_path.name}", verbose=verbose)
@@ -556,13 +626,17 @@ def main(argv: list[str]) -> int:
 
     out_dir = Path(os.path.expanduser(args.out)).resolve()
 
+    target, reason = youtube_url(args.url)
+    if target is None:
+        die(f"only YouTube URLs are supported ({reason})")
+
     model = resolve_model(args.model)
     # No credential check here: llm_endpoint raises MissingCredential naming the
     # exact secret and how to store it, which beats a second guess at it.
 
     if args.playlist:
         try:
-            urls = enumerate_playlist(args.url)
+            urls = enumerate_playlist(target)
         except RuntimeError as e:
             die(str(e))
         if args.max:
@@ -583,7 +657,7 @@ def main(argv: list[str]) -> int:
         return 0 if not failed else 2
 
     try:
-        path = process_video(args.url, out_dir=out_dir, model=model,
+        path = process_video(target, out_dir=out_dir, model=model,
                              dry_run=args.dry_run,
                              verbose=args.verbose)
     except Exception as e:

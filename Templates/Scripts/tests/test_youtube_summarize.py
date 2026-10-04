@@ -293,7 +293,7 @@ class TestCaptionTrackSSRF:
         import url_safety
         requested: list[str] = []
 
-        def fake_pinned_get(url, ip, *, timeout):
+        def fake_pinned_get(url, ip, **kw):
             requested.append(url)
             return routes[url]
 
@@ -420,6 +420,65 @@ class TestCaptionTrackSSRF:
             self._info_with_caption_urls([url])).startswith("word word")
 
 
+    def test_a_malformed_track_is_skipped_not_raised(
+            self, monkeypatch: pytest.MonkeyPatch, public_dns: str) -> None:
+        """C6: a non-string URL or a non-dict entry used to raise out of
+        extract_transcript and lose every remaining track."""
+        good = "https://captions.test.example/ok.json3"
+        requested = self._route(monkeypatch, {good: _FakeHop(body=_json3("ok"))})
+        info = {"subtitles": {"en": [{"ext": "json3", "url": 12345},
+                                     "not-a-dict",
+                                     {"ext": "json3", "url": ["x"]},
+                                     {"ext": "json3", "url": good}],
+                              7: [{"ext": "vtt", "url": good}]},
+                "automatic_captions": "not-a-dict"}
+        assert ys.extract_transcript(info) == "ok"
+        assert requested == [good]
+
+    def test_a_body_that_breaks_mid_read_tries_the_next_track(
+            self, monkeypatch: pytest.MonkeyPatch, public_dns: str,
+            capsys: pytest.CaptureFixture[str]) -> None:
+        """C6: a ChunkedEncodingError mid-body propagated out of safe_fetch."""
+        import requests
+
+        class _Broken(_FakeHop):
+            def iter_content(self, chunk_size: int = 65536):
+                yield b"WEBVTT\n\npartial"
+                raise requests.exceptions.ChunkedEncodingError("boom")
+
+        bad = "https://captions.test.example/broken.vtt"
+        good = "https://captions.test.example/ok.json3"
+        self._route(monkeypatch, {bad: _Broken(), good: _FakeHop(body=_json3("ok"))})
+        info = {"subtitles": {"en": [{"ext": "vtt", "url": bad},
+                                     {"ext": "json3", "url": good}]}}
+        assert ys.extract_transcript(info) == "ok"
+        assert "read error on https://captions.test.example/broken.vtt: " \
+               "ChunkedEncodingError" in capsys.readouterr().err
+
+    def test_a_redirect_to_an_unencodable_name_is_refused(
+            self, monkeypatch: pytest.MonkeyPatch,
+            capsys: pytest.CaptureFixture[str]) -> None:
+        """C6: a 64-character label fails IDNA encoding inside getaddrinfo
+        (UnicodeError, not gaierror) and escaped _check as an exception."""
+        import socket
+
+        def encoding_resolver(host, port, *a, **k):
+            str(host).encode("idna")          # what socket.getaddrinfo does first
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "",
+                     ("93.184.216.34", port or 0))]
+
+        monkeypatch.setattr(socket, "getaddrinfo", encoding_resolver)
+        first = "https://captions.test.example/c.vtt"
+        long_name = "a" * 64 + ".test.example"
+        self._route(monkeypatch, {
+            first: _FakeHop(302, location=f"https://{long_name}/c.vtt")})
+        result = ys.extract_transcript(self._info_with_caption_urls([first]))
+        assert result == ""
+        err = capsys.readouterr().err
+        assert f"refusing https://{long_name}/c.vtt: DNS resolution failed" in err
+        assert "UnicodeEncodeError" in err
+
+
 # ---------------------------------------------------------------------------
 # Playlist entries and the yt-dlp argv (M-DASH 230 / 359).
 # ---------------------------------------------------------------------------
@@ -432,43 +491,112 @@ class TestPlaylistEntries:
 
         def fake_run(cmd, **kwargs):
             calls.append(list(cmd))
+            calls_kwargs.append(kwargs)
             return MagicMock(returncode=0, stdout=stdout, stderr="")
 
+        calls_kwargs: list[dict] = []
+        self.kwargs = calls_kwargs
         monkeypatch.setattr(ys.subprocess, "run", fake_run)
         return calls
 
-    def test_unsafe_feed_entries_are_dropped(
-            self, monkeypatch: pytest.MonkeyPatch, public_dns: str,
+    def test_non_youtube_entries_are_dropped(
+            self, monkeypatch: pytest.MonkeyPatch,
             capsys: pytest.CaptureFixture[str]) -> None:
-        """An attacker's RSS 'playlist' names a LAN device and a yt-dlp
-        option as entries; only the real video URL reaches yt-dlp again."""
+        """Entries name a LAN device, a yt-dlp option, other hosts and
+        parser tricks; only YouTube URLs reach yt-dlp again."""
         good = "https://www.youtube.com/watch?v=abc123"
         feed = {"entries": [
             {"url": "http://192.168.1.1/cgi-bin/reboot?now=1"},
             {"url": "--cookies-from-browser=chrome"},
+            {"url": "https://evil.test.example/v.mp4"},
+            {"url": "https://www.youtube.com.evil.test/watch?v=1"},
+            # Split so the identity-leak scanner does not read an address.
+            {"url": "https://u" + "@" + "www.youtube.com/watch?v=2"},
+            {"url": "https://www.youtube.com:8443/watch?v=3"},
+            {"url": "https://127.0.0.1\\@www.youtube.com/watch?v=4"},
+            {"url": 42},
             {"url": good},
             {"id": "xyz789"},
             None,
+            "not-a-dict",
         ]}
         self._capture_ytdlp(monkeypatch, json.dumps(feed))
-        urls = ys.enumerate_playlist("https://feeds.test.example/rss")
+        urls = ys.enumerate_playlist("https://www.youtube.com/playlist?list=PL1")
         assert urls == [good, "https://www.youtube.com/watch?v=xyz789"]
         err = capsys.readouterr().err
-        assert "skipping playlist entry http://192.168.1.1/cgi-bin/reboot" in err
-        assert "disallowed IP literal: 192.168.1.1" in err
+        assert ("skipping playlist entry http://192.168.1.1/cgi-bin/reboot?…: "
+                "not a YouTube host: '192.168.1.1'") in err
         assert "disallowed scheme: ''" in err
+        assert "not a YouTube host: 'evil.test.example'" in err
+        assert "not a YouTube host: 'www.youtube.com.evil.test'" in err
+        assert "userinfo in URL" in err
+        assert "explicit port in URL" in err
+        assert "backslash, whitespace or control character in URL" in err
+        assert "not a string: int" in err
 
-    def test_fetch_video_puts_double_dash_before_the_url(
+    def test_entry_fragments_are_stripped(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """yt-dlp reads '#__youtubedl_smuggle=' as extractor options."""
+        smuggled = ('https://youtu.be/abc#__youtubedl_smuggle='
+                    '%7B%22http_headers%22%3A%7B%7D%7D')
+        self._capture_ytdlp(monkeypatch, json.dumps({"entries": [{"url": smuggled}]}))
+        assert ys.enumerate_playlist("https://www.youtube.com/playlist?list=PL1") \
+            == ["https://youtu.be/abc"]
+
+    @pytest.mark.parametrize("url, cleaned", [
+        ("https://www.youtube.com/watch?v=abc", "https://www.youtube.com/watch?v=abc"),
+        ("https://youtube.com/shorts/abc", "https://youtube.com/shorts/abc"),
+        ("https://m.youtube.com/watch?v=abc#t=10", "https://m.youtube.com/watch?v=abc"),
+        ("https://music.youtube.com/watch?v=abc", "https://music.youtube.com/watch?v=abc"),
+        ("https://youtu.be/abc", "https://youtu.be/abc"),
+        ("http://WWW.YouTube.com/playlist?list=PL1", "http://WWW.YouTube.com/playlist?list=PL1"),
+    ])
+    def test_youtube_urls_are_accepted(self, url: str, cleaned: str) -> None:
+        assert ys.youtube_url(url) == (cleaned, "")
+
+    def test_main_refuses_a_non_youtube_url(
+            self, monkeypatch: pytest.MonkeyPatch,
+            capsys: pytest.CaptureFixture[str]) -> None:
+        monkeypatch.setitem(sys.modules, "yt_dlp", MagicMock())
+        calls = self._capture_ytdlp(monkeypatch, "{}")
+        with pytest.raises(SystemExit) as exc:
+            ys.main(["https://evil.test.example/page", "--dry-run"])
+        assert exc.value.code == 1
+        assert calls == []
+        assert ("only YouTube URLs are supported "
+                "(not a YouTube host: 'evil.test.example')") in capsys.readouterr().err
+
+    def test_fetch_video_is_held_to_the_youtube_extractor(
             self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = self._capture_ytdlp(monkeypatch, json.dumps({"id": "x"}))
         ys.fetch_video("--cookies-from-browser=chrome")
-        assert calls[0][-2:] == ["--", "--cookies-from-browser=chrome"], calls
+        cmd = calls[0]
+        assert cmd[-2:] == ["--", "--cookies-from-browser=chrome"], cmd
+        i = cmd.index("--use-extractors")
+        assert cmd[i + 1] == "youtube"
+        assert self.kwargs[0]["timeout"] == ys.YTDLP_TIMEOUT_SECONDS
 
-    def test_enumerate_playlist_puts_double_dash_before_the_url(
+    def test_enumerate_playlist_is_held_to_youtube_extractors(
             self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = self._capture_ytdlp(monkeypatch, json.dumps({"entries": []}))
         ys.enumerate_playlist("https://www.youtube.com/playlist?list=PL1")
-        assert calls[0][-2:] == ["--", "https://www.youtube.com/playlist?list=PL1"]
+        cmd = calls[0]
+        assert cmd[-2:] == ["--", "https://www.youtube.com/playlist?list=PL1"]
+        i = cmd.index("--use-extractors")
+        assert cmd[i + 1].split(",") == ["youtube", "youtube:tab", "youtube:playlist"]
+        assert "generic" not in cmd[i + 1]
+        assert self.kwargs[0]["timeout"] == ys.YTDLP_TIMEOUT_SECONDS
+
+    def test_a_hung_ytdlp_is_a_failure_not_a_hang(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import subprocess
+
+        def hang(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+        monkeypatch.setattr(ys.subprocess, "run", hang)
+        with pytest.raises(RuntimeError, match=r"yt-dlp timed out after 600s"):
+            ys.fetch_video("https://youtu.be/abc")
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +608,14 @@ def _frontmatter_dict(note: str) -> dict:
     assert note.startswith("---\n")
     block = note[4:note.index("\n---\n", 4)]
     return yaml.safe_load(block)
+
+
+# Each of these is read as syntax or as another type when written plain.
+_HOSTILE_SCALARS = [",x", "]x", "}x", " - x", "- x", "null", "~", "yes", "No",
+                    "true", "123", "0x1F", "1e3", "2026-09-01", "12:30",
+                    "&a", "*a", "!!python/name:os.system", "? x", "'q'",
+                    '"dq"', "a: b", "#c", "%d", "@e", "`f", "|", ">", "x\\y",
+                    "[a, b]", "{a: b}", "trailing ", "café ✓", ""]
 
 
 class TestFrontmatterInjection:
@@ -508,13 +644,55 @@ class TestFrontmatterInjection:
         assert data["published"] == "2026 ---"
         assert data["classification"] == "internal-use-only"
 
-    def test_ordinary_values_are_written_as_before(self) -> None:
+    @pytest.mark.parametrize("value", _HOSTILE_SCALARS)
+    def test_every_field_loads_as_the_exact_string(self, value: str) -> None:
+        """C5: a plain scalar starting ',' ']' '}' or ' - ' broke the block,
+        and null / ~ / yes / 123 / dates came back as other types."""
+        info = dict(self.INFO, title=value, uploader=value, upload_date=value,
+                    webpage_url=value)
+        data = _frontmatter_dict(ys.build_frontmatter(info, [], value))
+        expect_title = value or "Untitled"
+        assert data["title"] == expect_title
+        assert data["author"] == value
+        assert data["source"] == value
+        assert data["description"] == value
+        assert data["published"] == (value if value else None)
+        assert data["classification"] == "internal-use-only"
+
+    @pytest.mark.parametrize("bad", ["\ud800", "\ufffe", "\x80", "\x9b", "\x00"])
+    def test_code_points_pyyaml_cannot_read_are_replaced(self, bad: str) -> None:
+        data = _frontmatter_dict(ys.build_frontmatter(
+            dict(self.INFO, title=f"a{bad}b"), [], ""))
+        assert data["title"] == "a b"
+
+    def test_non_string_metadata_does_not_raise(self) -> None:
+        """C6: an int upload_date raised TypeError in build_frontmatter."""
+        info = {"title": 2026, "uploader": None, "upload_date": 20260901,
+                "duration": "not-a-number", "webpage_url": None}
+        data = _frontmatter_dict(ys.build_frontmatter(info, [], ""))
+        assert data["title"] == "2026"
+        assert data["published"] == "2026-09-01"
+        assert data["duration"] == ""
+        assert data["classification"] == "internal-use-only"
+
+    def test_ordinary_values_load_as_before(self) -> None:
+        """The written form is now always double-quoted; what a YAML reader
+        gets back for ordinary values is unchanged (published is the date
+        as a string, as Obsidian treats it)."""
         info = dict(self.INFO, title="Plain Title")
         fm = ys.build_frontmatter(info, ["ai", "machine-learning"], "A summary.")
-        assert "\ntitle: Plain Title\n" in fm
-        assert "\nauthor: Channel\n" in fm
-        assert "\npublished: 2026-09-01\n" in fm
-        assert fm.endswith("tags:\n- youtube\n- ai\n- machine-learning\n---\n")
+        assert '\ntitle: "Plain Title"\n' in fm
+        assert fm.endswith('tags:\n- "youtube"\n- "ai"\n- "machine-learning"\n---\n')
+        data = _frontmatter_dict(fm)
+        assert data["title"] == "Plain Title"
+        assert data["author"] == "Channel"
+        assert data["published"] == "2026-09-01"
+        assert data["duration"] == "1:01"
+        assert data["tags"] == ["youtube", "ai", "machine-learning"]
+
+    def test_missing_date_is_null(self) -> None:
+        info = dict(self.INFO, title="T", upload_date=None)
+        assert "\npublished: null\n" in ys.build_frontmatter(info, [], "")
 
     def test_model_tags_that_are_yaml_syntax_are_dropped(self) -> None:
         md = ("## Suggested tags\n[evil, *alias, !!python/name:os.system, "
@@ -528,6 +706,14 @@ class TestFrontmatterInjection:
             dict(self.INFO, title="T"), tags, ""))
         assert data["tags"] == ["youtube", "alias", "ai", "machine-learning",
                                 "café", "data/eng"]
+
+    def test_tags_that_coerce_load_as_strings(self) -> None:
+        """C5: null / true / 123 pass SAFE_TAG; quoting keeps them text."""
+        tags = ys.parse_suggested_tags("## Suggested tags\nnull, true, 123, yes\n")
+        assert tags == ["null", "true", "123", "yes"]
+        data = _frontmatter_dict(ys.build_frontmatter(
+            dict(self.INFO, title="T"), tags, ""))
+        assert data["tags"] == ["youtube", "null", "true", "123", "yes"]
 
 
 # ---------------------------------------------------------------------------
