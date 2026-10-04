@@ -72,9 +72,6 @@ SKIPPED_FOLDERS = frozenset({
     "docs", "installers",
 })
 
-# Files at the repo root that are skipped (scaffolding).
-SKIPPED_ROOT_FILES = frozenset({"README.md"})
-
 # Frontmatter pattern: a YAML block at the very top, delimited by ---.
 FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.DOTALL)
 # Anchored at column 0 inside the YAML block so a stray
@@ -141,8 +138,10 @@ def parse_classification(text: str) -> str | None:
 def should_audit(rel_path: Path) -> bool:
     """Return True if this path falls under an audited folder.
 
-    Files in skipped folders, skipped root files, and any file whose
-    top-level component is not in AUDITED_FOLDERS are excluded.
+    Root-level files (README.md etc.), files under a top-level skipped
+    folder, and any file whose top-level component is not in AUDITED_FOLDERS
+    are excluded. Only the top level is consulted: a README.md or docs/
+    folder deeper inside an audited folder is audited like any other note.
     """
     parts = rel_path.parts
     if not parts:
@@ -157,8 +156,10 @@ def should_audit(rel_path: Path) -> bool:
         # Anything outside the known audited set is treated as scaffolding
         # and skipped. New top-level folders need to be opted IN here.
         return False
-    if rel_path.name in SKIPPED_ROOT_FILES:
-        return False
+    # No README.md exemption here: the root README.md is already skipped by
+    # the len(parts) == 1 branch above, and exempting the name at any depth
+    # let a confidential Knowledge/README.md (or a People stub for an
+    # attendee displayed as "README") through the gate.
     return True
 
 
@@ -166,25 +167,31 @@ def git_staged_files(repo_root: Path) -> list[Path]:
     """Return paths (relative to repo_root) of .md files staged for commit.
 
     Uses --diff-filter=ACMR so deletions and renames-out don't appear.
+
+    -z is load-bearing. Without it git C-quotes any path with a non-ASCII
+    byte ("People/Jos\\303\\251 Garc\\303\\255a.md" under the default
+    core.quotePath), the quoted string names no file, and the note was
+    silently dropped: a staged confidential People/José García.md audited as
+    0 files and the commit went through. Accented names come straight from
+    invite text, so this is the ordinary case, not an exotic one. -z output
+    is never quoted, the same reason git_ignored() uses it.
+
+    A staged path that is not on disk is returned rather than skipped: it is
+    still being committed, and audit_files() reports the unreadable file as a
+    violation instead of quietly auditing less.
     """
     try:
         out = subprocess.check_output(
-            ["git", "diff", "--cached", "--name-only",
+            ["git", "diff", "--cached", "--name-only", "-z",
              "--diff-filter=ACMR", "--", "*.md"],
             cwd=repo_root,
             text=True,
+            encoding="utf-8",
+            errors="surrogateescape",
         )
     except subprocess.CalledProcessError:
         return []
-    paths: list[Path] = []
-    for line in out.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        p = Path(line)
-        if (repo_root / p).is_file():
-            paths.append(p)
-    return paths
+    return [Path(s) for s in out.split("\0") if s]
 
 
 def git_ignored(repo_root: Path, paths: list[Path]) -> set[Path]:
@@ -225,6 +232,10 @@ def git_ignored(repo_root: Path, paths: list[Path]) -> set[Path]:
             input="\0".join(p.as_posix() for p in paths) + "\0",
             capture_output=True,
             text=True,
+            # git speaks UTF-8 paths; the Windows locale codec would mangle
+            # a non-ASCII name on the way in.
+            encoding="utf-8",
+            errors="surrogateescape",
         )
     except (OSError, subprocess.SubprocessError):
         return set()
@@ -245,8 +256,11 @@ def all_md_files(repo_root: Path) -> list[Path]:
             rel = f.relative_to(repo_root)
         except ValueError:
             continue
-        # Skip anything inside a known-skipped folder at any depth.
-        if any(part in SKIPPED_FOLDERS for part in rel.parts):
+        # Prune only top-level skipped folders (.git, Templates, docs, ...).
+        # A folder that merely shares the name deeper in the tree --
+        # Knowledge/docs/, People/Templates/ -- is content and is audited;
+        # should_audit() makes the final call on every path kept here.
+        if rel.parts[0] in SKIPPED_FOLDERS:
             continue
         paths.append(rel)
     ignored = git_ignored(repo_root, paths)
