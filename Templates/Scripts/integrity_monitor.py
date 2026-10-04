@@ -251,11 +251,23 @@ def scan_scheduled_tasks() -> dict[str, dict]:
     Raises PersistenceScanError when enumeration fails. "No tasks" is the
     script's own empty hashtable, which serialises as "{}"; empty output, a
     non-zero exit, bad JSON or a non-object are failures, not "no tasks"."""
+    # 'Stop', not 'SilentlyContinue': silenced, an access-denied or CIM
+    # failure from Get-ScheduledTask still printed "{}" with exit 0, which is
+    # "no tasks" and adoptable by --update. The one error that does mean "no
+    # tasks" is ObjectNotFound (the \\Obsidian\\ folder does not exist yet);
+    # everything else, including a task whose definition will not export,
+    # exits 3 with the message on stderr.
     ps = (
-        "$ErrorActionPreference='SilentlyContinue';"
-        "$o=@{};foreach($t in Get-ScheduledTask -TaskPath '\\Obsidian\\'){"
-        "$o[$t.TaskName]=(Export-ScheduledTask -TaskName $t.TaskName -TaskPath '\\Obsidian\\')};"
-        "$o|ConvertTo-Json -Depth 3 -Compress"
+        "$ErrorActionPreference='Stop';"
+        "try{"
+        "try{$ts=@(Get-ScheduledTask -TaskPath '\\Obsidian\\')}"
+        "catch{if($_.CategoryInfo.Category -eq 'ObjectNotFound'){$ts=@()}else{throw}};"
+        "$o=@{};foreach($t in $ts){"
+        "$x=Export-ScheduledTask -TaskName $t.TaskName -TaskPath '\\Obsidian\\';"
+        "if(-not $x){throw ('export returned nothing for '+$t.TaskName)};"
+        "$o[$t.TaskName]=[string]$x};"
+        "$o|ConvertTo-Json -Depth 3 -Compress;"
+        "}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 3}"
     )
     try:
         p = subprocess.run(
@@ -266,7 +278,9 @@ def scan_scheduled_tasks() -> dict[str, dict]:
         raise PersistenceScanError(
             f"could not run PowerShell: {type(exc).__name__}: {exc}") from exc
     if p.returncode != 0:
-        raise PersistenceScanError(f"PowerShell exited {p.returncode}")
+        err = " ".join((p.stderr or b"").decode("utf-8", "ignore").split())[:200]
+        raise PersistenceScanError(
+            f"PowerShell exited {p.returncode}" + (f": {err}" if err else ""))
     raw = p.stdout.decode("utf-8", "ignore").strip()
     if not raw:
         raise PersistenceScanError("PowerShell returned no output")
@@ -279,8 +293,10 @@ def scan_scheduled_tasks() -> dict[str, dict]:
             f"task list is a {type(data).__name__}, not an object")
     out: dict[str, dict] = {}
     for name, xml in data.items():
-        if not isinstance(xml, str):
-            continue
+        if not isinstance(xml, str) or not xml:
+            # A task that is there but whose definition we could not read
+            # is a gap in the scan, not a task to leave out of it.
+            raise PersistenceScanError(f"no exported definition for task {name!r}")
         norm = re.sub(r"<Date>.*?</Date>", "", xml)   # drop re-register timestamp
         out[name] = {
             "sha256": hashlib.sha256(norm.encode("utf-8")).hexdigest(),

@@ -211,7 +211,9 @@ A baseline taken before a scope existed reports `NOT_BASELINED` once for that
 scope, not every file in it as new. Review, then adopt with `--update`.
 
 On Windows, if the `\Obsidian\` scheduled tasks cannot be enumerated
-(PowerShell fails, times out, or returns no or malformed output), a check
+(PowerShell fails, times out, returns no or malformed output, or a task's
+definition will not export; only a missing `\Obsidian\` folder counts as
+"no tasks"), a check
 reports one `SCAN_FAILED` finding for that scope, and `--update` refuses
 with exit 2 and leaves the baseline unchanged rather than adopting "no
 tasks" as the trusted state.

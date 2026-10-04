@@ -356,12 +356,18 @@ class TestEndToEnd:
     # pointing scan_persistence at it and faking the PowerShell result.
 
     @staticmethod
-    def _windows_scan(monkeypatch, *, stdout: bytes = b"", rc: int = 0) -> None:
+    def _windows_scan(monkeypatch, *, stdout: bytes = b"", rc: int = 0,
+                      stderr: bytes = b"") -> list:
+        seen: list = []
+
+        def fake_run(*a, **k):
+            seen.append(a[0])
+            return subprocess.CompletedProcess(a[0], rc, stdout, stderr)
+
         monkeypatch.setattr(im, "scan_persistence",
                             lambda _la: im.scan_scheduled_tasks())
-        monkeypatch.setattr(
-            im.subprocess, "run",
-            lambda *a, **k: subprocess.CompletedProcess(a[0], rc, stdout, b""))
+        monkeypatch.setattr(im.subprocess, "run", fake_run)
+        return seen
 
     def test_update_refuses_when_task_enumeration_fails(
             self, sandbox: dict, silent_notify: list, monkeypatch,
@@ -401,6 +407,44 @@ class TestEndToEnd:
     def test_no_tasks_is_still_an_empty_scan(self, monkeypatch) -> None:
         self._windows_scan(monkeypatch, stdout=b"{}")
         assert im.scan_scheduled_tasks() == {}
+
+    # -- review follow-up: the PowerShell must not silence its own errors --
+
+    def test_the_task_scan_stops_on_errors_instead_of_silencing_them(
+            self, monkeypatch) -> None:
+        """Under 'SilentlyContinue' an access-denied or CIM failure from
+        Get-ScheduledTask still printed "{}" and exit 0 -- "no tasks"."""
+        seen = self._windows_scan(monkeypatch, stdout=b"{}")
+        im.scan_scheduled_tasks()
+        script = seen[0][-1]
+        assert "$ErrorActionPreference='Stop'" in script
+        assert "SilentlyContinue" not in script
+        # Only a missing \Obsidian\ folder means "no tasks"; the rest exits 3.
+        assert "$_.CategoryInfo.Category -eq 'ObjectNotFound'" in script
+        assert "[Console]::Error.WriteLine($_.Exception.Message);exit 3" in script
+        assert "if(-not $x){throw ('export returned nothing for '" in script
+
+    def test_a_failed_enumeration_names_its_cause_and_blocks_update(
+            self, sandbox: dict, silent_notify: list, monkeypatch,
+            capsys: pytest.CaptureFixture) -> None:
+        self._windows_scan(monkeypatch, stdout=b"", rc=3,
+                           stderr=b"Access is denied.\r\n")
+        with pytest.raises(im.PersistenceScanError,
+                           match=r"PowerShell exited 3: Access is denied\."):
+            im.scan_scheduled_tasks()
+        assert im.main(self._argv(sandbox, "--update")) == 2
+        assert "(PowerShell exited 3: Access is denied.)" in capsys.readouterr().out
+        assert not im.STATE_PATH.exists()
+
+    @pytest.mark.parametrize("value", [None, "", 7])
+    def test_a_task_without_an_exported_definition_is_a_scan_failure(
+            self, monkeypatch, value) -> None:
+        """It used to be dropped from the scan, i.e. silently unwatched."""
+        task = json.dumps({"Obsidian Tagger": value}).encode()
+        self._windows_scan(monkeypatch, stdout=task)
+        with pytest.raises(im.PersistenceScanError,
+                           match="no exported definition for task 'Obsidian Tagger'"):
+            im.scan_scheduled_tasks()
 
 
 # ---------------------------------------------------------------------------
