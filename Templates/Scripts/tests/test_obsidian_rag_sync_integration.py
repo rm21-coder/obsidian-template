@@ -70,6 +70,9 @@ class FakeWebUI:
         # WebUI does for many errors; must never read as "already gone".
         self.remove_status: int | None = None
         self.delete_status: int | None = None
+        # Every purge call answered 404 by something that is not Open WebUI's
+        # handler: a proxy, or an upgrade that moved the routes.
+        self.routes_moved = False
         self.files: dict[str, dict] = {}      # file_id -> {content, polls}
         self.collection: set[str] = set()     # file_ids in the collection
         self._next = 0
@@ -120,6 +123,8 @@ class FakeWebUI:
             if self.fail_purges:
                 import requests
                 raise requests.ConnectionError("injected: webui down")
+            if self.routes_moved:
+                return FakeResponse(404, '{"detail":"Not Found"}')
             if self.remove_status is not None:
                 return FakeResponse(self.remove_status, '{"detail":"injected remove fault"}')
             fid = kw["json"]["file_id"]
@@ -143,6 +148,8 @@ class FakeWebUI:
         if self.fail_purges:
             import requests
             raise requests.ConnectionError("injected: webui down")
+        if self.routes_moved:
+            return FakeResponse(404, '{"detail":"Not Found"}')
         if self.delete_status is not None:
             return FakeResponse(self.delete_status, '{"detail":"Error deleting files"}')
         fid = url.rsplit("/", 1)[-1]
@@ -567,6 +574,52 @@ def test_an_already_purged_copy_clears_from_pending(sync):
     state["pending_purge"] = {"file-gone": {"path": "Meetings/x.md",
                                             "kind": "deleted", "attempts": 1}}
     sync.module.STATE_FILE.write_text(json.dumps(state))
+
+    assert sync.run(server) == 0
+    assert sync.read_state()["pending_purge"] == {}
+
+
+def test_moved_routes_never_count_as_gone(sync):
+    """Round 2: a bare 404 was "already gone". Behind a proxy or after an
+    upgrade that moves the API, every purge 404s and a deindex-only run
+    reported restricted copies as deindexed while they stayed indexed."""
+    sync.note("Meetings/raised.md", body=RESTRICTED)
+    server = FakeWebUI("test-collection")
+    fid = server.seed("the note while it was still internal")
+    sync.state({"Meetings/raised.md": {"hash": "h", "file_id": fid}})
+
+    server.routes_moved = True
+    assert sync.run(server) == 2
+    pending = sync.read_state()["pending_purge"]
+    assert '404 from /files/{id}: {"detail":"Not Found"}' in pending[fid]["last_error"]
+    deindexed = _latest_report(sync).split(
+        "### Deindexed (classification)")[1].split("##")[0]
+    assert "Meetings/raised.md" not in deindexed
+
+
+def _pending(n: int) -> dict:
+    return {f"file-{i}": {"path": f"Meetings/n{i}.md", "kind": "deleted",
+                          "attempts": 1, "last_error": "down",
+                          "first_failed": f"2026-10-0{i}T00:00:00"}
+            for i in range(1, n + 1)}
+
+
+def test_pending_purge_retries_are_capped_per_run_oldest_first(sync, monkeypatch):
+    """Each retry can cost two 60s requests before any normal work, so an
+    outage's backlog must not stall every later run."""
+    monkeypatch.setattr(sync.module, "MAX_PURGE_RETRIES_PER_RUN", 2, raising=False)
+    server = FakeWebUI("test-collection")
+    sync.state({})
+    state = sync.read_state()
+    state["pending_purge"] = _pending(3)
+    sync.module.STATE_FILE.write_text(json.dumps(state))
+
+    assert sync.run(server) == 2, "entries left waiting are still errors"
+    assert sum(c.startswith("DELETE") for c in server.calls) == 2
+    assert list(sync.read_state()["pending_purge"]) == ["file-3"], "oldest first"
+    report = _latest_report(sync)
+    assert "1 pending purge(s) not retried this run (cap 2); still in the index" in report
+    assert "not retried this run (cap 2); last error: down" in report
 
     assert sync.run(server) == 0
     assert sync.read_state()["pending_purge"] == {}
