@@ -73,6 +73,8 @@ class FakeWebUI:
         # Every purge call answered 404 by something that is not Open WebUI's
         # handler: a proxy, or an upgrade that moved the routes.
         self.routes_moved = False
+        # File ids whose removal always fails with a 500 (a permanent fault).
+        self.broken_ids: set[str] = set()
         self.files: dict[str, dict] = {}      # file_id -> {content, polls}
         self.collection: set[str] = set()     # file_ids in the collection
         self._next = 0
@@ -125,6 +127,8 @@ class FakeWebUI:
                 raise requests.ConnectionError("injected: webui down")
             if self.routes_moved:
                 return FakeResponse(404, '{"detail":"Not Found"}')
+            if kw["json"]["file_id"] in self.broken_ids:
+                return FakeResponse(500, '{"detail":"permanent fault"}')
             if self.remove_status is not None:
                 return FakeResponse(self.remove_status, '{"detail":"injected remove fault"}')
             fid = kw["json"]["file_id"]
@@ -623,3 +627,37 @@ def test_pending_purge_retries_are_capped_per_run_oldest_first(sync, monkeypatch
 
     assert sync.run(server) == 0
     assert sync.read_state()["pending_purge"] == {}
+
+
+def test_permanent_failures_cannot_starve_a_newer_pending_purge(sync, monkeypatch):
+    """Round 3: ordered by first_failed, the same oldest `cap` entries were
+    retried every run once that many failed permanently, so a newly
+    restricted note's copy that failed once transiently never came up."""
+    monkeypatch.setattr(sync.module, "MAX_PURGE_RETRIES_PER_RUN", 2, raising=False)
+    server = FakeWebUI("test-collection")
+    old = {}
+    for i in (1, 2, 3):                 # still indexed, removal always 500s
+        fid = server.seed(f"content of old note {i}")
+        server.broken_ids.add(fid)
+        old[fid] = {"path": f"Meetings/old{i}.md", "kind": "deleted",
+                    "attempts": 9, "last_error": "permanent fault",
+                    "first_failed": f"2020-01-0{i}T00:00:00",
+                    "last_attempt": f"2020-02-0{i}T00:00:00"}
+    new = {"file-new": {"path": "Meetings/raised.md",
+                        "kind": "deindexed (classification: restricted)",
+                        "attempts": 1, "last_error": "blip",
+                        "first_failed": "2020-06-01T00:00:00",
+                        "last_attempt": "2020-06-01T00:00:00"}}
+    sync.state({})
+    state = sync.read_state()
+    state["pending_purge"] = {**old, **new}
+    sync.module.STATE_FILE.write_text(json.dumps(state))
+
+    sync.run(server)
+    sync.run(server)
+
+    pending = sync.read_state()["pending_purge"]
+    assert "file-new" not in pending, (
+        "the newer entry was never retried behind permanent failures")
+    assert set(pending) == {"file-1", "file-2", "file-3"}
+    assert all(pending[f]["last_attempt"] > "2026" for f in ("file-1", "file-2"))
