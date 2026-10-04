@@ -733,6 +733,63 @@ def test_a_duplicate_classification_key_is_not_ruled_on(
             in capsys.readouterr().out)
 
 
+def _laughs(levels: int) -> str:
+    """A "billion laughs" frontmatter block: each level aliases the last ten
+    times, and `title` points at the top level."""
+    lines = ['l0: &l0 "lol"']
+    for i in range(1, levels + 1):
+        lines.append(f"l{i}: &l{i} [" + ", ".join([f"*l{i - 1}"] * 10) + "]")
+    lines.append(f"title: *l{levels}")
+    return "\n".join(lines)
+
+
+def test_a_yaml_alias_bomb_is_refused_not_adjudicated(vault: Path):
+    """Raw outsider frontmatter can carry anchors; walking the parse (str() of
+    the title) expands them ~10x per level. Only booleans are asserted here --
+    printing the parsed object would expand it."""
+    p = vault / "Knowledge" / "Bomb.md"
+    p.write_text(f"---\n{_laughs(6)}\n---\n\nbody\n", encoding="utf-8")
+    client = FakeClient("confidential")
+    rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=False)
+    assert rec is not None and rec["action"] == "error"
+    assert rec["rationale"] == "frontmatter refused: YAML anchor or alias"
+    assert client.calls == []
+    assert C.parse_fm(_laughs(6)) == {}
+
+
+def test_a_refused_note_still_gets_the_detectors(vault: Path):
+    """An anchor in a clipping's frontmatter must not hide a credential in its
+    body from L0: the refusal names the detector hit, and nothing is written."""
+    p = vault / "Knowledge" / "Bomb.md"
+    # Assembled at run time so the secrets scanner does not flag this file;
+    # the header line is all the detector keys on.
+    header = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+    p.write_text(f"---\n{_laughs(6)}\n---\n\n{header}\nnot-a-real-key\n",
+                 encoding="utf-8")
+    before = p.read_bytes()
+    client = FakeClient("confidential")
+    rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=False)
+    assert rec is not None and rec["action"] == "error"
+    assert rec["rationale"] == (
+        "frontmatter refused: YAML anchor or alias; L0 detector hit "
+        "(private-key): restricted material in a note whose frontmatter cannot "
+        "be written — fix by hand")
+    assert rec["to"] == "restricted"
+    assert client.calls == []
+    assert p.read_bytes() == before
+
+
+def test_oversized_frontmatter_is_refused(vault: Path):
+    p = vault / "Knowledge" / "Big.md"
+    p.write_text("---\ntitle: x\npad: " + "a" * (C.MAX_FRONTMATTER_CHARS + 1)
+                 + "\n---\n\nbody\n", encoding="utf-8")
+    client = FakeClient("confidential")
+    rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=False)
+    assert rec is not None and rec["action"] == "error"
+    assert rec["rationale"] == "frontmatter refused: larger than the cap"
+    assert client.calls == []
+
+
 def test_reject_still_works_on_a_note_with_a_duplicate_key(vault: Path):
     """A rejection writes no tier, so an unreadable declaration does not stop it."""
     p = vault / "Knowledge" / "Dup.md"

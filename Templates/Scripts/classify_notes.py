@@ -262,14 +262,53 @@ def split_frontmatter(text: str) -> tuple[str | None, str, int]:
     return m.group(1), text[m.end():], m.end()
 
 
-def parse_fm(fm_body: str | None) -> dict:
+# Notes never need a frontmatter block this size; a clipped page or mail drop
+# that carries one is refused rather than parsed.
+MAX_FRONTMATTER_CHARS = 64 * 1024
+
+
+class AliasRefused(yaml.YAMLError):
+    pass
+
+
+class _NoAliasLoader(yaml.SafeLoader):
+    """SafeLoader that refuses anchors and aliases outright.
+
+    PyYAML keeps an alias as a shared reference, so loading a "billion laughs"
+    block is instant -- but anything that walks the result (str() of the
+    title) expands it ~10x per level: a few hundred bytes of outsider
+    frontmatter become an OOM that kills the nightly run. Notes never need
+    anchors, so a block that uses one is not parsed."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise AliasRefused("YAML alias in frontmatter")
+        if getattr(self.peek_event(), "anchor", None) is not None:
+            raise AliasRefused("YAML anchor in frontmatter")
+        return super().compose_node(parent, index)
+
+
+def parse_fm_checked(fm_body: str | None) -> tuple[dict, str | None]:
+    """(frontmatter mapping, refusal reason or None). A refused block reads
+    as empty, which every caller already treats as "nothing to act on"."""
     if not fm_body:
-        return {}
+        return {}, None
+    if len(fm_body) > MAX_FRONTMATTER_CHARS:
+        return {}, "frontmatter refused: larger than the cap"
+    loader = _NoAliasLoader(fm_body)
     try:
-        data = yaml.safe_load(fm_body)
+        data = loader.get_single_data()
+    except AliasRefused:
+        return {}, "frontmatter refused: YAML anchor or alias"
     except yaml.YAMLError:
-        return {}
-    return data if isinstance(data, dict) else {}
+        return {}, None
+    finally:
+        loader.dispose()
+    return (data if isinstance(data, dict) else {}), None
+
+
+def parse_fm(fm_body: str | None) -> dict:
+    return parse_fm_checked(fm_body)[0]
 
 
 def current_tier(fm: dict) -> str | None:
@@ -536,8 +575,24 @@ def process_file(filepath: Path, client, dry_run: bool,
     text = original.replace("\r\n", "\n").replace("\r", "\n")
 
     fm_body, body, _ = split_frontmatter(text)
-    fm = parse_fm(fm_body)
+    fm, refused = parse_fm_checked(fm_body)
     rel = filepath.relative_to(VAULT_ROOT)
+    if refused:
+        # Not adjudicated and not written to: reported as an error, which is
+        # also never tracked, so it is reported again every run until fixed.
+        # L0 still reads the body: an anchor in a clipping's frontmatter must
+        # not hide a credential from the detectors. The hit cannot be written
+        # into frontmatter we refused to read, so the report carries it.
+        hits = run_detectors(body)
+        to = ""
+        if hits:
+            to = max((h[1] for h in hits), key=lambda t: TIER_RANK[t])
+            rules = ",".join(sorted({h[0] for h in hits}))
+            refused += (f"; L0 detector hit ({rules}): {to} material in a note "
+                        "whose frontmatter cannot be written — fix by hand")
+        return {"action": "error", "rel": str(rel), "title": filepath.stem,
+                "from": "(unread)", "to": to, "layer": "parse",
+                "confidence": "", "rationale": refused}
     folder = rel.parts[0] if len(rel.parts) > 1 else "(root)"
     title = str(fm.get("title") or filepath.stem)
 
