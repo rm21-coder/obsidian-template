@@ -714,6 +714,36 @@ def test_accept_on_a_note_already_at_or_above_its_proposal_keeps_the_tier(
             in capsys.readouterr().out)
 
 
+@pytest.mark.parametrize("action", ["accept", "set"])
+def test_a_duplicate_classification_key_is_not_ruled_on(
+        vault: Path, action: str, capsys: pytest.CaptureFixture[str]):
+    """PyYAML reads the LAST duplicate (public) while the gates read the most
+    restrictive (restricted). Accepting off the PyYAML reading would splice
+    the first line to confidential and lower the effective tier."""
+    p = vault / "Knowledge" / "Dup.md"
+    p.write_text("---\nclassification: restricted\nclassification: public\n"
+                 "classification_suggested: confidential\n"
+                 "classification_reviewed: false\n---\n\nbody\n", encoding="utf-8")
+    before = p.read_text(encoding="utf-8")
+    ruled, _ = C.rule_on([p], action, None, dry_run=False,
+                         set_tier="confidential" if action == "set" else None)
+    assert ruled == 0
+    assert p.read_text(encoding="utf-8") == before
+    assert ("not ruled: classification cannot be read reliably: Knowledge/Dup.md"
+            in capsys.readouterr().out)
+
+
+def test_reject_still_works_on_a_note_with_a_duplicate_key(vault: Path):
+    """A rejection writes no tier, so an unreadable declaration does not stop it."""
+    p = vault / "Knowledge" / "Dup.md"
+    p.write_text("---\nclassification: restricted\nclassification: public\n"
+                 "classification_suggested: confidential\n"
+                 "classification_reviewed: false\n---\n\nbody\n", encoding="utf-8")
+    assert C.rule_on([p], "reject", None, dry_run=False)[0] == 1
+    assert "classification: restricted\nclassification: public\n" in \
+        p.read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # The run report is outside text too (M-DASH #32, #247).
 # ---------------------------------------------------------------------------
