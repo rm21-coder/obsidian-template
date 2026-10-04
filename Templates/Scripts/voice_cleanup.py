@@ -240,6 +240,40 @@ def _save_attempts(inbox: Path, attempts: dict[str, int]) -> None:
         log.warning("Could not record failure counts in %s: %s", path, exc)
 
 
+def _failed_path(f: Path) -> Path:
+    """A .failed name for `f` that is not taken. A second drop with the same
+    name must not overwrite the first one set aside (rename clobbers on POSIX
+    and raises on Windows)."""
+    target = f.with_name(f.name + ".failed")
+    n = 2
+    while target.exists():
+        target = f.with_name(f"{f.name}.{n}.failed")
+        n += 1
+    return target
+
+
+def _quarantine(f: Path, n: int, attempts: dict[str, int]) -> None:
+    """Set `f` aside, never raising. If the rename fails the count is kept, so
+    the next run tries the rename again rather than the API call."""
+    try:
+        target = _failed_path(f)
+        f.rename(target)
+    except OSError:
+        log.exception("Could not set aside %s after %d attempts; will retry",
+                      f.name, n)
+        return
+    log.error("Quarantined after %d attempts: %s", n, target.name)
+    attempts.pop(f.name, None)
+
+
+def _prune_attempts(attempts: dict[str, int], pending: list[Path]) -> None:
+    """Forget counts for files no longer in the inbox (processed, removed, or
+    set aside by hand), so a later drop reusing the name starts at zero."""
+    names = {f.name for f in pending}
+    for name in [k for k in attempts if k not in names]:
+        del attempts[name]
+
+
 def _process_one(f: Path, client, cfg: dict, attempts: dict[str, int]) -> bool:
     """Process one drop; a failure is logged and counted, never raised.
 
@@ -248,6 +282,10 @@ def _process_one(f: Path, client, cfg: dict, attempts: dict[str, int]) -> bool:
     drops behind it, but kept: nothing dictated should ever be lost to a bug.
     Returns True on success.
     """
+    if attempts.get(f.name, 0) >= MAX_FILE_ATTEMPTS:
+        # An earlier set-aside failed: retry that, not the API call.
+        _quarantine(f, attempts[f.name], attempts)
+        return False
     try:
         process_file(f, client, cfg)
         attempts.pop(f.name, None)
@@ -256,9 +294,7 @@ def _process_one(f: Path, client, cfg: dict, attempts: dict[str, int]) -> bool:
         n = attempts[f.name] = attempts.get(f.name, 0) + 1
         log.exception("Failed (%d/%d): %s", n, MAX_FILE_ATTEMPTS, f.name)
         if n >= MAX_FILE_ATTEMPTS and f.exists():
-            f.rename(f.with_suffix(f.suffix + ".failed"))
-            log.error("Quarantined after %d attempts: %s.failed", n, f.name)
-            attempts.pop(f.name, None)
+            _quarantine(f, n, attempts)
         return False
 
 
@@ -330,8 +366,13 @@ def main():
         # main() and end the run, so every drop queued behind it waited on it
         # forever.
         attempts = _load_attempts(inbox)
-        failed = sum(not _process_one(f, client, cfg, attempts) for f in files)
-        _save_attempts(inbox, attempts)
+        _prune_attempts(attempts, files)
+        failed = 0
+        try:
+            for f in files:
+                failed += not _process_one(f, client, cfg, attempts)
+        finally:
+            _save_attempts(inbox, attempts)
         log.info("Done — processed %d file(s), %d failed.",
                  len(files) - failed, failed)
         if failed:
@@ -366,7 +407,9 @@ def main():
                     log.info("Endpoint reachable again — resuming.")
                     paused = False
 
-                for f in get_pending_files(inbox):
+                pending = get_pending_files(inbox)
+                _prune_attempts(attempts, pending)
+                for f in pending:
                     if not _process_one(f, client, cfg, attempts):
                         # The endpoint itself may be what broke; re-resolve it
                         # next cycle rather than reuse a dead client.
