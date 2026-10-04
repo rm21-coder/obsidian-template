@@ -139,18 +139,32 @@ MAX_CONTENT_CHARS = 4000
 
 # ─── Frontmatter Parsing ────────────────────────────────────────────────────
 
+# Frontmatter larger than this is not parsed (the note is treated as having
+# none, and skipped). Real notes carry a few hundred bytes; the cap bounds what
+# a converted document's own leading --- block can make PyYAML do.
+MAX_FRONTMATTER_CHARS = 64 * 1024
+
+
 def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     """Parse YAML frontmatter from markdown text.
-    Returns (frontmatter_dict, body_text). Returns (None, text) if no frontmatter."""
+    Returns (frontmatter_dict, body_text). Returns (None, text) if no frontmatter,
+    or if it is oversized or unparseable.
+
+    RecursionError is caught alongside YAMLError: ~1,000 nested brackets in a
+    value exhaust the parser's stack, and that is not a YAMLError. Uncaught,
+    it escaped collect_all_tags (which has no handler) and stopped every run
+    on a vault without a taxonomy file."""
     match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)", text, re.DOTALL)
     if not match:
+        return None, text
+    if len(match.group(1)) > MAX_FRONTMATTER_CHARS:
         return None, text
     try:
         fm = yaml.safe_load(match.group(1))
         if not isinstance(fm, dict):
             return None, text
         return fm, match.group(2)
-    except yaml.YAMLError:
+    except (yaml.YAMLError, RecursionError, ValueError):
         return None, text
 
 
