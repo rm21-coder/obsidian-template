@@ -54,6 +54,9 @@ class FakeResponse:
             raise requests.HTTPError(f"{self.status_code} error")
 
 
+NOT_FOUND = '{"detail":"We could not find what you\'re looking for :/"}'
+
+
 class FakeWebUI:
     def __init__(self, collection_id: str, *, pending_polls: int = 0,
                  fail_adds: bool = False, fail_purges: bool = False):
@@ -63,6 +66,10 @@ class FakeWebUI:
         # Models the container being down for removals: the transport
         # raises, as requests does when nothing is listening.
         self.fail_purges = fail_purges
+        # A server-side fault answered as a bare 400, which is what Open
+        # WebUI does for many errors; must never read as "already gone".
+        self.remove_status: int | None = None
+        self.delete_status: int | None = None
         self.files: dict[str, dict] = {}      # file_id -> {content, polls}
         self.collection: set[str] = set()     # file_ids in the collection
         self._next = 0
@@ -113,9 +120,12 @@ class FakeWebUI:
             if self.fail_purges:
                 import requests
                 raise requests.ConnectionError("injected: webui down")
+            if self.remove_status is not None:
+                return FakeResponse(self.remove_status, '{"detail":"injected remove fault"}')
             fid = kw["json"]["file_id"]
             if fid not in self.collection:
-                return FakeResponse(400, "not in collection")
+                # What v0.11.3 really answers for a file not in the collection.
+                return FakeResponse(400, NOT_FOUND)
             self.collection.discard(fid)
             return FakeResponse(200)
         raise AssertionError(f"unexpected POST {url}")
@@ -133,7 +143,11 @@ class FakeWebUI:
         if self.fail_purges:
             import requests
             raise requests.ConnectionError("injected: webui down")
+        if self.delete_status is not None:
+            return FakeResponse(self.delete_status, '{"detail":"Error deleting files"}')
         fid = url.rsplit("/", 1)[-1]
+        if fid not in self.files:
+            return FakeResponse(404, NOT_FOUND)
         self.collection.discard(fid)
         self.files.pop(fid, None)
         return FakeResponse(200)
@@ -490,3 +504,69 @@ def test_successful_deindex_is_reported_and_leaves_nothing_pending(sync):
     assert "sync_status: PASS" in report
     deindexed = report.split("### Deindexed (classification)")[1].split("##")[0]
     assert "Meetings/raised.md" in deindexed
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups: superseded copies, partial purges, and what "gone" means.
+# ---------------------------------------------------------------------------
+
+def test_failed_purge_of_a_superseded_copy_goes_pending(sync):
+    """The update path used to log a failed purge of the pre-edit copy and
+    overwrite old_id, so text an edit had removed stayed indexed forever."""
+    sync.note("Meetings/edited.md")
+    server = FakeWebUI("test-collection")
+    old_id = server.seed("pre-edit text the user later redacted")
+    sync.state({"Meetings/edited.md": {"hash": "stale", "file_id": old_id}})
+
+    server.remove_status = 500
+    assert sync.run(server) == 2
+    pending = sync.read_state()["pending_purge"]
+    assert pending[old_id]["kind"] == "superseded copy"
+    assert pending[old_id]["path"] == "Meetings/edited.md"
+    assert BODY in server.contents(), "the new copy should still be indexed"
+    assert "still in the index, purge pending (superseded copy)" in _latest_report(sync)
+
+    server.remove_status = None
+    assert sync.run(server) == 0
+    assert old_id not in server.files
+    assert sync.read_state()["pending_purge"] == {}
+
+
+def test_a_failed_remove_still_attempts_the_file_delete(sync):
+    sync.note("Meetings/edited.md")
+    server = FakeWebUI("test-collection")
+    old_id = server.seed("pre-edit text")
+    sync.state({"Meetings/edited.md": {"hash": "stale", "file_id": old_id}})
+
+    server.remove_status = 500
+    sync.run(server)
+    assert f"DELETE http://webui.invalid/api/v1/files/{old_id}" in server.calls
+    assert old_id not in server.files
+
+
+@pytest.mark.parametrize("which", ["remove_status", "delete_status"])
+def test_a_bare_400_is_a_failure_not_already_gone(sync, which):
+    """Open WebUI answers server faults with 400s; only its not-found
+    message (or a 404) means the copy is gone."""
+    sync.note("Meetings/raised.md", body=RESTRICTED)
+    server = FakeWebUI("test-collection")
+    fid = server.seed("the note while it was still internal")
+    sync.state({"Meetings/raised.md": {"hash": "h", "file_id": fid}})
+
+    setattr(server, which, 400)
+    assert sync.run(server) == 2
+    assert "400 from" in sync.read_state()["pending_purge"][fid]["last_error"]
+
+
+def test_an_already_purged_copy_clears_from_pending(sync):
+    """Retrying a purge the server already finished (400 not-found from
+    remove, 404 from delete) clears the entry instead of failing forever."""
+    server = FakeWebUI("test-collection")
+    sync.state({})
+    state = sync.read_state()
+    state["pending_purge"] = {"file-gone": {"path": "Meetings/x.md",
+                                            "kind": "deleted", "attempts": 1}}
+    sync.module.STATE_FILE.write_text(json.dumps(state))
+
+    assert sync.run(server) == 0
+    assert sync.read_state()["pending_purge"] == {}
