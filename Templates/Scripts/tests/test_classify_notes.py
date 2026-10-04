@@ -757,25 +757,78 @@ def test_a_yaml_alias_bomb_is_refused_not_adjudicated(vault: Path):
     assert C.parse_fm(_laughs(6)) == {}
 
 
+# Assembled at run time so the secrets scanner does not flag this file; the
+# header line is all the detector keys on.
+_KEY_HEADER = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+
+
 def test_a_refused_note_still_gets_the_detectors(vault: Path):
     """An anchor in a clipping's frontmatter must not hide a credential in its
-    body from L0: the refusal names the detector hit, and nothing is written."""
+    body from L0: the tier is still raised, and the report says why."""
+    import classification_tier
     p = vault / "Knowledge" / "Bomb.md"
-    # Assembled at run time so the secrets scanner does not flag this file;
-    # the header line is all the detector keys on.
-    header = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
-    p.write_text(f"---\n{_laughs(6)}\n---\n\n{header}\nnot-a-real-key\n",
+    p.write_text(f"---\n{_laughs(6)}\n---\n\n{_KEY_HEADER}\nnot-a-real-key\n",
                  encoding="utf-8")
-    before = p.read_bytes()
     client = FakeClient("confidential")
     rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=False)
     assert rec is not None and rec["action"] == "error"
     assert rec["rationale"] == (
         "frontmatter refused: YAML anchor or alias; L0 detector hit "
-        "(private-key): restricted material in a note whose frontmatter cannot "
-        "be written — fix by hand")
+        "(private-key): auto-applied restricted (was unset)")
     assert rec["to"] == "restricted"
     assert client.calls == []
+    text = p.read_text(encoding="utf-8")
+    assert classification_tier.effective(text) == ("restricted", [])
+    assert "classification_prior: (unset:internal-use-only)" in text
+
+
+def test_an_anchor_cannot_keep_a_public_clipping_public(vault: Path):
+    """Round-3 repro: without the anchor this is auto-applied restricted; with
+    it, the tier must still be raised the same way."""
+    import classification_tier
+    p = vault / "Clippings" / "Page.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\nclassification: public\nsrc: &a x\n---\n\n{_KEY_HEADER}\n"
+                 "not-a-real-key\n", encoding="utf-8")
+    rec = C.process_file(p, None, dry_run=False, detectors_only=True, force=False)
+    assert rec is not None and rec["action"] == "error"
+    assert rec["rationale"].startswith("frontmatter refused: YAML anchor or alias; ")
+    assert "auto-applied restricted (was public)" in rec["rationale"]
+    text = p.read_text(encoding="utf-8")
+    assert classification_tier.effective(text) == ("restricted", [])
+    assert "classification_prior: public" in text
+    assert "src: &a x" in text
+
+
+def test_a_splice_the_gates_would_not_read_is_not_written(
+        vault: Path, monkeypatch: pytest.MonkeyPatch):
+    """Should the text splice ever land where the gates' reader does not see
+    it, the write is withheld and that case is reported distinctly."""
+    p = vault / "Clippings" / "Page.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\nclassification: public\nsrc: &a x\n---\n\n{_KEY_HEADER}\n",
+                 encoding="utf-8")
+    before = p.read_bytes()
+    monkeypatch.setattr(C, "splice_frontmatter", lambda text, updates, **_: text)
+    rec = C.process_file(p, None, dry_run=False, detectors_only=True, force=False)
+    assert rec is not None and rec["action"] == "error"
+    assert ("restricted material, NOT applied — the tier could not be written "
+            "safely; fix by hand") in rec["rationale"]
+    assert p.read_bytes() == before
+
+
+def test_a_refused_note_with_an_unreadable_tier_is_not_spliced(vault: Path):
+    """Duplicate classification lines: the splice cannot be checked against
+    what the gates read, so nothing is written and the reason is distinct."""
+    p = vault / "Clippings" / "Dup.md"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(f"---\nclassification: public\nclassification: public\n"
+                 f"src: &a x\n---\n\n{_KEY_HEADER}\n", encoding="utf-8")
+    before = p.read_bytes()
+    rec = C.process_file(p, None, dry_run=False, detectors_only=True, force=False)
+    assert rec is not None and rec["action"] == "error"
+    assert ("restricted material, NOT applied — the classification line cannot "
+            "be read reliably; fix by hand") in rec["rationale"]
     assert p.read_bytes() == before
 
 

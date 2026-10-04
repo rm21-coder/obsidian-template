@@ -578,20 +578,51 @@ def process_file(filepath: Path, client, dry_run: bool,
     fm, refused = parse_fm_checked(fm_body)
     rel = filepath.relative_to(VAULT_ROOT)
     if refused:
-        # Not adjudicated and not written to: reported as an error, which is
-        # also never tracked, so it is reported again every run until fixed.
-        # L0 still reads the body: an anchor in a clipping's frontmatter must
-        # not hide a credential from the detectors. The hit cannot be written
-        # into frontmatter we refused to read, so the report carries it.
+        # Never adjudicated, and reported as an error, which is never tracked,
+        # so it is reported again every run until fixed. L0 still runs: an
+        # anchor in a clipping's frontmatter must not keep a credential in its
+        # body from raising the tier. The splice is text-based and needs no
+        # parsed YAML; the current tier comes from the one-form reader the
+        # gates use, and the write is checked against that same reader.
         hits = run_detectors(body)
         to = ""
+        cur = None
         if hits:
             to = max((h[1] for h in hits), key=lambda t: TIER_RANK[t])
             rules = ",".join(sorted({h[0] for h in hits}))
-            refused += (f"; L0 detector hit ({rules}): {to} material in a note "
-                        "whose frontmatter cannot be written — fix by hand")
+            findings = "; ".join(sorted({h[2] for h in hits}))
+            cur, unknown = classification_tier.effective(text)
+            folder = rel.parts[0] if len(rel.parts) > 1 else "(root)"
+            baseline = baseline_tier(folder)
+            cur_rank = TIER_RANK[cur] if cur else TIER_RANK[baseline]
+            if unknown:
+                refused += (f"; L0 detector hit ({rules}): {to} material, NOT "
+                            "applied — the classification line cannot be read "
+                            "reliably; fix by hand")
+            elif TIER_RANK[to] <= cur_rank:
+                refused += f"; L0 detector hit ({rules}): already {cur or baseline}"
+            else:
+                updates = {
+                    "classification": to,
+                    "classification_rationale": yaml_quote(
+                        f"auto-applied by detector [{rules}]: {findings}"),
+                    "classification_reviewed": "false",
+                    "classification_prior": cur or f"(unset:{baseline})",
+                }
+                preserve_updated(updates, fm_body)
+                new_text = splice_frontmatter(text, updates)
+                if classification_tier.effective(new_text) != (to, []):
+                    refused += (f"; L0 detector hit ({rules}): {to} material, NOT "
+                                "applied — the tier could not be written safely; "
+                                "fix by hand")
+                else:
+                    if not dry_run:
+                        filepath.write_text(new_text, encoding="utf-8",
+                                            newline=file_newline)
+                    refused += (f"; L0 detector hit ({rules}): auto-applied {to} "
+                                f"(was {cur or 'unset'})")
         return {"action": "error", "rel": str(rel), "title": filepath.stem,
-                "from": "(unread)", "to": to, "layer": "parse",
+                "from": cur or "(unread)", "to": to, "layer": "parse",
                 "confidence": "", "rationale": refused}
     folder = rel.parts[0] if len(rel.parts) > 1 else "(root)"
     title = str(fm.get("title") or filepath.stem)
