@@ -216,7 +216,21 @@ def range_added_lines(rev_range: str) -> list[tuple[str, int, str]]:
     if listing.returncode != 0:
         # Fail closed: an unlistable range is not a clean one.
         raise RangeError(listing.stderr.strip() or f"git rev-list {rev_range} failed")
+    # Annotated tags being pushed: their messages are published too.
+    for word in rev_range.split():
+        if word.startswith("-") or ".." in word:
+            continue
+        if run_git("cat-file", "-t", word).strip() == "tag":
+            body = run_git("cat-file", "tag", word).split("\n\n", 1)
+            for i, line in enumerate(body[1].splitlines() if len(body) > 1 else [], 1):
+                out.append((f"tag {word[:9]} message", i, line))
     for commit in listing.stdout.split():
+        # The commit message is published with the commit (review round 3,
+        # 2026-10-04). Author and committer fields are not scanned: they are
+        # the maintainer's own published identity, on every commit.
+        message = run_git("log", "-1", "--format=%B", commit)
+        for i, line in enumerate(message.splitlines(), 1):
+            out.append((f"commit {commit[:9]} message", i, line))
         # -m / --diff-merges=separate: a merge's own changes, per parent.
         names = [p for p in dict.fromkeys(run_git(
             "diff-tree", "-m", "--no-commit-id", "-r", "-z", "--root",

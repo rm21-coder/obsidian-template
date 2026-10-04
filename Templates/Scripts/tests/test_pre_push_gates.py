@@ -15,6 +15,9 @@ REPO = Path(__file__).resolve().parents[3]
 LIB = REPO / "installers" / "lib"
 ZERO = "0" * 40
 PUBLIC = "---\nclassification: public\n---\nok\n"
+# A real-looking domain, built at run time so this file does not trip the
+# identity gate it is testing.
+REAL = "realcorp" + ".com"
 SECRET = "---\nclassification: restricted\n---\nsecret\n"
 
 
@@ -83,3 +86,21 @@ def test_an_unlistable_range_fails_closed(repo: Path) -> None:
     proc = _push(repo, head, rsha="1" * 40)          # remote sha we do not have
     assert proc.returncode == 1
     assert "cannot list commits in" in proc.stderr
+
+
+def test_a_name_in_a_commit_message_is_refused(repo: Path) -> None:
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "Knowledge" / "x.md").write_text(PUBLIC, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", f"ping carol@{REAL} about it", "--no-verify")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"), base)
+    assert proc.returncode == 1
+    assert f"message:1: real-looking address: carol@{REAL}" in proc.stderr
+
+
+def test_an_annotated_tag_message_is_scanned(repo: Path) -> None:
+    _git(repo, "tag", "-a", "v1", "-m", f"release for dave@{REAL}")
+    tag = _git(repo, "rev-parse", "v1")
+    proc = _push(repo, tag, lref="refs/tags/v1")
+    assert proc.returncode == 1
+    assert f"real-looking address: dave@{REAL}" in proc.stderr
