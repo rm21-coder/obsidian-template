@@ -6,8 +6,13 @@ Test classes
 ------------
 - TestIsSafeUrlUnit         fast unit tests on the synchronous SSRF guard
 - TestIsSafeUrlSecurity     attack-vector parity with url_safety (must match)
-- TestCaptionTrackSSRF      verify is_safe_url runs before urlopen on every
-                            caption track URL surfaced by yt-dlp
+- TestCaptionTrackSSRF      every caption track URL surfaced by yt-dlp is
+                            fetched through url_safety.safe_fetch: checked
+                            before any request, redirects re-checked, capped
+- TestPlaylistEntries       remote playlist entries are checked before
+                            yt-dlp sees them; "--" precedes every URL
+- TestFrontmatterInjection  page-supplied title/uploader cannot end the
+                            frontmatter; model tags cannot become YAML syntax
 - TestParseCaptionBody      json3 / vtt / srt / ttml parsing
 - TestSuggestedTags         parse_suggested_tags + strip_suggested_tags_section
 - TestHelpers               yaml_escape, safe_filename, format_duration,
@@ -28,8 +33,13 @@ unchanged and remains the security core of this file.
 
 Mocking strategy
 ----------------
-- urllib.request.urlopen is monkeypatched on the youtube_summarize
-  module for every test that exercises the caption-fetch path.
+- The caption fetch goes through url_safety.safe_fetch. Tests that exercise
+  it stub url_safety._pinned_get, the one-hop network seam below the redirect
+  walker, so the real guard and redirect walk run and nothing leaves the
+  machine. The redirect and size-cap tests ALSO stub urllib.request.urlopen
+  with what urllib does (follow the redirect, return the whole body): that is
+  what the pre-2026-10-04 code called, so those tests fail against it rather
+  than reaching the network.
 - The summarization call is never made: TestTextBlockExtraction feeds
   fake response objects to the parsing helper directly, and the rest of
   the call shape is asserted against source.
@@ -246,6 +256,29 @@ class TestIsSafeUrlSecurity:
 # extract_transcript — verify SSRF guard runs before urlopen on caption URLs.
 # ---------------------------------------------------------------------------
 
+class _FakeHop:
+    """One response from url_safety._pinned_get."""
+
+    def __init__(self, status: int = 200, body: bytes = b"",
+                 location: str | None = None, chunks: int = 1) -> None:
+        self.status_code = status
+        self.headers = {"Location": location} if location else {}
+        self._body = body
+        self._chunks = chunks
+        self.closed = False
+
+    def iter_content(self, chunk_size: int = 65536):
+        for _ in range(self._chunks):
+            yield self._body
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _json3(text: str) -> bytes:
+    return json.dumps({"events": [{"segs": [{"utf8": text}]}]}).encode()
+
+
 class TestCaptionTrackSSRF:
 
     def _info_with_caption_urls(self, urls: list[str]) -> dict:
@@ -254,20 +287,48 @@ class TestCaptionTrackSSRF:
         tracks = [{"ext": "json3", "url": u} for u in urls]
         return {"subtitles": {"en": tracks}, "automatic_captions": {}}
 
+    def _route(self, monkeypatch: pytest.MonkeyPatch,
+               routes: dict[str, _FakeHop]) -> list[str]:
+        """Serve `routes` from the network seam; return the URLs requested."""
+        import url_safety
+        requested: list[str] = []
+
+        def fake_pinned_get(url, ip, *, timeout):
+            requested.append(url)
+            return routes[url]
+
+        monkeypatch.setattr(url_safety, "_pinned_get", fake_pinned_get,
+                            raising=False)
+        return requested
+
+    def _old_urlopen(self, monkeypatch: pytest.MonkeyPatch,
+                     body: bytes) -> list[str]:
+        """What urllib did for the old code: follow redirects, read it all."""
+        import urllib.request
+        opened: list[str] = []
+
+        def fake_urlopen(req, timeout=30):
+            opened.append(getattr(req, "full_url", str(req)))
+
+            class _R:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *a):
+                    return False
+
+                def read(self):
+                    return body
+            return _R()
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        return opened
+
     def test_unsafe_caption_url_is_skipped(
             self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If yt-dlp returns a caption URL pointing at loopback, the script
-        must skip it without calling urlopen. This is the load-bearing
-        v1.6 SSRF guard."""
-        called_urls: list[str] = []
-
-        def fake_urlopen(req, timeout=30):
-            called_urls.append(req.full_url if hasattr(req, "full_url")
-                               else str(req))
-            return _FakeResponse(b'{"events":[]}')
-
-        monkeypatch.setattr(ys.urllib.request, "urlopen", fake_urlopen)
-
+        must skip it without issuing any request."""
+        requested = self._route(monkeypatch, {})
         info = self._info_with_caption_urls([
             "http://127.0.0.1:11434/api/x",       # Ollama-like loopback
             "http://169.254.169.254/metadata",    # cloud-metadata link-local
@@ -275,42 +336,19 @@ class TestCaptionTrackSSRF:
         result = ys.extract_transcript(info)
         assert result == "", (
             "expected empty transcript because all caption URLs were unsafe")
-        assert called_urls == [], (
-            f"urlopen should not have been called for unsafe URLs, "
-            f"but was called for: {called_urls}")
+        assert requested == [], (
+            f"no request should issue for unsafe URLs, got: {requested}")
 
     def test_safe_caption_url_is_fetched(
-            self, monkeypatch: pytest.MonkeyPatch) -> None:
+            self, monkeypatch: pytest.MonkeyPatch, public_dns: str) -> None:
         """A normal googlevideo.com URL must pass the SSRF guard and be
         fetched. Confirms the guard isn't over-blocking."""
-        captured_urls: list[str] = []
-
-        # v1.7: is_safe_url now resolves hostnames via socket.getaddrinfo.
-        # The r5---sn-abc template doesn't actually resolve in DNS, so we
-        # mock it to a public IP for the duration of the test. (Real
-        # googlevideo.com hostnames resolve to real CDN IPs in production.)
-        import socket
-        monkeypatch.setattr(socket, "getaddrinfo",
-                            lambda h, p: [(socket.AF_INET,
-                                           socket.SOCK_STREAM, 0, "",
-                                           ("142.250.80.110", 0))])
-
-        def fake_urlopen(req, timeout=30):
-            captured_urls.append(req.full_url)
-            body = json.dumps({
-                "events": [{"segs": [{"utf8": "hello world"}]}]
-            }).encode("utf-8")
-            return _FakeResponse(body)
-
-        monkeypatch.setattr(ys.urllib.request, "urlopen", fake_urlopen)
-
-        info = self._info_with_caption_urls([
-            "https://r5---sn-abc.googlevideo.com/api/timedtext?x=1",
-        ])
-        result = ys.extract_transcript(info)
+        url = "https://r5---sn-abc.googlevideo.com/api/timedtext?x=1"
+        requested = self._route(monkeypatch,
+                                {url: _FakeHop(body=_json3("hello world"))})
+        result = ys.extract_transcript(self._info_with_caption_urls([url]))
         assert "hello world" in result
-        assert len(captured_urls) == 1
-        assert "googlevideo.com" in captured_urls[0]
+        assert requested == [url]
 
     def test_mixed_unsafe_then_safe(
             self, monkeypatch: pytest.MonkeyPatch,
@@ -323,26 +361,173 @@ class TestCaptionTrackSSRF:
         and is_safe_url rejects literals in its own branch before any
         resolution happens.
         """
-        attempted: list[str] = []
-
-        def fake_urlopen(req, timeout=30):
-            attempted.append(req.full_url)
-            body = json.dumps({
-                "events": [{"segs": [{"utf8": "fallback content"}]}]
-            }).encode("utf-8")
-            return _FakeResponse(body)
-
-        monkeypatch.setattr(ys.urllib.request, "urlopen", fake_urlopen)
-
+        safe = "https://www.googlevideo.com/safe"
+        requested = self._route(monkeypatch,
+                                {safe: _FakeHop(body=_json3("fallback content"))})
         info = self._info_with_caption_urls([
             "http://192.168.1.5/poisoned",         # unsafe — must skip
-            "https://www.googlevideo.com/safe",    # safe — must fetch
+            safe,                                  # safe — must fetch
         ])
         result = ys.extract_transcript(info)
         assert "fallback content" in result
-        assert len(attempted) == 1, (
-            f"urlopen called {len(attempted)} times, expected exactly 1")
-        assert "192.168" not in attempted[0]
+        assert requested == [safe]
+
+    def test_redirect_to_loopback_is_refused(
+            self, monkeypatch: pytest.MonkeyPatch, public_dns: str,
+            capsys: pytest.CaptureFixture[str]) -> None:
+        """M-DASH 358: a public caption URL that 302s to a local service.
+
+        urlopen followed the redirect without re-checking it, so the local
+        service's response became the transcript. Each hop is now checked.
+        """
+        first = "https://captions.test.example/c.vtt"
+        requested = self._route(monkeypatch, {
+            first: _FakeHop(302, location="http://127.0.0.1:11434/api/tags"),
+        })
+        self._old_urlopen(monkeypatch, _json3("LOCAL-SERVICE-SECRET"))
+
+        result = ys.extract_transcript(self._info_with_caption_urls([first]))
+
+        assert "LOCAL-SERVICE-SECRET" not in result
+        assert result == ""
+        assert requested == [first], requested
+        err = capsys.readouterr().err
+        assert "refusing http://127.0.0.1:11434/api/tags" in err, err
+
+    def test_oversized_caption_body_is_dropped(
+            self, monkeypatch: pytest.MonkeyPatch, public_dns: str,
+            capsys: pytest.CaptureFixture[str]) -> None:
+        """M-DASH 224: resp.read() had no cap, so an endless track grew the
+        process until it was killed. The body is now capped."""
+        url = "https://captions.test.example/huge.vtt"
+        line = b"WEBVTT\n\nflood flood flood flood\n" * 4096   # ~128 KB
+        self._route(monkeypatch, {url: _FakeHop(body=line, chunks=50)})
+        self._old_urlopen(monkeypatch, line * 50)                 # ~6.5 MB
+
+        result = ys.extract_transcript(self._info_with_caption_urls([url]))
+
+        assert result == ""
+        assert "body exceeded" in capsys.readouterr().err
+
+    def test_caption_cap_admits_an_ordinary_track(
+            self, monkeypatch: pytest.MonkeyPatch, public_dns: str) -> None:
+        """An hour of json3 captions is ~1-2 MB: well inside the cap."""
+        url = "https://captions.test.example/hour.json3"
+        body = _json3("word " * 300_000)                          # ~1.5 MB
+        assert len(body) < ys.CAPTION_MAX_BYTES
+        self._route(monkeypatch, {url: _FakeHop(body=body)})
+        assert ys.extract_transcript(
+            self._info_with_caption_urls([url])).startswith("word word")
+
+
+# ---------------------------------------------------------------------------
+# Playlist entries and the yt-dlp argv (M-DASH 230 / 359).
+# ---------------------------------------------------------------------------
+
+class TestPlaylistEntries:
+
+    def _capture_ytdlp(self, monkeypatch: pytest.MonkeyPatch,
+                       stdout: str) -> list[list[str]]:
+        calls: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(list(cmd))
+            return MagicMock(returncode=0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr(ys.subprocess, "run", fake_run)
+        return calls
+
+    def test_unsafe_feed_entries_are_dropped(
+            self, monkeypatch: pytest.MonkeyPatch, public_dns: str,
+            capsys: pytest.CaptureFixture[str]) -> None:
+        """An attacker's RSS 'playlist' names a LAN device and a yt-dlp
+        option as entries; only the real video URL reaches yt-dlp again."""
+        good = "https://www.youtube.com/watch?v=abc123"
+        feed = {"entries": [
+            {"url": "http://192.168.1.1/cgi-bin/reboot?now=1"},
+            {"url": "--cookies-from-browser=chrome"},
+            {"url": good},
+            {"id": "xyz789"},
+            None,
+        ]}
+        self._capture_ytdlp(monkeypatch, json.dumps(feed))
+        urls = ys.enumerate_playlist("https://feeds.test.example/rss")
+        assert urls == [good, "https://www.youtube.com/watch?v=xyz789"]
+        err = capsys.readouterr().err
+        assert "skipping playlist entry http://192.168.1.1/cgi-bin/reboot" in err
+        assert "disallowed IP literal: 192.168.1.1" in err
+        assert "disallowed scheme: ''" in err
+
+    def test_fetch_video_puts_double_dash_before_the_url(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._capture_ytdlp(monkeypatch, json.dumps({"id": "x"}))
+        ys.fetch_video("--cookies-from-browser=chrome")
+        assert calls[0][-2:] == ["--", "--cookies-from-browser=chrome"], calls
+
+    def test_enumerate_playlist_puts_double_dash_before_the_url(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        calls = self._capture_ytdlp(monkeypatch, json.dumps({"entries": []}))
+        ys.enumerate_playlist("https://www.youtube.com/playlist?list=PL1")
+        assert calls[0][-2:] == ["--", "https://www.youtube.com/playlist?list=PL1"]
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter built from page metadata and model output (M-DASH 223 / 231).
+# ---------------------------------------------------------------------------
+
+def _frontmatter_dict(note: str) -> dict:
+    import yaml
+    assert note.startswith("---\n")
+    block = note[4:note.index("\n---\n", 4)]
+    return yaml.safe_load(block)
+
+
+class TestFrontmatterInjection:
+
+    INFO = {"webpage_url": "https://www.youtube.com/watch?v=abc",
+            "uploader": "Channel", "upload_date": "20260901", "duration": 61}
+
+    @pytest.mark.parametrize("brk", ["\n", "\r\n", "\r", "\x85",
+                                     "\u2028", "\u2029"])
+    def test_a_line_break_in_the_title_cannot_end_the_frontmatter(
+            self, brk: str) -> None:
+        import classification_tier
+        info = dict(self.INFO, title=f"Talk{brk}---{brk}x: y")
+        note = ys.build_frontmatter(info, [], "desc") + "\nbody\n"
+        assert classification_tier.effective(note) == ("internal-use-only", [])
+        data = _frontmatter_dict(note)
+        assert " ".join(data["title"].split()) == "Talk --- x: y"
+        assert data["title"].isprintable(), repr(data["title"])
+        assert data["classification"] == "internal-use-only"
+
+    def test_a_line_break_in_the_uploader_or_date_is_flattened(self) -> None:
+        info = dict(self.INFO, title="T", uploader="Chan\nclassification: public",
+                    upload_date="2026\n---")
+        data = _frontmatter_dict(ys.build_frontmatter(info, [], ""))
+        assert data["author"] == "Chan classification: public"
+        assert data["published"] == "2026 ---"
+        assert data["classification"] == "internal-use-only"
+
+    def test_ordinary_values_are_written_as_before(self) -> None:
+        info = dict(self.INFO, title="Plain Title")
+        fm = ys.build_frontmatter(info, ["ai", "machine-learning"], "A summary.")
+        assert "\ntitle: Plain Title\n" in fm
+        assert "\nauthor: Channel\n" in fm
+        assert "\npublished: 2026-09-01\n" in fm
+        assert fm.endswith("tags:\n- youtube\n- ai\n- machine-learning\n---\n")
+
+    def test_model_tags_that_are_yaml_syntax_are_dropped(self) -> None:
+        md = ("## Suggested tags\n[evil, *alias, !!python/name:os.system, "
+              "&anchor, {x, |y, >z, %d, @e, `f, ai, machine learning, café, "
+              "data/eng, x:y\n")
+        tags = ys.parse_suggested_tags(md)
+        # "*alias" loses its leading "*" to the bullet strip and survives as a
+        # plain word; everything else that is YAML syntax is dropped.
+        assert tags == ["alias", "ai", "machine-learning", "café", "data/eng"]
+        data = _frontmatter_dict(ys.build_frontmatter(
+            dict(self.INFO, title="T"), tags, ""))
+        assert data["tags"] == ["youtube", "alias", "ai", "machine-learning",
+                                "café", "data/eng"]
 
 
 # ---------------------------------------------------------------------------
@@ -613,9 +798,11 @@ class TestStatic:
 
     def test_ssrf_guard_called_in_extract_transcript(
             self, scripts_dir: Path) -> None:
-        """extract_transcript must call is_safe_url before urlopen on each
-        caption track. Static check: both names must appear in close
-        proximity in the function body."""
+        """extract_transcript must fetch caption tracks through
+        url_safety.safe_fetch (per-hop checks, pinned connect, size cap) and
+        never through urlopen, which follows redirects unchecked. Named by
+        installers/lib/security-suppressions.txt history: the urlopen this
+        used to assert is gone, and with it the B310 suppression."""
         src = (scripts_dir / "youtube_summarize.py").read_text()
         # Find the extract_transcript function body
         marker = "def extract_transcript("
@@ -624,12 +811,13 @@ class TestStatic:
         # Look at the function body — bounded by the next top-level def.
         body_end = src.find("\ndef ", idx + len(marker))
         body = src[idx:body_end if body_end != -1 else len(src)]
-        assert "is_safe_url" in body, (
-            "is_safe_url not called in extract_transcript — SSRF guard "
-            "is missing from the caption-track fetch path.")
-        # Confirm urlopen is also there (otherwise the test is hollow).
-        assert "urlopen" in body, (
-            "urlopen not found in extract_transcript — test premise broken.")
+        assert "url_safety.safe_fetch(" in body, (
+            "extract_transcript does not fetch through url_safety.safe_fetch "
+            "— the caption-track fetch has left the SSRF guard.")
+        assert "urlopen" not in body, (
+            "extract_transcript calls urlopen, which follows redirects "
+            "without re-checking them.")
+        assert "max_bytes=" in body, "caption fetch is not size-capped"
 
     def test_default_output_inside_vault(self) -> None:
         """DEFAULT_OUT must point inside the Obsidian vault. Catching this

@@ -46,22 +46,17 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import ipaddress
 import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import templater_guard  # noqa: E402  -- outside text must not run as Templater code
 
 import textwrap
-import urllib.error
-import urllib.request
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urlparse
 
 # ---------- venv bootstrap --------------------------------------------------
 #
@@ -122,78 +117,24 @@ COLLAPSE_DASH = re.compile(r"\s*-\s*")
 
 # ---------- SSRF guard ------------------------------------------------------
 #
-# Mirrors url_safety.is_safe_url. The caption-track URLs we hit during
-# transcript fetch come out of yt-dlp's parsed YouTube response — a remote
-# input we don't fully control. A malicious or compromised upstream could
-# in principle return a track URL pointing at an internal address
-# (loopback, link-local 169.254.169.254 metadata, RFC 1918 LAN). This is the
-# only remote-supplied URL the script fetches; the model endpoint comes from
-# llm_endpoint, not from anything YouTube returns.
+# Every URL from a remote response that this script fetches itself, or hands
+# to yt-dlp, goes through url_safety: caption-track URLs out of yt-dlp's info
+# dict (attacker-chosen for any non-YouTube page yt-dlp's generic extractor
+# reads) and playlist entries (attacker-chosen for an RSS feed). This module
+# used to carry its own copy of is_safe_url and then urlopen the caption URL,
+# which followed redirects without re-checking them and read the body without
+# a cap (M-DASH 224/358). The names below are re-exported so the predicate has
+# exactly one implementation.
 
-DISALLOWED_TLDS = (".local", ".internal", ".lan", ".intranet", ".corp",
-                   ".home", ".localdomain")
-LOOPBACK_NAMES = ("localhost", "ip6-localhost", "broadcasthost",
-                  "ip6-loopback")
+import url_safety  # noqa: E402
 
+DISALLOWED_TLDS = url_safety.DISALLOWED_TLDS
+LOOPBACK_NAMES = url_safety.LOOPBACK_NAMES
+is_safe_url = url_safety.is_safe_url
 
-def _ip_is_internal(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
-    return (ip.is_loopback or ip.is_private or ip.is_link_local
-            or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
-
-
-def is_safe_url(url: str) -> tuple[bool, str]:
-    """Return (ok, reason). Conservative: rejects any URL that could
-    plausibly target an internal resource. Kept in sync with the function
-    of the same name in url_safety.py.
-
-    v1.7 (2026-05-12): added DNS resolution via socket.getaddrinfo to
-    defeat DNS-rebinding attacks (attacker-controlled DNS that resolves
-    a public-looking hostname to an internal IP). DNS failures are also
-    treated as unsafe — conservative posture. This is the same hardening
-    landed in url_safety.py the same day; the cross-module parity tests
-    pin both predicates to the strong version.
-    """
-    try:
-        parsed = urlparse(url)
-    except ValueError:
-        return False, "unparseable URL"
-    if parsed.scheme not in ("http", "https"):
-        return False, f"disallowed scheme: {parsed.scheme!r}"
-    host = (parsed.hostname or "").lower()
-    if not host:
-        return False, "empty hostname"
-    if host in LOOPBACK_NAMES:
-        return False, f"loopback hostname: {host}"
-    for tld in DISALLOWED_TLDS:
-        if host.endswith(tld):
-            return False, f"disallowed local TLD: {host}"
-    # IP literal path: accept public IPs, reject internal IPs.
-    try:
-        ip = ipaddress.ip_address(host)
-        if _ip_is_internal(ip):
-            return False, f"disallowed IP literal: {ip}"
-        return True, ""
-    except ValueError:
-        pass  # Not an IP literal — fall through to DNS resolution.
-    # Hostname path: resolve and reject if ANY answer is internal.
-    try:
-        infos = socket.getaddrinfo(host, None)
-    except socket.gaierror as e:
-        return False, f"DNS resolution failed for {host!r}: {e}"
-    if not infos:
-        return False, f"DNS resolution returned no records for {host!r}"
-    for info in infos:
-        sockaddr = info[4]
-        ip_str = sockaddr[0]
-        try:
-            resolved = ipaddress.ip_address(ip_str)
-        except ValueError:
-            return False, (f"DNS returned unparseable address {ip_str!r} "
-                           f"for {host!r}")
-        if _ip_is_internal(resolved):
-            return False, (f"{host} resolves to internal address "
-                           f"{ip_str}")
-    return True, ""
+# A caption track is text; an hour of json3 is well under 2 MB. The cap keeps a
+# hostile track served as an endless stream from growing the process.
+CAPTION_MAX_BYTES = 5 * 1024 * 1024
 
 
 # ---------- Logging ----------------------------------------------------------
@@ -224,11 +165,30 @@ def run_ytdlp(args: list[str]) -> dict | list[dict]:
 
 
 def enumerate_playlist(url: str) -> list[str]:
-    """Return ordered video URLs for a playlist."""
-    data = run_ytdlp(["--flat-playlist", url])
+    """Return ordered video URLs for a playlist, unsafe entries dropped.
+
+    Entry URLs come from the remote playlist or feed (yt-dlp copies an RSS
+    item's enclosure/link verbatim), and each one is handed back to yt-dlp,
+    which fetches it. So each must be an http(s) URL to a public host:
+    otherwise a feed could point yt-dlp at the LAN, or name a yt-dlp option
+    ("--cookies-from-browser=...") in place of a URL.
+    """
+    data = run_ytdlp(["--flat-playlist", "--", url])
     if isinstance(data, dict) and "entries" in data:
-        return [e.get("url") or f"https://www.youtube.com/watch?v={e['id']}"
-                for e in data["entries"] if e]
+        urls = []
+        for e in data["entries"]:
+            if not e:
+                continue
+            u = str(e.get("url") or
+                    f"https://www.youtube.com/watch?v={e.get('id')}")
+            ok, reason = is_safe_url(u)
+            if not ok:
+                print(f"[yt-sum] skipping playlist entry "
+                      f"{url_safety.redact_url(u)}: {reason}",
+                      file=sys.stderr, flush=True)
+                continue
+            urls.append(u)
+        return urls
     raise RuntimeError("not a playlist or no entries returned")
 
 
@@ -243,6 +203,9 @@ def fetch_video(url: str) -> dict:
     data = run_ytdlp([
         "--skip-download",
         "--no-playlist",
+        # Everything after "--" is a URL, never an option, whatever it starts
+        # with. Playlist entries come from remote feeds.
+        "--",
         url,
     ])
     if isinstance(data, list):
@@ -272,19 +235,16 @@ def extract_transcript(info: dict) -> str:
                     candidates.append((source, k, ext, fmt.get("url")))
 
     for source, lang, ext, url in candidates:
-        # Reject caption-track URLs that point at internal/loopback/private
-        # addresses before urlopen. The URLs come from yt-dlp's parsed
-        # YouTube response — a remote input — so this is the SSRF perimeter.
-        ok, reason = is_safe_url(url or "")
-        if not ok:
-            log(f"skipping caption track: unsafe url ({reason})", verbose=True)
+        # The URLs come from yt-dlp's parsed response -- a remote input, and
+        # for a non-YouTube page an attacker's -- so this is the SSRF
+        # perimeter. safe_fetch checks every hop (redirects included) with
+        # is_safe_url, connects to the address it checked, and caps the body.
+        raw = url_safety.safe_fetch(
+            url or "", max_bytes=CAPTION_MAX_BYTES,
+            log=lambda m: log(f"caption track: {m}", verbose=True))
+        if raw is None:
             continue
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                body = resp.read().decode("utf-8", errors="replace")
-        except (urllib.error.URLError, TimeoutError):
-            continue
+        body = raw.decode("utf-8", errors="replace")
         text = parse_caption_body(body, ext)
         if text.strip():
             return text
@@ -430,9 +390,12 @@ def parse_suggested_tags(summary_md: str) -> list[str]:
     # drop bullets / quotes / leading hashes that the model might still emit
     cleaned = []
     for t in tags:
-        t = t.lstrip("-* ").strip("\"'#").strip()
-        if t:
-            cleaned.append(t.replace(" ", "-"))
+        t = t.lstrip("-* ").strip("\"'#").strip().replace(" ", "-")
+        # The model's output is steerable by the transcript, and each tag is
+        # written as a bare YAML list item. Keep only tag characters, so "[x",
+        # "*x" or "!!python/..." cannot turn into YAML syntax (M-DASH 231).
+        if SAFE_TAG.fullmatch(t):
+            cleaned.append(t)
     return cleaned
 
 
@@ -440,10 +403,26 @@ def strip_suggested_tags_section(summary_md: str) -> str:
     return re.sub(r"\n*##\s+Suggested tags[\s\S]*$", "", summary_md).rstrip() + "\n"
 
 
+# A letter or digit in any script, then letters, digits, _ / - (Obsidian's tag
+# characters). Nothing YAML reads as syntax at the start of a plain scalar.
+SAFE_TAG = re.compile(r"[^\W_][\w/-]{0,63}")
+
+# Line breaks (YAML and str.splitlines both honour \x85, \u2028, \u2029) and
+# the other control characters. One in a title could end the frontmatter early.
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f\x85\u2028\u2029]")
+
+
 def yaml_escape(value: str) -> str:
-    """Quote a value if it contains YAML-significant characters."""
+    """One-line YAML scalar: control characters (newlines included) become
+    spaces, and the value is quoted if it has YAML-significant characters.
+
+    Titles and uploaders come from the page yt-dlp read, so a newline in one
+    would otherwise close the frontmatter after it and push the
+    classification line into the body (M-DASH 223).
+    """
     if value == "" or value is None:
         return '""'
+    value = _CONTROL_CHARS.sub(" ", str(value))
     needs_quote = any(c in value for c in ":#&*!|>'\"%@`")
     if needs_quote or value[0] in "[{?-":
         return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'

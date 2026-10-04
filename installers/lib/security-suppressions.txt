@@ -21,13 +21,16 @@
 # Established 2026-08-25 from the first full sweep of this repository.
 
 # --- urllib with permitted schemes (bandit B310 / semgrep dynamic-urllib) ----
-# The rule fires on any urllib call whose URL is not a literal. In both
-# cases the URL is built from constants or from a tracked manifest, never from
-# untrusted input, and none uses a caller-supplied scheme.
+# The rule fires on any urllib call whose URL is not a literal. Here the URL is
+# built from constants or from a tracked manifest, never from untrusted input,
+# and it does not use a caller-supplied scheme.
+# youtube_summarize.py's lines were REMOVED 2026-10-04. Their rationale said the
+# caption fetch was "routed through url_safety's SSRF guard"; it was not -- it
+# checked a duplicate is_safe_url and then urlopen followed redirects unchecked
+# (M-DASH 358). The fetch now goes through url_safety.safe_fetch and there is
+# no urllib call left to suppress.
 bandit   installers/lib/pin_plugins.py   B310   count=1   # GitHub API; URL from the tracked pin manifest, maintainer-run only. re-check 2026-11-25
-bandit   Templates/Scripts/youtube_summarize.py   B310   count=1   # routed through url_safety's SSRF guard; asserted by test_youtube_summarize.py::test_ssrf_guard_called_in_extract_transcript. re-check 2026-11-25
 semgrep  installers/lib/pin_plugins.py   dynamic-urllib-use-detected   count=1   # as above. re-check 2026-11-25
-semgrep  Templates/Scripts/youtube_summarize.py   dynamic-urllib-use-detected   count=1   # as above. re-check 2026-11-25
 
 # --- subprocess with config-derived argv (semgrep) --------------------------
 # Both are list-form subprocess.run with no shell=True, so there is no
