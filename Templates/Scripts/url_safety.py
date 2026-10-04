@@ -29,6 +29,15 @@ Never use urllib.request.urlopen or requests with allow_redirects=True on an
 untrusted URL. Both follow redirects internally, so a first-hop check passes
 and the redirect lands wherever the attacker likes. Every function here walks
 redirects manually and re-validates each hop.
+
+Each hop also CONNECTS to the address that was validated. Checking a name and
+then letting requests resolve it again is a time-of-check/time-of-use gap: a
+hostile name with a zero TTL answers a public address to the check and
+127.0.0.1 to the connect (DNS rebinding). _pinned_get resolves once, through
+_check, and hands urllib3 that address for the TCP connect while the URL, the
+Host header, TLS SNI and certificate verification all keep the original name.
+When the environment routes the request through a proxy (HTTP(S)_PROXY), the
+proxy resolves the name and pinning cannot apply; the name check still does.
 """
 from __future__ import annotations
 
@@ -40,6 +49,9 @@ from typing import Callable
 from urllib.parse import urljoin, urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
 # Hostnames and TLDs that can only mean "somewhere on this machine or LAN".
 DISALLOWED_TLDS = (".local", ".internal", ".lan", ".intranet", ".corp",
@@ -123,39 +135,55 @@ def is_safe_url(url: str) -> tuple[bool, str]:
       6. If the hostname is an IP literal, it is not loopback / private /
          link-local / multicast / reserved.
       7. Otherwise resolve the hostname via socket.getaddrinfo and reject
-         if ANY resolved IP is internal (DNS-rebinding defense). A
-         resolution failure is treated as unsafe — we can't prove the
-         target is public, so we refuse.
+         if ANY resolved IP is internal. A resolution failure is treated as
+         unsafe -- we can't prove the target is public, so we refuse.
+
+    On its own this is a point-in-time verdict about a name: a later,
+    independent lookup can answer differently (DNS rebinding). The fetchers
+    in this module close that by connecting to the very address this check
+    approved (see _pinned_get); a caller that only calls is_safe_url and then
+    fetches by itself does not get that protection.
+    """
+    ok, reason, _ip = _check(url)
+    return ok, reason
+
+
+def _check(url: str) -> tuple[bool, str, str | None]:
+    """is_safe_url plus the address to connect to when it passes.
+
+    The address returned is one the checks above approved, so a fetcher that
+    connects to it cannot be walked to a different answer by a second lookup.
     """
     try:
         parsed = urlparse(url)
     except ValueError:
-        return False, "unparseable URL"
+        return False, "unparseable URL", None
     if parsed.scheme not in ("http", "https"):
-        return False, f"disallowed scheme: {parsed.scheme!r}"
+        return False, f"disallowed scheme: {parsed.scheme!r}", None
     host = (parsed.hostname or "").lower()
     if not host:
-        return False, "empty hostname"
+        return False, "empty hostname", None
     if host in LOOPBACK_NAMES:
-        return False, f"loopback hostname: {host}"
+        return False, f"loopback hostname: {host}", None
     for tld in DISALLOWED_TLDS:
         if host.endswith(tld):
-            return False, f"disallowed local TLD: {host}"
+            return False, f"disallowed local TLD: {host}", None
     # IP literal path: accept public IPs, reject internal IPs.
     try:
         ip = ipaddress.ip_address(host)
         if _ip_is_internal(ip):
-            return False, f"disallowed IP literal: {ip}"
-        return True, ""
+            return False, f"disallowed IP literal: {ip}", None
+        return True, "", str(ip)
     except ValueError:
         pass  # Not an IP literal — fall through to DNS resolution.
     # Hostname path: resolve and reject if ANY answer is internal.
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror as e:
-        return False, f"DNS resolution failed for {host!r}: {e}"
+        return False, f"DNS resolution failed for {host!r}: {e}", None
     if not infos:
-        return False, f"DNS resolution returned no records for {host!r}"
+        return False, f"DNS resolution returned no records for {host!r}", None
+    pinned: str | None = None
     for info in infos:
         sockaddr = info[4]
         ip_str = sockaddr[0]
@@ -164,35 +192,93 @@ def is_safe_url(url: str) -> tuple[bool, str]:
         except ValueError:
             # Unparseable sockaddr — treat as suspicious and refuse.
             return False, (f"DNS returned unparseable address {ip_str!r} "
-                           f"for {host!r}")
+                           f"for {host!r}"), None
         if _ip_is_internal(resolved):
             return False, (f"{host} resolves to internal address "
-                           f"{ip_str}")
-    return True, ""
+                           f"{ip_str}"), None
+        if pinned is None:
+            pinned = str(resolved)
+    return True, "", pinned
+
+
+def _pinned_classes(ip: str):
+    """Connection-pool classes whose TCP connect goes to `ip`.
+
+    Only the socket's destination changes. urllib3 reads the connection's
+    `host` for the Host header, TLS SNI and certificate hostname checks, so
+    the name is swapped in for the duration of the connect alone and those
+    keep the name the URL carried.
+    """
+    def _new_conn(self):
+        name = self._dns_host
+        self._dns_host = ip
+        try:
+            return self._base_new_conn()
+        finally:
+            self._dns_host = name
+
+    def conn_cls(base):
+        return type(f"Pinned{base.__name__}", (base,),
+                    {"_new_conn": _new_conn, "_base_new_conn": base._new_conn})
+
+    http_pool = type("PinnedHTTPConnectionPool", (HTTPConnectionPool,),
+                     {"ConnectionCls": conn_cls(HTTPConnection)})
+    https_pool = type("PinnedHTTPSConnectionPool", (HTTPSConnectionPool,),
+                      {"ConnectionCls": conn_cls(HTTPSConnection)})
+    return http_pool, https_pool
+
+
+class _PinnedAdapter(HTTPAdapter):
+    """A requests adapter that connects every request to one validated IP."""
+
+    def __init__(self, ip: str) -> None:
+        self._pinned_ip = ip
+        super().__init__()
+
+    def init_poolmanager(self, *args, **kwargs) -> None:
+        super().init_poolmanager(*args, **kwargs)
+        http_pool, https_pool = _pinned_classes(self._pinned_ip)
+        self.poolmanager.pool_classes_by_scheme = {
+            "http": http_pool, "https": https_pool}
+
+
+def _pinned_get(url: str, ip: str, *, timeout: int) -> requests.Response:
+    """GET one hop, connecting to `ip`, never following a redirect."""
+    session = requests.Session()
+    adapter = _PinnedAdapter(ip)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    try:
+        return session.get(
+            url,
+            allow_redirects=False,
+            stream=True,
+            timeout=timeout,
+            headers={"User-Agent": USER_AGENT},
+        )
+    except BaseException:
+        session.close()
+        raise
 
 
 def _walk(url: str, *, log: Logger, timeout: int):
     """Yield validated responses along a redirect chain.
 
-    Each hop is re-validated by is_safe_url BEFORE its request issues, and
-    allow_redirects=False is set so requests can never follow one for us.
+    Each hop is re-validated by _check BEFORE its request issues and the
+    request connects to the address that check approved; allow_redirects=False
+    is set so requests can never follow one for us.
     Yields (response, current_url) for the first non-redirect hop, or nothing
     if the chain is refused, errors, or runs too long.
     """
     current = url
     for _ in range(MAX_REDIRECTS + 1):
-        ok, reason = is_safe_url(current)
-        if not ok:
+        ok, reason, ip = _check(current)
+        if not ok or ip is None:
             log(f"refusing {redact_url(current)}: {reason}")
             return
         try:
-            resp = requests.get(
-                current,
-                allow_redirects=False,
-                stream=True,
-                timeout=timeout,
-                headers={"User-Agent": USER_AGENT},
-            )
+            # Connect to the address _check approved, not a fresh lookup.
+            resp = _pinned_get(current, ip, timeout=timeout)
         except requests.RequestException as e:
             # The exception text is not logged: requests puts the full URL,
             # query string and all, into it ("Max retries exceeded with url:

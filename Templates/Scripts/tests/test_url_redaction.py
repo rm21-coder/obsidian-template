@@ -55,8 +55,13 @@ def test_transport_error_log_omits_the_exception_text(monkeypatch) -> None:
             "HTTPConnectionPool(host='h', port=1): Max retries exceeded "
             "with url: /p?sig=SASTOKEN123")
 
-    monkeypatch.setattr(url_safety, "is_safe_url", lambda u: (True, ""))
-    monkeypatch.setattr(url_safety.requests, "get", boom)
+    def boom_pinned(url, ip, **kw):
+        return boom(url, **kw)
+
+    # The walker checks with _check and fetches with _pinned_get (the request
+    # connects to the address the check approved); stub both seams.
+    monkeypatch.setattr(url_safety, "_check", lambda u: (True, "", "93.184.216.34"))
+    monkeypatch.setattr(url_safety, "_pinned_get", boom_pinned)
     logged: list[str] = []
     url_safety.safe_fetch("https://example.com/p?sig=SASTOKEN123", log=logged.append)
     joined = "\n".join(logged)

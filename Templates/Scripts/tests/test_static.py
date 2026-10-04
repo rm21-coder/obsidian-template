@@ -129,11 +129,13 @@ class TestUrlSafetyAST:
         """requests.get must be called with allow_redirects=False to
         force the manual redirect walk."""
         text = (scripts_dir / "url_safety.py").read_text(encoding="utf-8")
-        get_calls = text.count("requests.get(")
+        # session.get is the pinned fetch (_pinned_get); requests.get would be
+        # an unpinned one. Both count, so either kind must carry the flag.
+        get_calls = text.count("requests.get(") + text.count("session.get(")
         guarded = text.count("allow_redirects=False")
-        assert get_calls > 0, "no requests.get calls — SSRF fix backed out?"
+        assert get_calls > 0, "no GET calls — SSRF fix backed out?"
         assert guarded >= get_calls, (
-            f"requests.get appears {get_calls} times but allow_redirects="
+            f"GET appears {get_calls} times but allow_redirects="
             f"False appears only {guarded} — at least one auto-redirect "
             "fetcher remains.")
 
