@@ -156,3 +156,13 @@ def test_org_domains_without_config_is_just_the_user_domain(people):
 def test_process_handoff_hands_the_org_domains_to_the_index():
     src = Path(mp.__file__).read_text(encoding="utf-8")
     assert "people_idx.org_domains = load_org_domains(user_email)" in src
+
+
+def test_an_empty_type_does_not_read_the_next_line(tmp_path: Path) -> None:
+    """Same newline-crossing pattern as the email fields: an emptied `type:`
+    picked up the next frontmatter line as the meeting type."""
+    note = tmp_path / "m.md"
+    note.write_text("---\ntype:\ngroup: x\n---\nbody\n", encoding="utf-8")
+    assert mp.read_note_type(note)[0] is None
+    note.write_text("---\ntype: Group\n---\n", encoding="utf-8")
+    assert mp.read_note_type(note)[0] == "Group"

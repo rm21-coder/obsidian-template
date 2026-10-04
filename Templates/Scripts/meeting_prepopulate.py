@@ -1528,7 +1528,7 @@ def read_note_type(path: 'Path') -> tuple[str | None, str | None]:
     if not fm:
         return None, None
     body = fm.group(1)
-    m = re.search(r'(?m)^type\s*:\s*(.+)$', body)
+    m = re.search(r'(?m)^type[ \t]*:[ \t]*(.+)$', body)
     mtype = m.group(1).strip().strip('"\'') if m else None
     group = None
     in_group = False
