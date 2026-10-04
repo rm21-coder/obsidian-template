@@ -16,8 +16,10 @@ First run prompts for the destination folder and stores the choice at
 ~/.markitdown_dropper.json. Originals are left where they are. If the
 output filename already exists, a timestamp is appended.
 
-If markitdown_cleanup is not importable for any reason, conversion still
-runs — the file just lands without the cleanup pass.
+If markitdown_cleanup is not importable, a conversion is refused rather than
+written raw: the cleanup pass is what gives the note the pipeline's own
+frontmatter and tier, and without it a document's own frontmatter block would
+become the note's (review, 2026-10-04).
 """
 
 from __future__ import annotations
@@ -63,8 +65,8 @@ except ImportError:
     sys.exit(1)
 
 # Make the per-vault Templates/Scripts/ importable so we can pick up
-# markitdown_cleanup.py. Cleanup is optional — the dropper still works if
-# the import fails. Vault path defaults to ~/Obsidian and can be overridden
+# markitdown_cleanup.py. If the import fails, conversions are refused (see the
+# module docstring). Vault path defaults to ~/Obsidian and can be overridden
 # with OBSIDIAN_VAULT for testing.
 _vault = Path(os.environ.get("OBSIDIAN_VAULT", str(Path.home() / "Obsidian"))).expanduser()
 sys.path.insert(0, str(_vault / "Templates" / "Scripts"))
@@ -129,6 +131,9 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
     # ensure frontmatter. Attachments live alongside the destination folder
     # (typically <vault>/Z_attachments).
     cleanup_msg = ""
+    if cleanup_clean is None:
+        return False, (f"{src.name}: not converted: markitdown_cleanup is unavailable, "
+                       "and without it the note would carry no pipeline frontmatter or tier")
     if cleanup_clean is not None:
         attachments_dir = dest_dir.parent / "Z_attachments"
         try:

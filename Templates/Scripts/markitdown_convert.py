@@ -28,7 +28,7 @@ from markitdown import MarkItDown
 
 try:
     from markitdown_cleanup import clean as cleanup_clean
-except Exception:  # cleanup is best-effort; convert still works without it
+except Exception:  # without cleanup a conversion is refused, never written raw
     cleanup_clean = None
 
 VAULT = Path(os.environ.get("OBSIDIAN_VAULT", str(Path.home() / "Obsidian"))).expanduser()
@@ -60,7 +60,12 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
     body = f"# {title}\n\n{text}" if title else text
 
     # Shared cleanup pass; attachments live in <vault>/Z_attachments (sibling of
-    # the Clippings destination), matching markitdown_dropper.py.
+    # the Clippings destination), matching markitdown_dropper.py. Without the
+    # cleanup pass the note would carry no pipeline frontmatter or tier, and a
+    # document's own frontmatter block would become the note's: refuse.
+    if cleanup_clean is None:
+        return False, (f"{src.name}: not converted: markitdown_cleanup is unavailable, "
+                       "and without it the note would carry no pipeline frontmatter or tier")
     if cleanup_clean is not None:
         try:
             body, _summary = cleanup_clean(body, src, dest_dir.parent / "Z_attachments")
