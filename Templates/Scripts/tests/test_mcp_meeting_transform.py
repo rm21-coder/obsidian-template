@@ -57,6 +57,11 @@ def _warning(payload: dict) -> str:
     ({"start": "tomorrow at 3"}, "TypeError: start is not an object"),
     ({"end": {"dateTime": 20261005, "timeZone": "UTC"}}, "AttributeError"),
     ({"attendees": "everyone"}, "TypeError: attendees is not a list"),
+    # Valid ISO, but the UTC conversion leaves datetime's range.
+    ({"start": {"dateTime": "9999-12-31T23:00:00",
+                "timeZone": "Pacific Standard Time"}}, "OverflowError"),
+    ({"start": {"dateTime": "0001-01-01T00:30:00",
+                "timeZone": "Asia/Tokyo"}}, "OverflowError"),
 ])
 def test_malformed_event_is_skipped_and_the_rest_kept(override, reason, capsys):
     payload = mt.build_handoff([_bad(**override), copy.deepcopy(GOOD)],

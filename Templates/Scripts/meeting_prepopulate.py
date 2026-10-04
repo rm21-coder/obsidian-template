@@ -112,6 +112,15 @@ PERSONAL_DOMAINS = {
     'icloud.com', 'me.com', 'aol.com', 'protonmail.com',
     'msn.com', 'comcast.net', 'verizon.net', 'live.com',
     'mac.com', 'sbcglobal.net', 'cox.net', 'att.net',
+    # Also shared free-mail / multi-tenant providers. Besides stub routing,
+    # this set is what organic backfill refuses to treat as identifying:
+    # a domain anyone can sign up for vouches for no one.
+    'googlemail.com', 'proton.me', 'pm.me', 'ymail.com', 'rocketmail.com',
+    'yahoo.co.uk', 'hotmail.co.uk', 'live.co.uk', 'outlook.co.uk',
+    'gmx.com', 'gmx.net', 'gmx.de', 'mail.com', 'email.com',
+    'yandex.com', 'yandex.ru', 'mail.ru', 'zoho.com', 'zohomail.com',
+    'fastmail.com', 'fastmail.fm', 'hey.com', 'tutanota.com', 'tuta.io',
+    'duck.com', 'hushmail.com', 'qq.com', '163.com', '126.com',
 }
 
 # Group/office mailbox heuristics (Handoff Contract §1a; defense-in-depth)
@@ -1013,7 +1022,8 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
 
     The match that brings us here is by NAME, and an invite's display name is
     whatever its sender typed. So an address is written only when its domain
-    is one of the user's org domains or a domain already on this note;
+    is one of the user's org domains or a domain already on this note, and
+    never when it is a shared free-mail domain (PERSONAL_DOMAINS);
     otherwise "Pat Quinn <pat@attacker.example>" would plant the attacker's
     address on the real Pat Quinn, and every later invite from it would
     email-match to that note."""
@@ -1044,9 +1054,11 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
         if m and _email_domain(m.group(1)):
             note_domains.add(_email_domain(m.group(1)))
     domain = _email_domain(email)
-    if domain not in org_domains and domain not in note_domains:
-        log.info('  organic-backfill SKIPPED %s on %s.md: domain %s is not '
-                 'an org domain or already on the note',
+    # A shared free-mail domain identifies no one, whichever list it is in.
+    vouched = (domain in org_domains or domain in note_domains)
+    if domain in PERSONAL_DOMAINS or not vouched:
+        log.info('  organic-backfill SKIPPED %s on %s.md: domain %s is free '
+                 'mail, or neither an org domain nor already on the note',
                  target_field, stem, domain)
         return False
     new_line = f'{target_field}: {email}'
@@ -1352,7 +1364,13 @@ def load_org_domains(user_email: str) -> frozenset[str]:
     own = _email_domain(user_email or '')
     if own:
         domains.add(own)
-    return frozenset(domains)
+    # A user on gmail.com (or a config listing outlook.com) must not make
+    # every stranger's gmail address an "org" address.
+    shared = domains & PERSONAL_DOMAINS
+    if shared:
+        log.info('org domains: ignoring shared free-mail domain(s) %s',
+                 sorted(shared))
+    return frozenset(domains - PERSONAL_DOMAINS)
 
 
 DEFAULT_SKIP_SUBJECT_PREFIXES = ('fyi',)

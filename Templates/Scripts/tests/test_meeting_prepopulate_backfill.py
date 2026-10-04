@@ -113,7 +113,8 @@ def test_backfill_refuses_a_foreign_domain(people, caplog):
     assert counters["organic-email-backfill"] == 0
     assert note.read_text(encoding="utf-8") == before
     assert ("organic-backfill SKIPPED Email-Work on Quinn, Pat.md: domain "
-            "attacker.example is not an org domain or already on the note"
+            "attacker.example is free mail, or neither an org domain nor "
+            "already on the note"
             ) in caplog.text
 
 
@@ -166,3 +167,58 @@ def test_an_empty_type_does_not_read_the_next_line(tmp_path: Path) -> None:
     assert mp.read_note_type(note)[0] is None
     note.write_text("---\ntype: Group\n---\n", encoding="utf-8")
     assert mp.read_note_type(note)[0] == "Group"
+
+# --- Shared free-mail domains identify no one -------------------------------
+# A domain shared by millions of strangers is not evidence that an address
+# belongs to this person, nor is it the user's organisation. Adversarial
+# review of the first version of this guard found all three cases below.
+
+def test_free_mail_domain_on_the_note_does_not_vouch(people, caplog):
+    note = people / "Quinn, Pat.md"
+    note.write_text(STUB.format(personal="").replace(
+        "Email-Work:\n", "Email-Work: pat@gmail.com\n"), encoding="utf-8")
+    before = note.read_text(encoding="utf-8")
+
+    with caplog.at_level(logging.INFO, logger="meeting_prepopulate"):
+        _stem, _status, counters = _resolve("evil@gmail.com")
+
+    assert counters["organic-email-backfill"] == 0
+    assert note.read_text(encoding="utf-8") == before
+    assert ("organic-backfill SKIPPED Email-Personal on Quinn, Pat.md: domain "
+            "gmail.com is free mail, or neither an org domain nor "
+            "already on the note"
+            ) in caplog.text
+
+
+def test_proton_me_is_personal_not_a_work_address(people):
+    note = _note(people, personal="pat@proton.me")
+    before = note.read_text(encoding="utf-8")
+
+    _stem, _status, counters = _resolve("evil@proton.me")
+
+    assert counters["organic-email-backfill"] == 0
+    assert note.read_text(encoding="utf-8") == before
+    assert "proton.me" in mp.PERSONAL_DOMAINS
+
+
+def test_users_own_free_mail_domain_is_not_an_org_domain(people):
+    cfg = mp.CONFIG_FILE.parent
+    cfg.mkdir()
+    mp.CONFIG_FILE.write_text(json.dumps(
+        {"tenant_domains": ["outlook.com", "corp.example.edu"]}), encoding="utf-8")
+
+    assert mp.load_org_domains("rich@gmail.com") == frozenset({"corp.example.edu"})
+
+
+def test_free_mail_domain_passed_as_org_domain_is_still_refused(people, caplog):
+    note = _note(people)
+    before = note.read_text(encoding="utf-8")
+
+    with caplog.at_level(logging.INFO, logger="meeting_prepopulate"):
+        changed = mp.organic_email_backfill(
+            "Quinn, Pat", "evil@gmail.com", False, True,
+            frozenset({"gmail.com"}))
+
+    assert changed is False
+    assert note.read_text(encoding="utf-8") == before
+    assert "organic-backfill SKIPPED Email-Personal on Quinn, Pat.md" in caplog.text
