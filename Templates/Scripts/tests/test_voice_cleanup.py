@@ -453,3 +453,71 @@ def test_once_mode_processes_pending_files(endpoint, monkeypatch, inbox,
     voice_cleanup.main()
 
     assert processed == ["note.txt"]
+
+
+# ---------------------------------------------------------------------------
+# --once handles each file on its own (Windows schedules voice-cleanup as
+# --once every five minutes, so this is that platform's only mode).
+# ---------------------------------------------------------------------------
+
+def run_once(monkeypatch) -> int:
+    monkeypatch.setattr(sys, "argv", ["voice_cleanup.py", "--once"])
+    try:
+        voice_cleanup.main()
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
+def test_once_mode_a_bad_file_does_not_stop_the_drops_behind_it(
+        endpoint, monkeypatch, at_info, inbox):
+    """process_file used to raise straight out of the --once loop, so every
+    drop sorted after a poison one waited on it, run after run."""
+    processed: list[str] = []
+
+    def only_the_bad_one_fails(f, client, cfg):
+        if f.name == "a-bad.txt":
+            raise RuntimeError("404 model not found")
+        processed.append(f.name)
+        f.unlink()
+
+    monkeypatch.setattr(voice_cleanup, "process_file", only_the_bad_one_fails)
+    (inbox / "a-bad.txt").write_text("poison", encoding="utf-8")
+    (inbox / "b-good.txt").write_text("fine", encoding="utf-8")
+
+    assert run_once(monkeypatch) == 1, "a failed file is still a failed run"
+    assert processed == ["b-good.txt"]
+    assert messages(at_info, "Failed (1/3): a-bad.txt")
+    assert messages(at_info, "processed 1 file(s), 1 failed")
+
+
+def test_once_mode_quarantines_after_max_attempts_across_runs(
+        endpoint, monkeypatch, at_info, inbox):
+    """Each --once run is a new process, so the count must outlive it."""
+    monkeypatch.setattr(voice_cleanup, "process_file",
+                        explode("404 model not found"))
+    drop = inbox / "note.txt"
+    drop.write_text("irreplaceable dictation", encoding="utf-8")
+
+    for _ in range(voice_cleanup.MAX_FILE_ATTEMPTS - 1):
+        assert run_once(monkeypatch) == 1
+        assert drop.exists()
+    assert run_once(monkeypatch) == 1
+    assert not drop.exists()
+    assert (inbox / "note.txt.failed").read_text(
+        encoding="utf-8") == "irreplaceable dictation"
+    assert messages(at_info, "Quarantined after 3 attempts: note.txt.failed")
+    assert not (inbox / voice_cleanup.ATTEMPTS_FILE).exists(), (
+        "the count should be cleared once nothing is failing")
+
+
+def test_once_mode_success_clears_a_prior_failure_count(
+        endpoint, monkeypatch, at_info, inbox):
+    (inbox / "note.txt").write_text("raw", encoding="utf-8")
+    monkeypatch.setattr(voice_cleanup, "process_file", explode("503 upstream"))
+    assert run_once(monkeypatch) == 1
+
+    monkeypatch.setattr(voice_cleanup, "process_file",
+                        lambda f, client, cfg: f.unlink())
+    assert run_once(monkeypatch) == 0
+    assert not (inbox / voice_cleanup.ATTEMPTS_FILE).exists()

@@ -27,6 +27,7 @@ import os
 import sys
 import templater_guard  # noqa: E402  -- outside text must not run as Templater code
 
+import json
 import time
 import argparse
 import subprocess
@@ -210,6 +211,56 @@ def get_pending_files(inbox: Path) -> list[Path]:
 # cannot wedge every drop queued behind it. Renamed, never deleted.
 MAX_FILE_ATTEMPTS = 3
 
+# --once runs are separate processes (the Windows schedule runs one every five
+# minutes), so their failure counts live in a hidden file in the inbox rather
+# than in memory. get_pending_files() never lists it: it is a dot-file and not
+# a .txt.
+ATTEMPTS_FILE = ".voice_cleanup_attempts.json"
+
+
+def _load_attempts(inbox: Path) -> dict[str, int]:
+    try:
+        data = json.loads((inbox / ATTEMPTS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {k: v for k, v in data.items()
+            if isinstance(k, str) and isinstance(v, int)}
+
+
+def _save_attempts(inbox: Path, attempts: dict[str, int]) -> None:
+    path = inbox / ATTEMPTS_FILE
+    try:
+        if attempts:
+            path.write_text(json.dumps(attempts, sort_keys=True), encoding="utf-8")
+        elif path.exists():
+            path.unlink()
+    except OSError as exc:
+        log.warning("Could not record failure counts in %s: %s", path, exc)
+
+
+def _process_one(f: Path, client, cfg: dict, attempts: dict[str, int]) -> bool:
+    """Process one drop; a failure is logged and counted, never raised.
+
+    A permanent fault -- a retired model, a malformed drop -- repeats on every
+    run. After MAX_FILE_ATTEMPTS the file is set aside so it stops blocking the
+    drops behind it, but kept: nothing dictated should ever be lost to a bug.
+    Returns True on success.
+    """
+    try:
+        process_file(f, client, cfg)
+        attempts.pop(f.name, None)
+        return True
+    except Exception:
+        n = attempts[f.name] = attempts.get(f.name, 0) + 1
+        log.exception("Failed (%d/%d): %s", n, MAX_FILE_ATTEMPTS, f.name)
+        if n >= MAX_FILE_ATTEMPTS and f.exists():
+            f.rename(f.with_suffix(f.suffix + ".failed"))
+            log.error("Quarantined after %d attempts: %s.failed", n, f.name)
+            attempts.pop(f.name, None)
+        return False
+
 
 def _resolve_client(cache: dict):
     """The API client, resolved on first need and reused after that.
@@ -275,9 +326,16 @@ def main():
         except llm_endpoint.EndpointError as exc:
             log.error("%s", exc)
             sys.exit(1)
-        for f in files:
-            process_file(f, client, cfg)
-        log.info("Done — processed %d file(s).", len(files))
+        # Per file, as the watch loop does: one bad drop used to raise out of
+        # main() and end the run, so every drop queued behind it waited on it
+        # forever.
+        attempts = _load_attempts(inbox)
+        failed = sum(not _process_one(f, client, cfg, attempts) for f in files)
+        _save_attempts(inbox, attempts)
+        log.info("Done — processed %d file(s), %d failed.",
+                 len(files) - failed, failed)
+        if failed:
+            sys.exit(1)
     else:
         print(f"\nVoice Cleanup is running.")
         print(f"   Watching: {inbox}")
@@ -309,22 +367,7 @@ def main():
                     paused = False
 
                 for f in get_pending_files(inbox):
-                    try:
-                        process_file(f, client, cfg)
-                        attempts.pop(f.name, None)
-                    except Exception:
-                        n = attempts[f.name] = attempts.get(f.name, 0) + 1
-                        log.exception("Failed (%d/%d): %s",
-                                      n, MAX_FILE_ATTEMPTS, f.name)
-                        # A permanent fault — a retired model, a malformed
-                        # drop — repeats on every cycle. Set the file aside so
-                        # it stops blocking the drops behind it, but keep it:
-                        # nothing dictated should ever be lost to a bug.
-                        if n >= MAX_FILE_ATTEMPTS and f.exists():
-                            f.rename(f.with_suffix(f.suffix + ".failed"))
-                            log.error("Quarantined after %d attempts: %s.failed",
-                                      n, f.name)
-                            attempts.pop(f.name, None)
+                    if not _process_one(f, client, cfg, attempts):
                         # The endpoint itself may be what broke; re-resolve it
                         # next cycle rather than reuse a dead client.
                         endpoint["client"] = None
