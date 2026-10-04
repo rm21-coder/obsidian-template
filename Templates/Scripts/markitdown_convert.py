@@ -13,6 +13,12 @@ Also runs directly:
     markitdown_convert.py FILE [FILE ...] [--out DIR]
 
 Vault is $OBSIDIAN_VAULT or ~/Obsidian.
+
+A zip container (.zip/.docx/.xlsx/.pptx) is checked by archive_limits.py
+BEFORE MarkItDown opens it, and refused when its declared member sizes or
+count are over the limits: MarkItDown reads members whole, so a
+small-but-inflating archive would otherwise exhaust memory inside convert().
+Other formats are not size-checked.
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ import argparse
 import os
 import sys
 import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+import archive_limits  # noqa: E402  -- refuse an inflating archive before convert()
 
 from datetime import datetime
 from pathlib import Path
@@ -48,6 +55,9 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
         return False, f"not found: {src}"
     if src.is_dir():
         return False, f"skipped folder: {src.name}"
+    refused = archive_limits.refusal(src)
+    if refused:
+        return False, f"{src.name}: {refused}"
 
     out = _unique(dest_dir, src.stem)
     try:
