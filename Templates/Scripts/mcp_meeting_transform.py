@@ -356,7 +356,9 @@ def build_handoff(events: list[dict], user: dict, week: dict,
         try:
             meeting, new_contacts, mailboxes, admins = _build_meeting(
                 ev, user_email, tenant_domains, excluded_attendees, seen)
-        except (ValueError, TypeError, AttributeError) as e:
+        except Exception as e:  # noqa: BLE001 -- any one event, any failure
+            # (OverflowError too: a valid "9999-12-31T23:00" in a west-of-UTC
+            # zone leaves datetime's range on conversion.)
             ev_id = ev.get("id") if isinstance(ev, dict) else None
             label = repr(str(ev_id)[:40]) if ev_id is not None else f"#{i}"
             reason = f"{type(e).__name__}: {str(e)[:80]}"
