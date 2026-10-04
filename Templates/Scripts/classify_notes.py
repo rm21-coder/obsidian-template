@@ -580,8 +580,18 @@ def process_file(filepath: Path, client, dry_run: bool,
     if refused:
         # Not adjudicated and not written to: reported as an error, which is
         # also never tracked, so it is reported again every run until fixed.
+        # L0 still reads the body: an anchor in a clipping's frontmatter must
+        # not hide a credential from the detectors. The hit cannot be written
+        # into frontmatter we refused to read, so the report carries it.
+        hits = run_detectors(body)
+        to = ""
+        if hits:
+            to = max((h[1] for h in hits), key=lambda t: TIER_RANK[t])
+            rules = ",".join(sorted({h[0] for h in hits}))
+            refused += (f"; L0 detector hit ({rules}): {to} material in a note "
+                        "whose frontmatter cannot be written — fix by hand")
         return {"action": "error", "rel": str(rel), "title": filepath.stem,
-                "from": "(unread)", "to": "", "layer": "parse",
+                "from": "(unread)", "to": to, "layer": "parse",
                 "confidence": "", "rationale": refused}
     folder = rel.parts[0] if len(rel.parts) > 1 else "(root)"
     title = str(fm.get("title") or filepath.stem)

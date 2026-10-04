@@ -757,6 +757,28 @@ def test_a_yaml_alias_bomb_is_refused_not_adjudicated(vault: Path):
     assert C.parse_fm(_laughs(6)) == {}
 
 
+def test_a_refused_note_still_gets_the_detectors(vault: Path):
+    """An anchor in a clipping's frontmatter must not hide a credential in its
+    body from L0: the refusal names the detector hit, and nothing is written."""
+    p = vault / "Knowledge" / "Bomb.md"
+    # Assembled at run time so the secrets scanner does not flag this file;
+    # the header line is all the detector keys on.
+    header = "-----BEGIN OPENSSH " + "PRIVATE KEY-----"
+    p.write_text(f"---\n{_laughs(6)}\n---\n\n{header}\nnot-a-real-key\n",
+                 encoding="utf-8")
+    before = p.read_bytes()
+    client = FakeClient("confidential")
+    rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=False)
+    assert rec is not None and rec["action"] == "error"
+    assert rec["rationale"] == (
+        "frontmatter refused: YAML anchor or alias; L0 detector hit "
+        "(private-key): restricted material in a note whose frontmatter cannot "
+        "be written — fix by hand")
+    assert rec["to"] == "restricted"
+    assert client.calls == []
+    assert p.read_bytes() == before
+
+
 def test_oversized_frontmatter_is_refused(vault: Path):
     p = vault / "Knowledge" / "Big.md"
     p.write_text("---\ntitle: x\npad: " + "a" * (C.MAX_FRONTMATTER_CHARS + 1)
