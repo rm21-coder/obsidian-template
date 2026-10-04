@@ -267,16 +267,42 @@ def test_push_file_propagates_duplicate_content(rag, monkeypatch, tmp_path):
 # remove_from_collection — already-gone is success, real errors are not.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("code", [400, 404])
-def test_remove_treats_already_gone_as_success(rag, monkeypatch, code):
-    monkeypatch.setattr(rag.session, "post", lambda url, **kw: FakeResponse(code))
+# Open WebUI v0.11.3's ERROR_MESSAGES.NOT_FOUND, as /file/remove sends it.
+OWUI_NOT_FOUND = '{"detail":"We could not find what you\'re looking for :/"}'
+
+
+@pytest.mark.parametrize("code, body", [(400, OWUI_NOT_FOUND), (404, "")])
+def test_remove_treats_already_gone_as_success(rag, monkeypatch, code, body):
+    monkeypatch.setattr(rag.session, "post",
+                        lambda url, **kw: FakeResponse(code, body))
     rag.remove_from_collection("file-1")
 
 
-def test_remove_still_raises_on_a_real_error(rag, monkeypatch):
-    monkeypatch.setattr(rag.session, "post", lambda url, **kw: FakeResponse(500))
-    with pytest.raises(requests.HTTPError):
+@pytest.mark.parametrize("code, body", [
+    (500, ""),
+    (400, '{"detail":"[ERROR: Something went wrong]"}'),
+    (400, '{"detail":"You do not have permission to access this resource."}'),
+])
+def test_remove_still_raises_on_a_real_error(rag, monkeypatch, code, body):
+    monkeypatch.setattr(rag.session, "post",
+                        lambda url, **kw: FakeResponse(code, body))
+    with pytest.raises(requests.HTTPError, match=f"{code} from /file/remove"):
         rag.remove_from_collection("file-1")
+
+
+def test_delete_treats_404_as_gone(rag, monkeypatch):
+    monkeypatch.setattr(rag.session, "delete",
+                        lambda url, **kw: FakeResponse(404, OWUI_NOT_FOUND))
+    rag.delete_file("file-1")
+
+
+def test_delete_400_is_a_failure_not_gone(rag, monkeypatch):
+    """DELETE /files/{id} sends 400 "Error deleting files" when the delete
+    itself failed; reading that as gone dropped copies still indexed."""
+    monkeypatch.setattr(rag.session, "delete", lambda url, **kw: FakeResponse(
+        400, '{"detail":"[ERROR: Error deleting files]"}'))
+    with pytest.raises(requests.HTTPError, match="400 from /files/"):
+        rag.delete_file("file-1")
 
 
 @pytest.mark.parametrize("fm, excluded", [

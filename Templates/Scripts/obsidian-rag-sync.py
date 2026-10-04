@@ -412,22 +412,41 @@ def add_to_collection(file_id: str) -> None:
             f"{r.status_code} from /file/add: {r.text[:200]}", response=r)
 
 
+# Open WebUI's ERROR_MESSAGES.NOT_FOUND ("We could not find what you're looking
+# for :/"). /knowledge/{id}/file/remove answers a missing file, or one not in
+# the collection, with a 400 carrying this detail (v0.11.3,
+# routers/knowledge.py). It answers other refusals -- ACCESS_PROHIBITED -- with
+# a 400 too, and generic server faults surface as 400s elsewhere, so a bare 400
+# is NOT evidence the copy is gone. Matched without the apostrophe, which JSON
+# may or may not escape.
+_NOT_FOUND_DETAIL = "We could not find what"
+
+
 def remove_from_collection(file_id: str) -> None:
-    """Remove a file from the collection. 400/404 is treated as success (already gone)."""
+    """Remove a file from the collection. Already gone -- 404, or the 400 whose
+    body is Open WebUI's not-found message -- is success; any other 400 raises."""
     url = f"{WEBUI_URL}/api/v1/knowledge/{COLLECTION_ID}/file/remove"
     r = session.post(url, json={"file_id": file_id}, timeout=60)
-    if r.status_code in (400, 404):
+    if r.status_code == 404:
         return
-    r.raise_for_status()
+    if r.status_code == 400 and _NOT_FOUND_DETAIL in (r.text or ""):
+        return
+    if not r.ok:
+        raise requests.HTTPError(
+            f"{r.status_code} from /file/remove: {(r.text or '')[:200]}", response=r)
 
 
 def delete_file(file_id: str) -> None:
-    """Delete a file. 400/404 is treated as success (already gone)."""
+    """Delete a file. 404 is success (already gone). DELETE /files/{id} answers
+    a missing file with 404 and uses 400 for a failed delete ("Error deleting
+    files"), so a 400 here is a failure, never "gone"."""
     url = f"{WEBUI_URL}/api/v1/files/{file_id}"
     r = session.delete(url, timeout=60)
-    if r.status_code in (400, 404):
+    if r.status_code == 404:
         return
-    r.raise_for_status()
+    if not r.ok:
+        raise requests.HTTPError(
+            f"{r.status_code} from /files/{{id}}: {(r.text or '')[:200]}", response=r)
 
 
 def quarantine_blocks(entry: dict | None, current_hash: str) -> bool:
@@ -896,8 +915,10 @@ def main() -> int:
             summary["new_quarantine_entries"].append(path)
 
     def purge(file_id: str) -> list[str]:
-        """Remove one file from the collection and the file store. Returns the
-        failures; already-gone (400/404) counts as success in both helpers."""
+        """Remove one file from the collection and the file store. Both calls
+        are always attempted; returns the failures. Already-gone counts as
+        success (see the helpers), so a copy is cleared only once the file
+        delete has succeeded or the server says the file no longer exists."""
         failures: list[str] = []
         try:
             remove_from_collection(file_id)
@@ -999,11 +1020,12 @@ def main() -> int:
             summary["update_failures"].append((path, str(exc)[:200]))
             continue
         if old_id:
-            try:
-                remove_from_collection(old_id)
-                delete_file(old_id)
-            except Exception as exc:
-                log.warning(f"could not purge old {path}: {exc}")
+            # The pre-edit copy may hold text the edit removed, so a failed
+            # purge goes on the retry list rather than being forgotten when
+            # old_id is overwritten below.
+            failures = purge(old_id)
+            if failures:
+                purge_failed(old_id, path, "superseded copy", failures)
         previous[path] = {**indexable[path], "file_id": new_id}
         quarantine.pop(path, None)
         log.info(f"updated: {path}")

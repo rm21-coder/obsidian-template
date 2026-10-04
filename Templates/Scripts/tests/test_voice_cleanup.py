@@ -521,3 +521,68 @@ def test_once_mode_success_clears_a_prior_failure_count(
                         lambda f, client, cfg: f.unlink())
     assert run_once(monkeypatch) == 0
     assert not (inbox / voice_cleanup.ATTEMPTS_FILE).exists()
+
+
+def test_quarantine_never_overwrites_an_earlier_failed_drop(
+        endpoint, monkeypatch, at_info, inbox):
+    """rename() clobbers on POSIX: a second bad drop with the same name
+    used to destroy the first dictation set aside."""
+    (inbox / "note.txt.failed").write_text("first dictation", encoding="utf-8")
+    (inbox / "note.txt").write_text("second dictation", encoding="utf-8")
+    monkeypatch.setattr(voice_cleanup, "process_file",
+                        explode("404 model not found"))
+
+    for _ in range(voice_cleanup.MAX_FILE_ATTEMPTS):
+        run_once(monkeypatch)
+
+    assert (inbox / "note.txt.failed").read_text(encoding="utf-8") == "first dictation"
+    assert (inbox / "note.txt.2.failed").read_text(encoding="utf-8") == "second dictation"
+    assert messages(at_info, "Quarantined after 3 attempts: note.txt.2.failed")
+
+
+def test_a_failing_set_aside_neither_escapes_nor_loses_the_count(
+        endpoint, monkeypatch, at_info, inbox):
+    """On Windows rename raises when the target exists. Raised inside the
+    except block, it escaped before the counts were saved, so every --once
+    run retried the file from zero and failed the same way, forever."""
+    calls = {"n": 0}
+
+    def always_fails(*a, **kw):
+        calls["n"] += 1
+        raise RuntimeError("404 model not found")
+
+    real_rename = Path.rename
+
+    def refuse(self, target):
+        raise FileExistsError(183, "Cannot create a file when that file already exists")
+
+    monkeypatch.setattr(voice_cleanup, "process_file", always_fails)
+    monkeypatch.setattr(Path, "rename", refuse)
+    drop = inbox / "note.txt"
+    drop.write_text("raw", encoding="utf-8")
+
+    for _ in range(voice_cleanup.MAX_FILE_ATTEMPTS + 1):
+        assert run_once(monkeypatch) == 1
+    assert drop.exists()
+    assert messages(at_info, "Could not set aside note.txt after 3 attempts; will retry")
+    assert calls["n"] == voice_cleanup.MAX_FILE_ATTEMPTS, (
+        "a file due to be set aside should not cost another API call")
+
+    monkeypatch.setattr(Path, "rename", real_rename)
+    run_once(monkeypatch)
+    assert not drop.exists()
+    assert (inbox / "note.txt.failed").read_text(encoding="utf-8") == "raw"
+
+
+def test_counts_for_files_no_longer_in_the_inbox_are_pruned(
+        endpoint, monkeypatch, at_info, inbox):
+    import json
+    (inbox / voice_cleanup.ATTEMPTS_FILE).write_text(
+        json.dumps({"gone.txt": 2}), encoding="utf-8")
+    (inbox / "note.txt").write_text("raw", encoding="utf-8")
+    monkeypatch.setattr(voice_cleanup, "process_file", explode("503 upstream"))
+
+    run_once(monkeypatch)
+
+    assert json.loads((inbox / voice_cleanup.ATTEMPTS_FILE).read_text(
+        encoding="utf-8")) == {"note.txt": 1}

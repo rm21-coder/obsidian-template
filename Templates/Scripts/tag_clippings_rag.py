@@ -142,6 +142,36 @@ def parse_taxonomy(path: Path) -> list[str]:
     return tags
 
 
+class AliasRefused(yaml.YAMLError):
+    """Frontmatter used a YAML anchor or alias."""
+
+
+class _NoAliasLoader(yaml.SafeLoader):
+    """SafeLoader that refuses anchors and aliases outright.
+
+    PyYAML keeps an alias as a shared reference, so loading a "billion
+    laughs" block is instant -- but anything that walks the result (str() of
+    a tag list, yaml.dump on rewrite) expands it, ~10x per level, into hours
+    of CPU or an OOM from a few hundred bytes. No size cap on the input bounds
+    that. Notes never need anchors, so a block that uses one is not parsed."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise AliasRefused("YAML alias in frontmatter")
+        if getattr(self.peek_event(), "anchor", None) is not None:
+            raise AliasRefused("YAML anchor in frontmatter")
+        return super().compose_node(parent, index)
+
+
+def _load_no_alias(text: str):
+    """yaml.safe_load, minus anchors and aliases (what yaml.load does inside)."""
+    loader = _NoAliasLoader(text)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 def parse_frontmatter(text: str):
     m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)", text, re.DOTALL)
     if not m:
@@ -149,7 +179,10 @@ def parse_frontmatter(text: str):
     if len(m.group(1)) > 64 * 1024:     # bound what a converted document can feed PyYAML
         return None, text
     try:
-        fm = yaml.safe_load(m.group(1)) or {}
+        fm = _load_no_alias(m.group(1)) or {}
+    except AliasRefused as exc:
+        print(f"  ! frontmatter not parsed ({exc}); note skipped", file=sys.stderr)
+        return None, text
     except (yaml.YAMLError, RecursionError, ValueError):
         # Deep nesting raises RecursionError, which is not a YAMLError.
         return None, text
