@@ -29,7 +29,7 @@ Naming the venv interpreter explicitly, as above, is still the clearest way to i
 1. Fetches the video's metadata and caption tracks via `yt-dlp` (no video/audio download — captions only).
 2. Picks the best available English track: manual captions first, then auto-generated, preferring plain `en` over `en-*` variants. The track is fetched through `url_safety.safe_fetch`, like every other untrusted URL in the vault: each redirect hop is re-checked against loopback/private/link-local addresses, the connection goes to the address that was checked, and the body is capped at 5 MB.
 3. Sends the transcript through [`llm_endpoint.py`](../Templates/Scripts/llm_endpoint.py) (`claude-sonnet-5` by default) with a fixed prompt asking for a short overview, a "Key takeaways" bullet list, a "Notable points" section, and 3–7 suggested topic tags. The call is metered in `usage_log`, so it shows up in the morning dashboard's cost view alongside the tagger and classifier.
-4. Writes a markdown note with frontmatter (`title`, `source`, `author`, `published`, `duration`, `description`, `classification: public`, `tags`) into `Clippings/YouTube/`. The `tags` list always includes `youtube` plus whatever the model suggested.
+4. Writes a markdown note with frontmatter (`title`, `source`, `author`, `published`, `duration`, `description`, `classification: internal-use-only`, `tags`) into `Clippings/YouTube/`. The `tags` list always includes `youtube` plus whatever the model suggested.
 5. Skips videos that already have a note in the output directory — safe to re-run over a list without duplicating work.
 
 ### Playlists
