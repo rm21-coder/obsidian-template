@@ -77,6 +77,11 @@ cov_args=(
     "--cov=integrity_monitor"
     "--cov=plugin_integrity_check"
     "--cov=youtube_summarize"
+    "--cov=templater_guard"
+    "--cov=classification_tier"
+    "--cov=disclosure_check"
+    "--cov=meeting_pull"
+    "--cov=security_common"
     "--cov-report=term-missing"
     "--cov-report=html:$HERE/coverage_html"
 )
