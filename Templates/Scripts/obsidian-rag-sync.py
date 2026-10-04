@@ -962,6 +962,7 @@ def main() -> int:
             "kind": kind,
             "attempts": prior.get("attempts", 0) + 1,
             "first_failed": prior.get("first_failed", datetime.now().isoformat()),
+            "last_attempt": datetime.now().isoformat(),
             "last_error": detail[:200],
         }
         errors += 1
@@ -972,8 +973,15 @@ def main() -> int:
 
     # Retry copies an earlier run could not purge, before anything else --
     # at most MAX_PURGE_RETRIES_PER_RUN of them, oldest first.
-    queue = sorted(pending_purge, key=lambda fid: (
-        str(pending_purge[fid].get("first_failed", "")), fid))
+    # Least recently attempted first (ties by first_failed), so a backlog of
+    # permanent failures rotates instead of starving newer entries: every
+    # entry is retried at least once every ceil(N / cap) runs.
+    def retry_order(fid: str) -> tuple[str, str, str]:
+        e = pending_purge[fid]
+        first = str(e.get("first_failed", ""))
+        return (str(e.get("last_attempt") or first), first, fid)
+
+    queue = sorted(pending_purge, key=retry_order)
     deferred = queue[MAX_PURGE_RETRIES_PER_RUN:]
     for file_id in deferred:
         entry = pending_purge[file_id]
