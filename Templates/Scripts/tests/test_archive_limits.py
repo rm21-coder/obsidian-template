@@ -83,6 +83,29 @@ def test_nested_bomb_is_refused(tmp_path):
     assert msg.startswith("refused: archive member 'big.bin' inflates to")
 
 
+def test_junk_prefixed_nested_bomb_is_refused(tmp_path):
+    """zipfile finds a zip from its END, so leading bytes do not stop it
+    opening -- and MarkItDown's ZipConverter recursing into it. A check for
+    "PK\\x03\\x04" at offset 0 let this through (1.6 GB RSS in review)."""
+    inner = _declare_size(_zip({"big.bin": b"q" * 64}), "big.bin", 0xF0000000)
+    p = tmp_path / "outer.zip"
+    p.write_bytes(_zip({"payload.zip": b"JUNKJUNK" + inner}))
+    msg = archive_limits.refusal(p)
+    assert msg is not None
+    assert msg.startswith(
+        "refused: archive member 'big.bin' inflates to 4,026,531,840 bytes")
+
+
+def test_junk_prefixed_nesting_counts_toward_depth(tmp_path):
+    z = _zip({"leaf.txt": b"hi"})
+    for k in range(3):
+        z = _zip({f"level{k}.bin": b"JUNK" + z})
+    p = tmp_path / "deep.zip"
+    p.write_bytes(z)
+    assert archive_limits.refusal(p) == \
+        "refused: archive archives nested more than 2 deep; not converted"
+
+
 def test_nesting_depth_is_refused(tmp_path):
     z = _zip({"leaf.txt": b"hi"})
     for k in range(3):
