@@ -66,8 +66,31 @@ EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})\b")
 
 
 def run_git(*args: str) -> str:
-    return subprocess.run(("git",) + args, capture_output=True, text=True,
-                          check=False).stdout
+    # core.quotePath=false and explicit UTF-8: by default git C-quotes any
+    # path with a non-ASCII byte ("People/Jos\303\251.md"), and the quoted
+    # string names no file -- a note named after an accented name was
+    # dropped from both scans (review, 2026-10-04).
+    return subprocess.run(("git", "-c", "core.quotePath=false") + args,
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="surrogateescape", check=False).stdout
+
+
+def _diff_path(header: str) -> str | None:
+    """The path in a `+++ ` diff header, or None for /dev/null. Git still
+    C-quotes a path holding a tab, newline, quote or backslash."""
+    rest = header[4:]
+    if rest == "/dev/null":
+        return None
+    if rest.startswith('"') and rest.endswith('"'):
+        rest = (rest[1:-1].encode("latin-1", "backslashreplace")
+                .decode("unicode_escape").encode("latin-1").decode("utf-8", "replace"))
+    return rest[2:] if rest.startswith("b/") else rest
+
+
+def _name_lines(paths: list[str]) -> list[tuple[str, int, str]]:
+    """Each path as a line of its own (line 0): a file NAMED after a real
+    person publishes the name as surely as its contents would."""
+    return [(p, 0, p) for p in paths if not skip_path(p)]
 
 
 def load_allowed_domains() -> set[str]:
@@ -131,11 +154,13 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
     """
     diff = run_git("diff", "--cached", "--unified=0", "--no-color",
                    "--diff-filter=ACMR")
-    out: list[tuple[str, int, str]] = []
+    names = [p for p in run_git("diff", "--cached", "--name-only", "-z",
+                                "--diff-filter=ACMR").split("\0") if p]
+    out: list[tuple[str, int, str]] = _name_lines(names)
     path, lineno = None, 0
     for line in diff.splitlines():
-        if line.startswith("+++ b/"):
-            path = line[6:]
+        if line.startswith("+++ "):
+            path = _diff_path(line)
             continue
         if line.startswith("@@"):
             m = re.search(r"\+(\d+)", line)
@@ -151,10 +176,10 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
 def worktree_lines(paths: list[str] | None = None) -> list[tuple[str, int, str]]:
     """Every line of tracked and untracked-but-not-ignored files."""
     if paths is None:
-        listing = run_git("ls-files", "--cached", "--others",
+        listing = run_git("ls-files", "-z", "--cached", "--others",
                           "--exclude-standard")
-        paths = [p for p in listing.splitlines() if p]
-    out: list[tuple[str, int, str]] = []
+        paths = [p for p in listing.split("\0") if p]
+    out: list[tuple[str, int, str]] = _name_lines(paths)
     for p in paths:
         if skip_path(p):
             continue

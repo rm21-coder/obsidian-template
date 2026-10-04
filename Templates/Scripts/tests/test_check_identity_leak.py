@@ -356,3 +356,51 @@ class TestRepoIsClean:
             (sys.executable, str(SCANNER), "--worktree", "--quiet"),
             cwd=repo_root, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
+
+
+class TestNonAsciiPaths:
+    """Accented names are the ordinary case for People notes. Git C-quotes a
+    non-ASCII path by default, and the quoted header matched neither parser,
+    so such a file's content was dropped or credited to the previous file
+    (review, 2026-10-04)."""
+
+    @pytest.fixture(autouse=True)
+    def _quote(self, repo):
+        subprocess.run(("git", "config", "core.quotePath", "true"), cwd=repo,
+                       check=True, capture_output=True)
+
+    def test_staged_content_of_an_accented_file_is_scanned(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        stage(repo, "José.md", 'HOST = "acme-tenant.edu"\n')
+        hits = m.scan(m.staged_added_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert [(h[0], h[1]) for h in hits] == [("José.md", 1)]
+
+    def test_staged_lines_are_credited_to_their_own_file(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        stage(repo, "a.md", "clean\n")
+        stage(repo, "Zoë.md", 'HOST = "acme-tenant.edu"\n')
+        hits = m.scan(m.staged_added_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert [h[0] for h in hits] == ["Zoë.md"]
+
+    def test_a_file_named_after_a_person_is_flagged(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        stage(repo, "Ackerman, Dana.md", "nothing here\n")
+        hits = m.scan(m.staged_added_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert [(h[0], h[1], h[2]) for h in hits] == [
+            ("Ackerman, Dana.md", 0, "deny-list: Ackerman, Dana")]
+
+    def test_worktree_scan_reads_accented_files(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        (repo / "Renée.md").write_text('HOST = "acme-tenant.edu"\n', encoding="utf-8")
+        hits = m.scan(m.worktree_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert [(h[0], h[1]) for h in hits] == [("Renée.md", 1)]
+
+    def test_a_path_git_still_quotes_is_unquoted(self, monkeypatch, lib) -> None:
+        m = load_module(monkeypatch, lib)
+        assert m._diff_path('+++ "b/tab\\there.md"') == "tab\there.md"
+        assert m._diff_path('+++ "b/Jos\\303\\251.md"') == "José.md"
+        assert m._diff_path("+++ /dev/null") is None
