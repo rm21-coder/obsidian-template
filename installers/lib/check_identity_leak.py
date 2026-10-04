@@ -202,6 +202,33 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
     return out
 
 
+def _raw_object(kind: str, sha: str) -> str:
+    """A raw git object as text. Tag objects are not re-encoded the way
+    `git log` re-encodes commit messages, so a Latin-1 message decoded as
+    UTF-8 would hide an accented name from the deny-list (review round 5)."""
+    raw = subprocess.run(("git", "cat-file", kind, sha), capture_output=True,
+                         check=False).stdout
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
+def _scan_tag_text(text: str, label: str,
+                   out: list[tuple[str, int, str]]) -> str | None:
+    """Queue a tag object's name and message for scanning; return the object
+    it points at. The tagger line is the maintainer's own identity, as the
+    author and committer fields are, and is not scanned."""
+    head, _, body = text.partition("\n\n")
+    name = re.search(r"(?m)^tag (.+)$", head)
+    if name:
+        out.append((f"{label} name", 1, name.group(1)))
+    for i, line in enumerate(body.splitlines(), 1):
+        out.append((f"{label} message", i, line))
+    target = re.search(r"(?m)^object ([0-9a-f]+)$", head)
+    return target.group(1) if target else None
+
+
 class RangeError(RuntimeError):
     """A pushed range git could not list."""
 
@@ -216,26 +243,27 @@ def range_added_lines(rev_range: str) -> list[tuple[str, int, str]]:
     if listing.returncode != 0:
         # Fail closed: an unlistable range is not a clean one.
         raise RangeError(listing.stderr.strip() or f"git rev-list {rev_range} failed")
-    # Annotated tags being pushed: their messages are published too -- every
-    # tag in a tag-on-tag chain, and the new side of an updated tag ref, whose
-    # range lists no commits at all (review round 4, 2026-10-04).
-    tips = []
+    # Annotated tags being pushed: their names and messages are published too
+    # -- every tag in a tag-on-tag chain, and the new side of an updated tag
+    # ref, whose range lists no commits at all (review rounds 4-5, 2026-10-04).
+    tips: list[str] = []
     for word in rev_range.split():
-        if word.startswith("-"):
+        if word.startswith(("-", "^")):
             continue
-        tips.append(word.split("..")[-1] if ".." in word else word)
+        if "..." in word:
+            tips += [side or "HEAD" for side in word.split("...", 1)]
+        elif ".." in word:
+            tips.append(word.split("..", 1)[1] or "HEAD")
+        else:
+            tips.append(word)
     for tip in tips:
         obj, seen = tip, set()
         while obj not in seen and run_git("cat-file", "-t", obj).strip() == "tag":
             seen.add(obj)
-            raw = run_git("cat-file", "tag", obj)
-            head, _, body = raw.partition("\n\n")
-            for i, line in enumerate(body.splitlines(), 1):
-                out.append((f"tag {obj[:9]} message", i, line))
-            target = re.search(r"(?m)^object ([0-9a-f]+)$", head)
+            target = _scan_tag_text(_raw_object("tag", obj), f"tag {obj[:9]}", out)
             if not target:
                 break
-            obj = target.group(1)
+            obj = target
     for commit in listing.stdout.split():
         # The commit message is published with the commit (review round 3,
         # 2026-10-04). Author and committer fields are not scanned: they are
@@ -243,6 +271,14 @@ def range_added_lines(rev_range: str) -> list[tuple[str, int, str]]:
         message = run_git("log", "-1", "--format=%B", commit)
         for i, line in enumerate(message.splitlines(), 1):
             out.append((f"commit {commit[:9]} message", i, line))
+        # Merging a signed tag copies the whole tag object into the merge
+        # commit's `mergetag` header; %B does not include it (review round 5).
+        headers = _raw_object("commit", commit).partition("\n\n")[0]
+        for n, block in enumerate(re.findall(r"(?m)^mergetag (.*\n(?: .*\n?)*)",
+                                             headers + "\n"), 1):
+            embedded = "\n".join(l[1:] if l.startswith(" ") else l
+                                  for l in block.splitlines())
+            _scan_tag_text(embedded, f"commit {commit[:9]} mergetag {n}", out)
         # -m / --diff-merges=separate: a merge's own changes, per parent.
         names = [p for p in dict.fromkeys(run_git(
             "diff-tree", "-m", "--no-commit-id", "-r", "-z", "--root",

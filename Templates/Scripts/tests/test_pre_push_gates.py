@@ -123,3 +123,50 @@ def test_an_updated_tag_message_is_scanned(repo: Path) -> None:
     proc = _push(repo, _git(repo, "rev-parse", "v2"), old, lref="refs/tags/v2")
     assert proc.returncode == 1
     assert f"real-looking address: frank@{REAL}" in proc.stderr
+
+
+def _merge_commit_with_mergetag(repo: Path, tag_message: str) -> str:
+    """A merge whose `mergetag` header embeds a tag object, as merging a signed
+    tag writes. Built by hand so the test needs no GPG key."""
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "Knowledge" / "side.md").write_text(PUBLIC, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "side", "--no-verify")
+    side = _git(repo, "rev-parse", "HEAD")
+    tree = _git(repo, "rev-parse", "HEAD^{tree}")
+    who = "T <t@example.com> 1700000000 +0000"
+    tag = (f"object {side}\ntype commit\ntag v9\ntagger {who}\n\n{tag_message}\n")
+    embedded = "\n ".join(tag.rstrip("\n").split("\n"))
+    body = (f"tree {tree}\nparent {base}\nparent {side}\nauthor {who}\n"
+            f"committer {who}\nmergetag {embedded}\n\nclean merge\n")
+    return subprocess.run(["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+                          cwd=repo, input=body, capture_output=True, text=True,
+                          check=True).stdout.strip(), base
+
+
+def test_a_tag_message_embedded_in_a_merge_is_scanned(repo: Path) -> None:
+    merge, base = _merge_commit_with_mergetag(repo, f"signed off by gina@{REAL}")
+    proc = _push(repo, merge, base)
+    assert proc.returncode == 1
+    assert f"mergetag 1 message:1: real-looking address: gina@{REAL}" in proc.stderr
+
+
+def test_a_latin1_tag_message_is_scanned(repo: Path) -> None:
+    (repo / "installers" / "lib" / "identity-denylist.local").write_text(
+        "Renée Fictional\n", encoding="utf-8")
+    msg = repo.parent / "msg"
+    msg.write_bytes("cut for Renée Fictional\n".encode("latin-1"))
+    _git(repo, "-c", "i18n.commitEncoding=latin-1", "tag", "-a", "v3", "-F", str(msg))
+    proc = _push(repo, _git(repo, "rev-parse", "v3"), lref="refs/tags/v3")
+    assert proc.returncode == 1
+    assert "Renée Fictional" in proc.stderr
+
+
+def test_a_tag_name_is_scanned(repo: Path) -> None:
+    (repo / "installers" / "lib" / "identity-denylist.local").write_text(
+        "Fictionalname\n", encoding="utf-8")
+    _git(repo, "tag", "-a", "Fictionalname-v1", "-m", "plain release")
+    proc = _push(repo, _git(repo, "rev-parse", "Fictionalname-v1"),
+                 lref="refs/tags/Fictionalname-v1")
+    assert proc.returncode == 1
+    assert "name:1: deny-list: Fictionalname" in proc.stderr
