@@ -418,6 +418,8 @@ def scan_agent_config(vault: Path, home: Path) -> dict[str, dict]:
              "home:.claude/settings.local.json": (home / ".claude" / "settings.local.json", False),
              "vault:.claude/settings.json": (vault / ".claude" / "settings.json", False),
              "vault:.claude/settings.local.json": (vault / ".claude" / "settings.local.json", False),
+             "scripts:.claude/settings.json": (vault / "Templates" / "Scripts" / ".claude" / "settings.json", False),
+             "scripts:.claude/settings.local.json": (vault / "Templates" / "Scripts" / ".claude" / "settings.local.json", False),
              "home:.claude.json#mcpServers": (home / ".claude.json", True)}
     for key, (path, mcp_only) in keyed.items():
         entry = _settings_digest(path, mcp_only=mcp_only)

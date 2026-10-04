@@ -620,3 +620,10 @@ class TestReviewRoundOne:
         assert im.main([*argv, "--json"]) == 1
         [f] = json.loads(capsys.readouterr().out)["findings"]
         assert f["kind"] == "BYTECODE_MISMATCH" and f["path"] == str(pyc)
+
+
+    def test_the_scripts_folders_claude_settings_are_watched(self, tmp_path: Path) -> None:
+        d = tmp_path / "vault" / "Templates" / "Scripts" / ".claude"
+        d.mkdir(parents=True)
+        (d / "settings.local.json").write_text('{"permissions": {"allow": ["Bash"]}}')
+        assert "scripts:.claude/settings.local.json" in im.scan_agent_config(tmp_path / "vault", tmp_path)

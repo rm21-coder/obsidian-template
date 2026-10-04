@@ -73,6 +73,13 @@ class TestTheSessionHoldsOnlyCalendarTools:
                 build({**CONFIG, key: value})
             assert f"ERROR: config {key!r} must be a single tool-name part" in capsys.readouterr().out
 
+    def test_a_denied_connector_tool_cannot_be_named_in_config(
+            self, capsys: pytest.CaptureFixture) -> None:
+        denied = sorted(mp.OTHER_M365_TOOLS)[0]
+        with pytest.raises(SystemExit):
+            mp.allowed_tools({**CONFIG, "search_tool": denied})
+        assert "a connector tool this session is denied" in capsys.readouterr().out
+
     def test_session_is_restricted_and_never_prompts(self) -> None:
         """--restricted confines file tools to an empty working directory;
         dontAsk refuses anything not pre-approved, including tools a future

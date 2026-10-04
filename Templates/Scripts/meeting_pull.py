@@ -396,6 +396,8 @@ def tool_name(config, key, default):
     if not isinstance(value, str) or not _TOOL_NAME.fullmatch(value):
         die("config %r must be a single tool-name part (letters, digits, _ and -), not %r"
             % (key, value))
+    if key != "mcp_prefix" and value in OTHER_M365_TOOLS:
+        die("config %r names %r, a connector tool this session is denied" % (key, value))
     return value
 
 
