@@ -56,10 +56,13 @@ class FakeResponse:
 
 class FakeWebUI:
     def __init__(self, collection_id: str, *, pending_polls: int = 0,
-                 fail_adds: bool = False):
+                 fail_adds: bool = False, fail_purges: bool = False):
         self.collection_id = collection_id
         self.pending_polls = pending_polls
         self.fail_adds = fail_adds
+        # Models the container being down for removals: the transport
+        # raises, as requests does when nothing is listening.
+        self.fail_purges = fail_purges
         self.files: dict[str, dict] = {}      # file_id -> {content, polls}
         self.collection: set[str] = set()     # file_ids in the collection
         self._next = 0
@@ -107,6 +110,9 @@ class FakeWebUI:
             self.collection.add(fid)
             return FakeResponse(200)
         if url.endswith("/file/remove"):
+            if self.fail_purges:
+                import requests
+                raise requests.ConnectionError("injected: webui down")
             fid = kw["json"]["file_id"]
             if fid not in self.collection:
                 return FakeResponse(400, "not in collection")
@@ -124,6 +130,9 @@ class FakeWebUI:
 
     def delete(self, url, **kw):
         self.calls.append(f"DELETE {url}")
+        if self.fail_purges:
+            import requests
+            raise requests.ConnectionError("injected: webui down")
         fid = url.rsplit("/", 1)[-1]
         self.collection.discard(fid)
         self.files.pop(fid, None)
@@ -409,3 +418,75 @@ def test_unknown_classification_is_blocked_fail_secure(sync):
 
     assert sync.run(server) == 0
     assert server.collection == set()
+
+
+# ---------------------------------------------------------------------------
+# A classification deindex whose purge fails must not be forgotten (#320).
+# ---------------------------------------------------------------------------
+
+RESTRICTED = "---\nclassification: restricted\n---\n" + BODY
+
+
+def _latest_report(sync) -> str:
+    reports = sorted((sync.vault / "Creations").glob("RAG-Sync-*.md"))
+    assert reports, "no run report written"
+    return reports[-1].read_text()
+
+
+def test_failed_deindex_keeps_the_copy_pending_and_reports_it(sync):
+    """Open WebUI down while a note is raised to restricted. The old code
+    popped the state entry anyway and reported the note as deindexed, so the
+    restricted copy stayed searchable and no later run tried again."""
+    sync.note("Meetings/raised.md", body=RESTRICTED)
+    server = FakeWebUI("test-collection")
+    fid = server.seed("the note while it was still internal")
+    sync.state({"Meetings/raised.md": {"hash": "h", "file_id": fid}})
+
+    server.fail_purges = True
+    rc = sync.run(server)
+
+    assert rc == 2, "a failed purge must be reported as an error"
+    pending = sync.read_state()["pending_purge"]
+    assert pending[fid]["path"] == "Meetings/raised.md"
+    assert "injected: webui down" in pending[fid]["last_error"]
+    report = _latest_report(sync)
+    assert "sync_status: FAIL" in report
+    assert "### Purge failures (still in the index, retried next run)" in report
+    assert "still in the index, purge pending" in report
+    deindexed = report.split("### Deindexed (classification)")[1].split("##")[0]
+    assert "Meetings/raised.md" not in deindexed, (
+        "a note whose purge failed was reported as deindexed")
+
+
+def test_pending_purge_is_retried_until_it_succeeds(sync):
+    sync.note("Meetings/raised.md", body=RESTRICTED)
+    server = FakeWebUI("test-collection")
+    fid = server.seed("the note while it was still internal")
+    sync.state({"Meetings/raised.md": {"hash": "h", "file_id": fid}})
+
+    server.fail_purges = True
+    assert sync.run(server) == 2
+    assert sync.run(server) == 2, "a still-failing purge stays an error"
+    assert sync.read_state()["pending_purge"][fid]["attempts"] == 2
+    assert fid in server.collection
+
+    server.fail_purges = False
+    assert sync.run(server) == 0
+    assert fid not in server.collection, "restricted copy left in the index"
+    assert sync.read_state()["pending_purge"] == {}
+    assert "### Pending purges completed" in _latest_report(sync)
+
+
+def test_successful_deindex_is_reported_and_leaves_nothing_pending(sync):
+    sync.note("Meetings/raised.md", body=RESTRICTED)
+    server = FakeWebUI("test-collection")
+    fid = server.seed("the note while it was still internal")
+    sync.state({"Meetings/raised.md": {"hash": "h", "file_id": fid}})
+
+    assert sync.run(server) == 0
+    assert fid not in server.collection
+    assert sync.read_state()["pending_purge"] == {}
+    report = _latest_report(sync)
+    assert "sync_status: PASS" in report
+    deindexed = report.split("### Deindexed (classification)")[1].split("##")[0]
+    assert "Meetings/raised.md" in deindexed
