@@ -144,18 +144,37 @@ CAPTION_MAX_BYTES = 5 * 1024 * 1024
 
 # yt-dlp makes its own requests, outside url_safety, so it is held to YouTube:
 # the operator's URL and every playlist entry must name one of these hosts,
-# and yt-dlp loads only its YouTube extractors (--use-extractors matches each
-# name exactly). With the default set, the generic extractor follows a page's
-# <video><source> or a 302 anywhere, 127.0.0.1 included.
+# and yt-dlp loads only its YouTube extractors. --use-extractors takes
+# regexes and fullmatches each against the extractor names
+# (case-insensitively), so "youtube" is the video extractor alone. With the
+# default set, the generic extractor follows a page's <video><source> or a
+# 302 anywhere, 127.0.0.1 included.
+#
+# Checked offline against yt-dlp 2026.03.17's own suitable():
+#   watch?v=X, youtu.be/X, shorts/X, m./music. hosts   -> youtube
+#   watch?v=X&list=Y, playlist?list=Y, @channel/videos -> youtube:tab
+#   youtu.be/X?list=Y                                  -> YoutubeYtBe
+# So a single video goes without list=/index= (see youtube_url), and the
+# playlist set includes the youtu.be redirect. That extractor has no IE_NAME
+# and is listed as "YoutubeYtBe"; "youtube:?ytbe" matches that and a future
+# "youtube:ytbe" alike, and an unmatched pattern is ignored, not an error.
 YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com",
                            "music.youtube.com", "youtu.be"})
 VIDEO_EXTRACTORS = "youtube"
-PLAYLIST_EXTRACTORS = "youtube,youtube:tab,youtube:playlist"
+PLAYLIST_EXTRACTORS = "youtube,youtube:tab,youtube:playlist,youtube:?ytbe"
 YTDLP_TIMEOUT_SECONDS = 600
+# Query keys that make a video URL a playlist URL to yt-dlp: YouTube's own
+# share link from inside a playlist is watch?v=X&list=Y.
+_PLAYLIST_KEYS = ("list", "index")
 
 
-def youtube_url(url: object) -> tuple[str | None, str]:
+def youtube_url(url: object, *, single: bool = False) -> tuple[str | None, str]:
     """(url fit to hand to yt-dlp, "") or (None, reason).
+
+    The scheme and host are lowercased: yt-dlp's URL patterns are
+    case-sensitive, so "WWW.YouTube.com" passed this check and then matched
+    no extractor. With single=True the list=/index= parameters are dropped,
+    so a video shared from inside a playlist is still a video.
 
     The fragment is dropped: yt-dlp reads "#__youtubedl_smuggle=..." from a
     URL's fragment as extractor options, and a feed entry could carry one.
@@ -181,8 +200,11 @@ def youtube_url(url: object) -> tuple[str | None, str]:
         return None, "explicit port in URL"
     if host not in YOUTUBE_HOSTS:
         return None, f"not a YouTube host: {host!r}"
-    return urlunsplit((parts.scheme, parts.netloc, parts.path,
-                       parts.query, "")), ""
+    query = parts.query
+    if single:
+        query = "&".join(kv for kv in query.split("&")
+                         if kv and kv.split("=", 1)[0] not in _PLAYLIST_KEYS)
+    return urlunsplit((parts.scheme.lower(), host, parts.path, query, "")), ""
 
 
 # ---------- Logging ----------------------------------------------------------
@@ -205,10 +227,25 @@ def run_ytdlp(args: list[str]) -> dict | list[dict]:
     """Run yt-dlp -J and return parsed JSON. Raises on failure."""
     # Invoke via the interpreter's module so it works when yt-dlp is a pip dep
     # in the venv but its console script isn't on PATH (common on Windows).
-    cmd = [sys.executable, "-m", "yt_dlp", "-J", "--no-warnings", *args]
+    #
+    # Nothing from the working directory may configure or extend it -- this
+    # is often run from ~/Downloads, where anything can land:
+    #   -I                 isolated mode: `-m` would otherwise put the cwd
+    #                      first on sys.path, so a yt_dlp.py or a
+    #                      yt_dlp_plugins/ package there would be imported.
+    #   --ignore-config    no yt-dlp.conf from the cwd ("Home" config) or the
+    #                      user/system dirs: one could add --use-extractors
+    #                      generic, --proxy, --netrc-cmd or --exec.
+    #   --no-plugin-dirs   no plugin code from the config dirs or sys.path;
+    #                      YTDLP_NO_PLUGINS says the same to older releases.
+    # (--no-config-locations is already the default, and no
+    # --config-locations is passed.)
+    cmd = [sys.executable, "-I", "-m", "yt_dlp", "--ignore-config",
+           "--no-plugin-dirs", "-J", "--no-warnings", *args]
+    env = {**os.environ, "YTDLP_NO_PLUGINS": "1"}
     try:
         proc = subprocess.run(cmd, check=False, capture_output=True, text=True,
-                              timeout=YTDLP_TIMEOUT_SECONDS)
+                              timeout=YTDLP_TIMEOUT_SECONDS, env=env)
     except subprocess.TimeoutExpired:
         raise RuntimeError(
             f"yt-dlp timed out after {YTDLP_TIMEOUT_SECONDS}s") from None
@@ -234,7 +271,7 @@ def enumerate_playlist(url: str) -> list[str]:
             if not isinstance(e, dict):
                 continue
             raw = e.get("url") or f"https://www.youtube.com/watch?v={e.get('id')}"
-            u, reason = youtube_url(raw)
+            u, reason = youtube_url(raw, single=True)
             if u is None:
                 print(f"[yt-sum] skipping playlist entry "
                       f"{url_safety.redact_url(raw)}: {reason}",
@@ -626,7 +663,7 @@ def main(argv: list[str]) -> int:
 
     out_dir = Path(os.path.expanduser(args.out)).resolve()
 
-    target, reason = youtube_url(args.url)
+    target, reason = youtube_url(args.url, single=not args.playlist)
     if target is None:
         die(f"only YouTube URLs are supported ({reason})")
 

@@ -549,10 +549,79 @@ class TestPlaylistEntries:
         ("https://m.youtube.com/watch?v=abc#t=10", "https://m.youtube.com/watch?v=abc"),
         ("https://music.youtube.com/watch?v=abc", "https://music.youtube.com/watch?v=abc"),
         ("https://youtu.be/abc", "https://youtu.be/abc"),
-        ("http://WWW.YouTube.com/playlist?list=PL1", "http://WWW.YouTube.com/playlist?list=PL1"),
+        # Round 2, item 2: scheme and host normalised (yt-dlp's patterns are
+        # case-sensitive); the path, which carries IDs, is left alone.
+        ("HTTPS://WWW.YouTube.com/watch?v=AbC", "https://www.youtube.com/watch?v=AbC"),
+        ("http://WWW.YouTube.com/playlist?list=PL1", "http://www.youtube.com/playlist?list=PL1"),
     ])
     def test_youtube_urls_are_accepted(self, url: str, cleaned: str) -> None:
         assert ys.youtube_url(url) == (cleaned, "")
+
+    @pytest.mark.parametrize("url, cleaned", [
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx&index=3",
+         "https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+        ("https://youtu.be/dQw4w9WgXcQ?list=PLx", "https://youtu.be/dQw4w9WgXcQ"),
+        ("https://www.youtube.com/watch?list=PLx&v=dQw4w9WgXcQ&t=42s",
+         "https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s"),
+        ("https://youtu.be/dQw4w9WgXcQ?si=abc", "https://youtu.be/dQw4w9WgXcQ?si=abc"),
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&playlist_like=1",
+         "https://www.youtube.com/watch?v=dQw4w9WgXcQ&playlist_like=1"),
+    ])
+    def test_single_mode_drops_the_playlist_parameters(
+            self, url: str, cleaned: str) -> None:
+        """A video shared from inside a playlist (watch?v=X&list=Y) matches
+        only yt-dlp's tab extractor, which single mode does not load."""
+        assert ys.youtube_url(url, single=True) == (cleaned, "")
+
+    def test_main_hands_ytdlp_the_normalised_single_video(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(sys.modules, "yt_dlp", MagicMock())
+        seen: list[str] = []
+
+        def fake_process(url, **kw):
+            seen.append(url)
+            return None
+
+        monkeypatch.setattr(ys, "process_video", fake_process)
+        assert ys.main(["https://WWW.YOUTUBE.COM/watch?v=AbC&list=PLx",
+                        "--dry-run"]) == 0
+        assert seen == ["https://www.youtube.com/watch?v=AbC"]
+
+    def test_playlist_mode_keeps_the_list_parameter(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setitem(sys.modules, "yt_dlp", MagicMock())
+        calls = self._capture_ytdlp(monkeypatch, json.dumps({"entries": []}))
+        ys.main(["--playlist", "https://YOUTU.BE/AbC?list=PLx", "--dry-run"])
+        assert calls[0][-1] == "https://youtu.be/AbC?list=PLx"
+
+    @pytest.mark.parametrize("url, playlist", [
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", False),
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG", False),
+        ("https://youtu.be/dQw4w9WgXcQ?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG", False),
+        ("https://WWW.YOUTUBE.COM/watch?v=dQw4w9WgXcQ", False),
+        ("https://www.youtube.com/shorts/dQw4w9WgXcQ", False),
+        ("https://music.youtube.com/watch?v=dQw4w9WgXcQ", False),
+        ("https://www.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG", True),
+        ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG", True),
+        ("https://youtu.be/dQw4w9WgXcQ?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG", True),
+        ("https://www.youtube.com/@SomeChannel/videos", True),
+    ])
+    def test_the_allowed_extractors_accept_what_we_hand_ytdlp(
+            self, url: str, playlist: bool) -> None:
+        """Against the installed yt-dlp's own suitable() and its
+        --use-extractors matching (offline: no extraction is run). Skipped
+        where yt-dlp is not importable."""
+        pytest.importorskip("yt_dlp")
+        import re as _re
+        from yt_dlp.extractor import gen_extractor_classes
+        allowed = ys.PLAYLIST_EXTRACTORS if playlist else ys.VIDEO_EXTRACTORS
+        cleaned, _ = ys.youtube_url(url, single=not playlist)
+        assert cleaned
+        hits = [ie.IE_NAME for ie in gen_extractor_classes()
+                if any(_re.fullmatch(a, ie.IE_NAME, _re.I) for a in allowed.split(","))
+                and ie.suitable(cleaned)]
+        assert hits, f"no allowed extractor takes {cleaned}"
+        assert "generic" not in [h.lower() for h in hits]
 
     def test_main_refuses_a_non_youtube_url(
             self, monkeypatch: pytest.MonkeyPatch,
@@ -583,9 +652,26 @@ class TestPlaylistEntries:
         cmd = calls[0]
         assert cmd[-2:] == ["--", "https://www.youtube.com/playlist?list=PL1"]
         i = cmd.index("--use-extractors")
-        assert cmd[i + 1].split(",") == ["youtube", "youtube:tab", "youtube:playlist"]
+        assert cmd[i + 1].split(",") == ["youtube", "youtube:tab",
+                                         "youtube:playlist", "youtube:?ytbe"]
         assert "generic" not in cmd[i + 1]
         assert self.kwargs[0]["timeout"] == ys.YTDLP_TIMEOUT_SECONDS
+
+    def test_ytdlp_reads_no_config_or_plugins_from_outside(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Round 2, item 3: a yt-dlp.conf in the cwd (often ~/Downloads)
+        could add --use-extractors generic, --proxy or --netrc-cmd; a
+        yt_dlp_plugins/ there would be imported as code."""
+        monkeypatch.setenv("YTDLP_NO_PLUGINS", "")
+        calls = self._capture_ytdlp(monkeypatch, json.dumps({"id": "x"}))
+        ys.fetch_video("https://youtu.be/abc")
+        cmd = calls[0]
+        assert cmd[:4] == [sys.executable, "-I", "-m", "yt_dlp"], cmd
+        before_url = cmd[:cmd.index("--")]
+        assert "--ignore-config" in before_url
+        assert "--no-plugin-dirs" in before_url
+        assert "--config-locations" not in cmd
+        assert self.kwargs[0]["env"]["YTDLP_NO_PLUGINS"] == "1"
 
     def test_a_hung_ytdlp_is_a_failure_not_a_hang(
             self, monkeypatch: pytest.MonkeyPatch) -> None:
