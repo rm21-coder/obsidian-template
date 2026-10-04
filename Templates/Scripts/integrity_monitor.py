@@ -233,12 +233,24 @@ def scan_dir(directory: Path, *, exts: set[str],
     return out
 
 
+class PersistenceScanError(Exception):
+    """The persistence-agent scan could not enumerate what is installed.
+
+    Distinct from "no tasks": an empty result adopted by --update would save
+    an empty baseline, and the next working run would then report every task
+    as NEW_FILE instead of comparing it against what it was."""
+
+
 def scan_scheduled_tasks() -> dict[str, dict]:
     """Windows analog of hashing ~/Library/LaunchAgents plists: hash the exported
     XML definition of each Task Scheduler task under \\Obsidian\\. Catches a vault
     task being silently rewritten, added, or removed (persistence abuse). Scoped
     to \\Obsidian\\ to avoid the churn of system/vendor tasks; the volatile <Date>
-    registration timestamp is stripped so a no-op re-register isn't flagged."""
+    registration timestamp is stripped so a no-op re-register isn't flagged.
+
+    Raises PersistenceScanError when enumeration fails. "No tasks" is the
+    script's own empty hashtable, which serialises as "{}"; empty output, a
+    non-zero exit, bad JSON or a non-object are failures, not "no tasks"."""
     ps = (
         "$ErrorActionPreference='SilentlyContinue';"
         "$o=@{};foreach($t in Get-ScheduledTask -TaskPath '\\Obsidian\\'){"
@@ -250,17 +262,21 @@ def scan_scheduled_tasks() -> dict[str, dict]:
             [security_common.POWERSHELL_EXE, "-NoProfile", "-NonInteractive",
              "-Command", ps],
             capture_output=True, timeout=30)
-    except Exception:
-        return {}
+    except Exception as exc:
+        raise PersistenceScanError(
+            f"could not run PowerShell: {type(exc).__name__}: {exc}") from exc
+    if p.returncode != 0:
+        raise PersistenceScanError(f"PowerShell exited {p.returncode}")
     raw = p.stdout.decode("utf-8", "ignore").strip()
     if not raw:
-        return {}
+        raise PersistenceScanError("PowerShell returned no output")
     try:
         data = json.loads(raw)
-    except Exception:
-        return {}
+    except Exception as exc:
+        raise PersistenceScanError(f"unparseable task list: {exc}") from exc
     if not isinstance(data, dict):
-        return {}
+        raise PersistenceScanError(
+            f"task list is a {type(data).__name__}, not an object")
     out: dict[str, dict] = {}
     for name, xml in data.items():
         if not isinstance(xml, str):
@@ -695,9 +711,17 @@ def main(argv: list[str]) -> int:
         print(json.dumps(bytecode_findings(scripts, explicit_pycache=True)))
         return 0
 
+    persistence_error: str | None = None
+    try:
+        persistence = scan_persistence(launchagents)
+    except PersistenceScanError as exc:
+        persistence, persistence_error = {}, str(exc)
+        security_common.log(
+            "integrity", f"persistence-agent scan failed: {persistence_error}")
+
     current = {
         "scripts": scan_dir(scripts, exts=SCRIPT_EXTS),
-        "launchagents": scan_persistence(launchagents),
+        "launchagents": persistence,
         "state_dir": scan_state_dir(),
         "script_config": scan_script_config(scripts),
         "templates": scan_templates(vault),
@@ -709,6 +733,16 @@ def main(argv: list[str]) -> int:
     }
 
     if args.update:
+        if persistence_error is not None:
+            # Adopting {} here would record "no scheduled tasks" as the
+            # trusted state, and every task would read as NEW next time.
+            security_common.log(
+                "integrity",
+                "REFUSED --update: could not enumerate the scheduled tasks "
+                f"({persistence_error}). Baseline left unchanged; fix the "
+                "scan and re-run --update.",
+                stream=sys.stdout)
+            return 2
         save_state(current)
         n_scripts = len(current["scripts"])
         n_agents = len(current["launchagents"])
@@ -760,6 +794,11 @@ def main(argv: list[str]) -> int:
             findings.append({"kind": "NOT_BASELINED", "scope": scope,
                              "count": len(current[scope])})
             continue
+        if scope == "launchagents" and persistence_error is not None:
+            # One finding naming the cause, not a DELETED per baselined task.
+            findings.append({"kind": "SCAN_FAILED", "scope": scope,
+                             "detail": persistence_error})
+            continue
         findings += diff_dir(scope, current[scope], baseline[scope])
     findings += secrets_permission_findings(current["secrets"])
     findings += bytecode_findings(scripts)
@@ -800,6 +839,8 @@ def main(argv: list[str]) -> int:
             summary_parts.append(f"NEW {f['scope']}: {f['path']}")
         elif f["kind"] == "DELETED":
             summary_parts.append(f"DELETED {f['scope']}: {f['path']}")
+        elif f["kind"] == "SCAN_FAILED":
+            summary_parts.append(f"{f['scope']}: scan failed ({f['detail']})")
         elif f["kind"] == "NOT_BASELINED":
             summary_parts.append(f"{f['scope']}: not yet baselined")
         elif f["kind"] == "PERMISSIONS":

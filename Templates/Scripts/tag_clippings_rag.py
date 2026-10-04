@@ -146,9 +146,14 @@ def parse_frontmatter(text: str):
     m = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)", text, re.DOTALL)
     if not m:
         return None, text
+    if len(m.group(1)) > 64 * 1024:     # bound what a converted document can feed PyYAML
+        return None, text
     try:
         fm = yaml.safe_load(m.group(1)) or {}
-    except yaml.YAMLError:
+    except (yaml.YAMLError, RecursionError, ValueError):
+        # Deep nesting raises RecursionError, which is not a YAMLError.
+        return None, text
+    if not isinstance(fm, dict):         # a bare scalar or list is not frontmatter
         return None, text
     return fm, m.group(2)
 

@@ -663,3 +663,53 @@ class TestHostileMessageCannotWedgeIntake:
             allowed=["phone@example.com"], root=tmp_path, dry_run=False)
         assert (a, r) == (1, 1), "the signed drop behind the hostile message must land"
         assert (b"1", "\\Seen") in fake.stored, "hostile message must be marked Seen"
+
+
+class TestSubjectCannotForgeLogLines:
+    """M-DASH #204 (CWE-117): the Subject of a message from ANY sender was
+    logged raw. compat32 keeps the CRLF of a folded header, so an outsider
+    could write a line of their own into the log, which the morning
+    dashboard quotes as a failing job's diagnosis."""
+
+    FORGED = "OAuth session expired"
+
+    def _pull(self, raw: bytes, monkeypatch, tmp_path, caplog):
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", _FakeIMAP([raw]))
+        with caplog.at_level("WARNING", logger="source_mail_pull"):
+            smp.process_mailbox(
+                user="u", password="p", key=KEY,
+                allowed=["phone@example.com"], root=tmp_path, dry_run=False)
+        return [r.getMessage() for r in caplog.records]
+
+    def test_folded_subject_from_a_stranger_stays_on_one_line(
+            self, monkeypatch, tmp_path: Path, caplog) -> None:
+        raw = (b"From: stranger@example.net\r\n"
+               b"Subject: hi\r\n ERROR " + self.FORGED.encode() + b"\r\n"
+               b"\r\nbody\r\n")
+        lines = self._pull(raw, monkeypatch, tmp_path, caplog)
+        reject = [m for m in lines if m.startswith("REJECT [")]
+        assert len(reject) == 1
+        assert "\n" not in reject[0] and "\r" not in reject[0], reject[0]
+        assert reject[0].startswith("REJECT [hi  ERROR " + self.FORGED + "]: sender")
+
+    def test_unicode_line_separators_and_escapes_are_neutralised(self) -> None:
+        out = smp.log_safe("a b c\x85d\x1b[31me\x00f")
+        assert out == "a b c d [31me f"
+
+    def test_bound_applies_after_neutralising(self) -> None:
+        assert smp.log_safe("\r\n" * 10 + "x" * 200) == " " + "x" * 79
+
+    def test_a_long_sender_is_bounded_and_single_line(self) -> None:
+        msg = email.message_from_bytes(
+            b"From: \"x\r\n FAKE\" <" + b"a" * 300 + b"@example.net>\r\n\r\nb\r\n")
+        ok, who = smp.sender_allowed(msg, ["phone@example.com"])
+        assert not ok
+        assert "\n" not in who and "\r" not in who
+        assert len(who) <= smp.LOG_FIELD_MAX + len("sender '' not in allowlist")
+
+    def test_ordinary_subject_is_logged_as_before(
+            self, monkeypatch, tmp_path: Path, caplog) -> None:
+        raw = b"From: stranger@example.net\r\nSubject: voice drop\r\n\r\nbody\r\n"
+        lines = self._pull(raw, monkeypatch, tmp_path, caplog)
+        assert ("REJECT [voice drop]: sender 'stranger@example.net' "
+                "not in allowlist") in lines

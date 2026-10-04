@@ -586,6 +586,7 @@ def write_run_report(start_time: datetime, summary: dict, dry_run: bool) -> Path
         lines.append(f"sync_status: {status}")
         lines.append(f"errors: {errors}")
         lines.append(f"quarantined_total: {summary.get('quarantined_total', 0)}")
+        lines.append(f"pending_purge_total: {summary.get('pending_purge_total', 0)}")
         if dry_run:
             lines.append("dry_run: true")
         lines.append("---")
@@ -655,9 +656,18 @@ def write_run_report(start_time: datetime, summary: dict, dry_run: bool) -> Path
             lines.append("### Deindexed (classification)")
             lines.append(_fmt_list(summary.get("deindexed_by_class_paths", [])))
             lines.append("")
+            if summary.get("purge_retried_paths"):
+                lines.append("### Pending purges completed")
+                lines.append(_fmt_list(summary["purge_retried_paths"]))
+                lines.append("")
 
-        if summary.get("update_failures") or summary.get("add_failures"):
+        if (summary.get("update_failures") or summary.get("add_failures")
+                or summary.get("purge_failures")):
             lines.append("## Failures")
+            if summary.get("purge_failures"):
+                lines.append("### Purge failures (still in the index, retried next run)")
+                lines.append(_fmt_error_list(summary["purge_failures"]))
+                lines.append("")
             if summary.get("update_failures"):
                 lines.append("### Update failures")
                 lines.append(_fmt_error_list(summary["update_failures"]))
@@ -737,6 +747,8 @@ def main() -> int:
         "deindexed_by_class_paths": [],
         "update_failures": [],
         "add_failures": [],
+        "purge_failures": [],
+        "purge_retried_paths": [],
         "new_quarantine_entries": [],
         "reset_quarantine": False,
         "reset_quarantine_count": 0,
@@ -752,6 +764,12 @@ def main() -> int:
 
     quarantine = state.setdefault("quarantine", {})
     previous = state.setdefault("files", {})
+    # file_id -> {path, kind, attempts, first_failed, last_error}: copies
+    # in Open WebUI that a removal could not purge. Retried every run.
+    pending_purge = state.setdefault("pending_purge", {})
+    if not isinstance(pending_purge, dict):
+        pending_purge = state["pending_purge"] = {}
+    summary["pending_purge_total"] = len(pending_purge)
     previous_count = len(previous)
 
     all_files, excluded_by_class = scan_vault()
@@ -854,7 +872,7 @@ def main() -> int:
         return 0
 
     # Backup state before any mutation
-    if new or modified or deleted:
+    if new or modified or deleted or pending_purge:
         backup = backup_state()
         if backup:
             log.info(f"state backed up to {backup.name}")
@@ -877,37 +895,79 @@ def main() -> int:
             log.warning(f"  quarantined after {new_failures} failures: {path}")
             summary["new_quarantine_entries"].append(path)
 
-    # Removals: always release the local state entry, even if the API
-    # calls error out — the file is gone from the indexable set, holding the
-    # reference in state forever just causes this same loop on every run.
-    # Distinguish filesystem-deletes from classification-driven deindexing
-    # in the log (and report) so the operator can audit either category
-    # cleanly.
+    def purge(file_id: str) -> list[str]:
+        """Remove one file from the collection and the file store. Returns the
+        failures; already-gone (400/404) counts as success in both helpers."""
+        failures: list[str] = []
+        try:
+            remove_from_collection(file_id)
+        except Exception as exc:
+            failures.append(f"remove_from_collection: {exc}")
+        try:
+            delete_file(file_id)
+        except Exception as exc:
+            failures.append(f"delete_file: {exc}")
+        return failures
+
+    def purge_failed(file_id: str, path: str, kind: str, failures: list[str]) -> None:
+        """Keep a copy we could not remove on the retry list, and say so.
+
+        A note raised to restricted whose purge failed is still searchable
+        in Open WebUI. Forgetting its file_id would leave it there for good
+        with no run ever trying again, so it stays pending until a delete
+        actually succeeds, and every run it stays pending is an error.
+        """
+        nonlocal errors
+        prior = pending_purge.get(file_id, {})
+        detail = " | ".join(failures)
+        pending_purge[file_id] = {
+            "path": path,
+            "kind": kind,
+            "attempts": prior.get("attempts", 0) + 1,
+            "first_failed": prior.get("first_failed", datetime.now().isoformat()),
+            "last_error": detail[:200],
+        }
+        errors += 1
+        summary["purge_failures"].append((path, detail[:200]))
+        summary["warnings"].append(
+            f"still in the index, purge pending ({kind}): {path}")
+        log.error(f"{kind} FAILED, purge pending: {path} | {detail}")
+
+    # Retry copies an earlier run could not purge, before anything else.
+    for file_id in sorted(pending_purge):
+        entry = pending_purge[file_id]
+        path = entry.get("path", "?")
+        kind = entry.get("kind", "deleted")
+        failures = purge(file_id)
+        if failures:
+            purge_failed(file_id, path, kind, failures)
+        else:
+            pending_purge.pop(file_id, None)
+            summary["purge_retried_paths"].append(path)
+            log.info(f"{kind} (pending purge completed): {path}")
+
+    # Removals. The state entry is released either way, so the diff stops
+    # offering the path every run; but a copy whose purge failed moves to
+    # state["pending_purge"] (retried above on every later run) and is
+    # reported as a failure, never as deindexed. Distinguish
+    # filesystem-deletes from classification-driven deindexing in the log
+    # (and report) so the operator can audit either category cleanly.
     for path in deleted:
         is_class_deindex = path in excluded_by_class
         kind = (f"deindexed (classification: {excluded_by_class[path]})"
                 if is_class_deindex else "deleted")
         file_id = previous[path].get("file_id")
-        api_warnings: list[str] = []
-        if file_id:
-            try:
-                remove_from_collection(file_id)
-            except Exception as exc:
-                api_warnings.append(f"remove_from_collection: {exc}")
-            try:
-                delete_file(file_id)
-            except Exception as exc:
-                api_warnings.append(f"delete_file: {exc}")
+        failures = purge(file_id) if file_id else []
         previous.pop(path, None)
         quarantine.pop(path, None)
+        if failures:
+            purge_failed(file_id, path, kind, failures)
+            continue
         if is_class_deindex:
             summary["deindexed_by_class_paths"].append(path)
         else:
             summary["deleted_fs_paths"].append(path)
-        if api_warnings:
-            log.warning(f"{kind} (with API warnings): {path} | {' | '.join(api_warnings)}")
-        else:
-            log.info(f"{kind}: {path}")
+        log.info(f"{kind}: {path}")
 
     # Modifications. Push the new copy FIRST, and purge the old one only
     # once the new one is actually in the collection. The previous ordering
@@ -970,12 +1030,14 @@ def main() -> int:
 
     state["files"] = previous
     state["quarantine"] = quarantine
+    state["pending_purge"] = pending_purge
     state["last_sync"] = datetime.now().isoformat()
     save_state(state)
 
     log.info(f"sync complete. errors={errors} quarantined_total={len(quarantine)}")
     summary["errors"] = errors
     summary["quarantined_total"] = len(quarantine)
+    summary["pending_purge_total"] = len(pending_purge)
     write_run_report(start_time, summary, args.dry_run)
     return 0 if errors == 0 else 2
 
