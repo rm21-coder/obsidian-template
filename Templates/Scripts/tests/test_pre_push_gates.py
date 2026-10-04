@@ -414,3 +414,41 @@ def test_any_ref_separator_is_read_as_a_space(repo: Path) -> None:
                  lref="refs/heads/Fictional+Person")
     assert proc.returncode == 1
     assert "pushed ref name (as words):1: deny-list: Fictional Person" in proc.stderr
+
+
+def test_punctuation_in_a_name_survives_the_word_reading(repo: Path) -> None:
+    _deny(repo, "Sean O'Fictional")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"),
+                 lref="refs/heads/sean-o'fictional")
+    assert proc.returncode == 1
+    assert "(as words):1: deny-list: Sean O'Fictional" in proc.stderr
+
+
+def test_a_last_first_entry_meets_a_last_first_file_name(repo: Path) -> None:
+    _deny(repo, "Person, Fictional")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "Knowledge" / "Person_Fictional.md").write_text(PUBLIC, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add", "--no-verify")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"), base)
+    assert proc.returncode == 1
+    assert "Person_Fictional.md (as words):0: deny-list: Person, Fictional" in proc.stderr
+
+
+def test_a_domain_in_the_encoding_header_is_scanned(repo: Path) -> None:
+    _deny(repo, REAL)
+    sha, base = _hand_commit(repo, b"encoding " + REAL.encode() + b"\n", b"t\n")
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert f"encoding header:1: deny-list: {REAL}" in proc.stderr
+
+
+def test_folder_names_do_not_join_into_a_name(repo: Path) -> None:
+    _deny(repo, "Fictional Person")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "Knowledge" / "fictional").mkdir()
+    (repo / "Knowledge" / "fictional" / "person.md").write_text(PUBLIC, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "add", "--no-verify")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"), base)
+    assert proc.returncode == 0, proc.stderr

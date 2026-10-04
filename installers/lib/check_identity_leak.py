@@ -34,6 +34,7 @@ single commit with `git commit --no-verify`, and only when you know why.
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import os
 import re
@@ -132,7 +133,10 @@ def _with_words(label: str, lineno: int, name: str) -> list[tuple[str, int, str]
 def _name_lines(paths: list[str]) -> list[tuple[str, int, str]]:
     """Each path as a line of its own (line 0): a file NAMED after a real
     person publishes the name as surely as its contents would."""
-    return [line for p in paths if not skip_path(p) for line in _with_words(p, 0, p)]
+    # Words of the file's own name only: joined across folders, "docs/will/
+    # power.md" read as a two-word name (review round 10).
+    return [line for p in paths if not skip_path(p)
+            for line in ((p, 0, p), (p + WORDS_SUFFIX, 0, _as_words(p.rsplit("/", 1)[-1])))]
 
 
 def load_allowed_domains() -> set[str]:
@@ -246,8 +250,7 @@ _HEADER_RE = re.compile(rb"^[a-z][a-z0-9-]* ")
 # Header lines that carry no free text: hashes and the object type, each
 # skipped only in its strict form.
 _HASH_LINE = re.compile(r"^(?:(?:tree|parent|object) [0-9a-f]{40,64}"
-                        r"|type (?:commit|tree|blob|tag)"
-                        r"|encoding [A-Za-z0-9._:-]+)$")
+                        r"|type (?:commit|tree|blob|tag))$")
 # An identity line is skipped only when it is the maintainer's own, as git is
 # configured to write it: a colleague's patch applied with `git am`, or a
 # commit made under a work address, publishes that identity (round 8).
@@ -312,6 +315,8 @@ def _scan_object(raw: bytes, label: str, own: set[str],
                 target = m.group(1)
             if _HASH_LINE.match(first):
                 continue
+            if first.startswith("encoding ") and _is_codec(first[9:]):
+                continue    # a domain fits the old strict form; a codec name does not (round 10)
             ident = _IDENT_LINE.match(first)
             if ident and _ident_key(ident.group(1)) in own:
                 continue
@@ -332,6 +337,14 @@ def _scan_object(raw: bytes, label: str, own: set[str],
         for i, line in enumerate(text.splitlines(), 1):
             out.append((f"{label} message", i, line))
     return target
+
+
+def _is_codec(name: str) -> bool:
+    try:
+        codecs.lookup(name)
+        return True
+    except Exception:
+        return False
 
 
 def _cat_file(kind: str, sha: str) -> bytes:
@@ -442,30 +455,41 @@ def worktree_lines(paths: list[str] | None = None) -> list[tuple[str, int, str]]
 _BOUNDED: dict[str, re.Pattern] = {}
 
 
-def _bounded(pat: re.Pattern) -> re.Pattern:
-    """`pat` as whole words only. A `re:` entry whose inline flags cannot be
-    wrapped keeps its plain, stricter form rather than crashing the scan
-    (round 9)."""
+def _bounded(pat: re.Pattern, label: str) -> re.Pattern:
+    """The rule for a name read as words, matched as whole words only. A
+    literal entry is reduced the same way the name was, so "Sean O'Brien"
+    still meets "sean-o'brien", and "Smith, John" meets "Smith_John" (review
+    round 10). A `re:` entry whose inline flags cannot be wrapped keeps its
+    plain, stricter form rather than crashing the scan (round 9)."""
     if pat.pattern not in _BOUNDED:
-        try:
-            _BOUNDED[pat.pattern] = re.compile(
-                rf"(?<![^\W_])(?:{pat.pattern})(?![^\W_])", pat.flags)
-        except re.error:
-            _BOUNDED[pat.pattern] = pat
+        if pat.pattern == re.escape(label):
+            words = r"\s+".join(re.escape(w) for w in _as_words(label).split())
+            _BOUNDED[pat.pattern] = re.compile(rf"(?<![^\W_])(?:{words})(?![^\W_])", re.I)
+        else:
+            try:
+                _BOUNDED[pat.pattern] = re.compile(
+                    rf"(?<![^\W_])(?:{pat.pattern})(?![^\W_])", pat.flags)
+            except re.error:
+                _BOUNDED[pat.pattern] = pat
     return _BOUNDED[pat.pattern]
 
 
 def scan(lines, rules, allowed) -> list[tuple[str, int, str, str]]:
     """Return (path, line_no, rule, excerpt) for every hit."""
     findings = []
+    named: set[tuple[str, int]] = set()
     for path, lineno, text in lines:
+        words = path.endswith(WORDS_SUFFIX)
+        if words and (path[:-len(WORDS_SUFFIX)], lineno) in named:
+            continue    # the name as written already matched; say so once
         for label, pat in rules:
-            if path.endswith(WORDS_SUFFIX):
-                pat = _bounded(pat)
+            if words:
+                pat = _bounded(pat, label)
             m = pat.search(text)
             if m:
                 findings.append((path, lineno, f"deny-list: {label}",
                                  text.strip()[:120]))
+                named.add((path, lineno))
                 break
         for m in EMAIL_RE.finditer(text):
             if not domain_allowed(m.group(1), allowed):
