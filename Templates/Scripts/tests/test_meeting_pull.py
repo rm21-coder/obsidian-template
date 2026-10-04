@@ -57,6 +57,22 @@ class TestTheSessionHoldsOnlyCalendarTools:
     def test_no_built_in_tool_is_granted(self, dangerous: str) -> None:
         assert dangerous not in mp.allowed_tools(CONFIG).split()
 
+    @pytest.mark.parametrize("key,value", [
+        ("search_tool", "outlook_calendar_search Read"),
+        ("read_tool", "read_resource\tBash"),
+        ("mcp_prefix", "mcp__x Write"),
+        ("search_tool", ["x"]),
+    ])
+    def test_a_tool_name_that_would_split_into_two_is_refused(
+            self, key: str, value, capsys: pytest.CaptureFixture) -> None:
+        """The names are joined into --allowedTools and split back out of the
+        deny list: "x Read" would allow Read and drop it from the deny list
+        (review, 2026-10-03). Every use of the setting refuses it."""
+        for build in (mp.allowed_tools, mp.disallowed_tools):
+            with pytest.raises(SystemExit):
+                build({**CONFIG, key: value})
+            assert f"ERROR: config {key!r} must be a single tool-name part" in capsys.readouterr().out
+
     def test_session_is_restricted_and_never_prompts(self) -> None:
         """--restricted confines file tools to an empty working directory;
         dontAsk refuses anything not pre-approved, including tools a future

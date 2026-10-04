@@ -513,8 +513,6 @@ class TestBytecode:
             pytest.skip("shell wrapper")
         [f] = im.venv_bytecode_findings(scripts)
         assert f["kind"] == "BYTECODE_MISMATCH" and f["path"] == str(pyc)
-        src_text = Path(im.__file__).read_text(encoding="utf-8")
-        assert '"PYTHONPYCACHEPREFIX": empty' in src_text
 
 
 class TestNotBaselined:
@@ -532,12 +530,93 @@ class TestNotBaselined:
                 "--vault", str(sample_vault)]
         assert im.main([*argv, "--update"]) == 0
         state = json.loads(im.STATE_PATH.read_text())
-        for scope in ("templates", "venv", "agent_config", "secrets"):
+        for scope in ("script_config", "templates", "venv", "user_site", "agent_config", "secrets"):
             state.pop(scope)
         im.STATE_PATH.write_text(json.dumps(state))
         capsys.readouterr()
         assert im.main([*argv, "--json"]) == 1
         findings = json.loads(capsys.readouterr().out)["findings"]
         assert sorted((f["kind"], f["scope"]) for f in findings) == [
-            ("NOT_BASELINED", s) for s in ("agent_config", "secrets", "templates", "venv")]
+            ("NOT_BASELINED", s) for s in ("agent_config", "script_config", "secrets",
+                                           "templates", "user_site", "venv")]
         assert [f["count"] for f in findings if f["scope"] == "venv"] == [30]
+
+
+
+class TestReviewRoundOne:
+    """Gaps an adversarial review of the new coverage found (2026-10-03)."""
+
+    def test_the_jobs_own_config_files_are_hashed(self, tmp_path: Path) -> None:
+        cfg = tmp_path / ".config"
+        cfg.mkdir()
+        (cfg / "meeting_pull.json").write_text('{"search_tool": "x"}')
+        (cfg / "notes.txt").write_text("ignored")
+        assert sorted(im.scan_script_config(tmp_path)) == ["meeting_pull.json"]
+        assert "meeting_pull.json" not in str(im.scan_dir(tmp_path, exts=im.SCRIPT_EXTS | {".json"}))
+
+    def test_the_user_site_is_watched(self, tmp_path: Path) -> None:
+        site = tmp_path / "Library" / "Python" / "3.9" / "lib" / "python" / "site-packages"
+        site.mkdir(parents=True)
+        (site / "usercustomize.py").write_text("import os")
+        (site / "x.pth").write_text("import os")
+        got = im.scan_user_site(tmp_path)
+        assert {"Python/3.9/lib/python/site-packages/usercustomize.py",
+                "Python/3.9/lib/python/site-packages/x.pth"} == set(got)
+
+    def test_ca_bundles_registries_and_pyw_are_watched(self, tmp_path: Path) -> None:
+        v = tmp_path / ".venv"
+        for rel in ("lib/site-packages/certifi/cacert.pem", "lib/site-packages/x.dist-info/entry_points.txt",
+                    "Lib/site-packages/mod.pyw"):
+            (v / rel).parent.mkdir(parents=True, exist_ok=True)
+            (v / rel).write_text("x")
+        assert len(im.scan_venv(v)) == 3
+        (tmp_path / "shadow.pyw").write_text("x")
+        assert "shadow.pyw" in im.scan_dir(tmp_path, exts=im.SCRIPT_EXTS)
+
+    def test_every_pyc_in_a_cache_prefix_is_checked(self, tmp_path: Path,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+        """Apple's python caches the standard library too, in a user-writable
+        tree; a tampered json.pyc there would run in every security control."""
+        src_dir = tmp_path / "lib"
+        src_dir.mkdir()
+        src = src_dir / "jsonish.py"
+        src.write_text("def dumps():\n    return 1\n")
+        prefix = tmp_path / "cache"
+        tag = sys.implementation.cache_tag
+        pyc = prefix / src_dir.relative_to(src_dir.anchor) / f"jsonish.{tag}.pyc"
+        pyc.parent.mkdir(parents=True)
+        py_compile.compile(str(src), cfile=str(pyc), doraise=True)
+        monkeypatch.setattr(sys, "pycache_prefix", str(prefix))
+        assert im.prefix_cache_findings() == []
+        pyc.write_bytes(pyc.read_bytes()[:16] + marshal.dumps(compile("def dumps():\n    return 0\n", str(src), "exec")))
+        [f] = im.prefix_cache_findings()
+        assert f["kind"] == "BYTECODE_MISMATCH" and f["path"] == str(pyc)
+        monkeypatch.setattr(sys, "pycache_prefix", None)
+        assert im.prefix_cache_findings() == []
+
+    def test_the_child_check_runs_isolated(self) -> None:
+        src = Path(im.__file__).read_text(encoding="utf-8")
+        assert '"-E", "-s", "-S", "-B", "-X", f"pycache_prefix={empty}"' in src
+
+    def test_a_tampered_prefix_cache_reaches_the_report(
+            self, tmp_path: Path, sample_vault: Path, tmp_state_dir: Path,
+            silent_notify: list, monkeypatch: pytest.MonkeyPatch,
+            capsys: pytest.CaptureFixture) -> None:
+        src_dir = tmp_path / "lib"
+        src_dir.mkdir()
+        src = src_dir / "jsonish.py"
+        src.write_text("X = 1\n")
+        prefix = tmp_path / "cache"
+        pyc = prefix / src_dir.relative_to(src_dir.anchor) / f"jsonish.{sys.implementation.cache_tag}.pyc"
+        pyc.parent.mkdir(parents=True)
+        py_compile.compile(str(src), cfile=str(pyc), doraise=True)
+        pyc.write_bytes(pyc.read_bytes()[:16] + marshal.dumps(compile("X = 2\n", str(src), "exec")))
+        scripts, agents = tmp_path / "scripts", tmp_path / "agents"
+        scripts.mkdir(); agents.mkdir()
+        argv = ["--scripts-dir", str(scripts), "--launchagents-dir", str(agents), "--vault", str(sample_vault)]
+        assert im.main([*argv, "--update"]) == 0
+        monkeypatch.setattr(sys, "pycache_prefix", str(prefix))
+        capsys.readouterr()
+        assert im.main([*argv, "--json"]) == 1
+        [f] = json.loads(capsys.readouterr().out)["findings"]
+        assert f["kind"] == "BYTECODE_MISMATCH" and f["path"] == str(pyc)

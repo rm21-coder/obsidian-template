@@ -34,6 +34,10 @@ Four independent integrity checks, all built on a single state file
        and a misbehaving sync.
 
     5. Coverage added 2026-10-03, each its own scope:
+         script_config Templates/Scripts/.config/*.json, the jobs' own
+                       settings (the scripts scope skips dot-directories).
+         user_site     Python's per-user site-packages, loaded at startup by
+                       any interpreter run without -s. Normally empty.
          templates     ~/Obsidian/Templates (outside Scripts/): the .md and
                        .js files QuickAdd runs or fills.
          venv          the scripts' virtualenv: every code file (.py, .pyc,
@@ -52,7 +56,8 @@ Four independent integrity checks, all built on a single state file
        scripts that an interpreter would load instead of the source must
        compile from that source. Apple's /usr/bin/python3, which runs the
        security controls, keeps its cache in ~/Library/Caches/
-       com.apple.python, outside every other scope. Each interpreter's own
+       com.apple.python, outside every other scope; every .pyc there whose
+       source exists is checked, the standard library's included. Each interpreter's own
        cache is checked by that interpreter: the venv's in a child process
        whose own imports bypass the cache being checked.
        A baseline from before a scope existed reports NOT_BASELINED once for
@@ -123,11 +128,15 @@ DELETION_RATIO = 0.05         # 5% relative
 # first on sys.path), and a .pth there would run at startup.
 SCRIPT_EXTS = {".py", ".sh", ".plist", ".ps1", ".psd1",
                ".js", ".applescript", ".txt", ".yaml", ".yml",
-               ".pyc", ".pyd", ".so", ".dylib", ".pth"}
+               ".pyc", ".pyd", ".so", ".dylib", ".pth", ".pyw"}
 
 TEMPLATE_EXTS = {".md", ".js"}
-VENV_EXTS = {".py", ".pyc", ".pth", ".so", ".dylib", ".pyd", ".dll", ".exe",
-             ".metallib"}
+# .pyw is importable source on Windows; .pem is the CA bundle requests trusts
+# (one added certificate intercepts every API call, the gateway key included).
+VENV_EXTS = {".py", ".pyw", ".pyc", ".pth", ".so", ".dylib", ".pyd", ".dll", ".exe",
+             ".metallib", ".pem"}
+# Files read to decide what code to load: plugin and backend registries.
+VENV_NAMES = {"pyvenv.cfg", "entry_points.txt"}
 # Settings keys that run a command, change the environment or widen what the
 # CLI may do without asking. Everything else in these files is UI state.
 AGENT_SETTINGS_KEYS = ("hooks", "disableAllHooks", "statusLine", "apiKeyHelper",
@@ -138,8 +147,8 @@ AGENT_SETTINGS_KEYS = ("hooks", "disableAllHooks", "statusLine", "apiKeyHelper",
 # can point it elsewhere.
 HOME = Path.home()
 # Scopes that hash files against the baseline, in report order.
-BASELINE_SCOPES = ("scripts", "launchagents", "state_dir",
-                   "templates", "venv", "agent_config", "secrets")
+BASELINE_SCOPES = ("scripts", "launchagents", "state_dir", "script_config",
+                   "templates", "venv", "user_site", "agent_config", "secrets")
 
 # Third-party LaunchAgents that rewrite themselves on their own schedule
 # (vendor auto-updaters). Their recurring CONTENT_CHANGE is noise, and a
@@ -335,11 +344,39 @@ def scan_venv(venv: Path) -> dict[str, dict]:
         except ValueError:
             continue
         top_exe = len(rel_parts) == 2 and rel_parts[0] in ("bin", "Scripts")
-        if not (path.suffix.lower() in VENV_EXTS or path.name == "pyvenv.cfg" or top_exe):
+        if not (path.suffix.lower() in VENV_EXTS or path.name in VENV_NAMES or top_exe):
             continue
         if not path.is_file():
             continue
         out[path.relative_to(venv).as_posix()] = _file_entry(path)
+    return out
+
+
+def scan_script_config(scripts: Path) -> dict[str, dict]:
+    """Templates/Scripts/.config/*.json: the jobs' own settings. The scripts
+    scope skips dot-directories, and meeting_pull.json names the tools the
+    unattended Claude session may use."""
+    cfg = scripts / ".config"
+    if not cfg.is_dir():
+        return {}
+    return {p.name: _file_entry(p) for p in sorted(cfg.iterdir()) if p.suffix == ".json"}
+
+
+def scan_user_site(home: Path) -> dict[str, dict]:
+    """Python's per-user site-packages, which every interpreter run without
+    -s loads at startup -- Apple's /usr/bin/python3, which runs the security
+    controls, included. Normally empty or absent."""
+    out: dict[str, dict] = {}
+    roots = [home / "Library" / "Python"]
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        roots.append(Path(appdata) / "Python")
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for path in root.rglob("*"):
+            if path.is_file() and (path.suffix.lower() in VENV_EXTS or path.name in VENV_NAMES):
+                out[f"{root.name}/{path.relative_to(root).as_posix()}"] = _file_entry(path)
     return out
 
 
@@ -491,11 +528,39 @@ def _venv_python(scripts: Path) -> Path | None:
     return None
 
 
+def prefix_cache_findings() -> list[dict]:
+    """With a cache prefix (Apple's /usr/bin/python3 uses ~/Library/Caches/
+    com.apple.python), every module this interpreter imports -- the standard
+    library included -- is cached there, in a user-writable tree. Each .pyc
+    for this interpreter whose source still exists must compile from it."""
+    prefix = getattr(sys, "pycache_prefix", None)
+    if not prefix or not Path(prefix).is_dir():
+        return []
+    root = Path(prefix)
+    tag = sys.implementation.cache_tag
+    out = []
+    for pyc in root.rglob(f"*.{tag}*.pyc"):
+        name = pyc.name
+        stem, _, rest = name.partition(f".{tag}")
+        opt = 0
+        if rest.startswith(".opt-") and rest[5:6].isdigit():
+            opt = int(rest[5])
+        src = Path(os.sep) / pyc.parent.relative_to(root) / f"{stem}.py"
+        if not src.is_file():
+            continue
+        problem = _pyc_problem(src, pyc, opt)
+        if problem:
+            out.append({"kind": "BYTECODE_MISMATCH", "scope": "bytecode",
+                        "path": str(pyc), "detail": problem})
+    return out
+
+
 def venv_bytecode_findings(scripts: Path) -> list[dict]:
     """The venv interpreter's cache, checked by that interpreter in a child
-    process. PYTHONPYCACHEPREFIX points the child's own imports at an empty
+    process. -X pycache_prefix points the child's own imports at an empty
     directory, so a tampered .pyc in __pycache__ cannot run inside the check
-    that is looking for it."""
+    that is looking for it; -E, -s and -S keep PYTHON* variables, the user
+    site and the base install's sitecustomize out of it too."""
     venv_py = _venv_python(scripts)
     if venv_py is None or venv_py.resolve().parent == Path(sys.executable).resolve().parent:
         return []
@@ -503,10 +568,9 @@ def venv_bytecode_findings(scripts: Path) -> list[dict]:
     with tempfile.TemporaryDirectory(prefix="integrity_pyc_") as empty:
         try:
             p = subprocess.run(
-                [str(venv_py), str(Path(__file__).resolve()), "--bytecode-only",
-                 "--scripts-dir", str(scripts)],
-                capture_output=True, timeout=180,
-                env={**os.environ, "PYTHONPYCACHEPREFIX": empty, "PYTHONDONTWRITEBYTECODE": "1"})
+                [str(venv_py), "-E", "-s", "-S", "-B", "-X", f"pycache_prefix={empty}",
+                 str(Path(__file__).resolve()), "--bytecode-only", "--scripts-dir", str(scripts)],
+                capture_output=True, timeout=180)
         except (OSError, subprocess.SubprocessError) as e:
             return [{"kind": "BYTECODE_UNCHECKED", "scope": "bytecode",
                      "path": str(venv_py), "detail": e.__class__.__name__}]
@@ -633,8 +697,10 @@ def main(argv: list[str]) -> int:
         "scripts": scan_dir(scripts, exts=SCRIPT_EXTS),
         "launchagents": scan_persistence(launchagents),
         "state_dir": scan_state_dir(),
+        "script_config": scan_script_config(scripts),
         "templates": scan_templates(vault),
         "venv": scan_venv(scripts / ".venv"),
+        "user_site": scan_user_site(HOME),
         "agent_config": scan_agent_config(vault, HOME),
         "secrets": scan_secrets(HOME),
         "vault_md_count": count_vault_md(vault),
@@ -650,7 +716,9 @@ def main(argv: list[str]) -> int:
             "integrity",
             f"baseline updated: {n_scripts} script files, "
             f"{n_agents} agent plists, {n_state} state-dir trust anchors, "
+            f"{len(current['script_config'])} script configs, "
             f"{len(current['templates'])} templates, {len(current['venv'])} venv files, "
+            f"{len(current['user_site'])} user-site files, "
             f"{len(current['agent_config'])} agent config entries, "
             f"{len(current['secrets'])} secrets file(s), "
             f"{n_md} markdown files in vault.",
@@ -693,6 +761,7 @@ def main(argv: list[str]) -> int:
         findings += diff_dir(scope, current[scope], baseline[scope])
     findings += secrets_permission_findings(current["secrets"])
     findings += bytecode_findings(scripts)
+    findings += prefix_cache_findings()
     findings += venv_bytecode_findings(scripts)
     bulk = diff_md_count(current["vault_md_count"],
                          baseline.get("vault_md_count", 0))
@@ -707,8 +776,10 @@ def main(argv: list[str]) -> int:
                 "scripts": len(current["scripts"]),
                 "launchagents": len(current["launchagents"]),
                 "state_dir": len(current["state_dir"]),
+                "script_config": len(current["script_config"]),
                 "templates": len(current["templates"]),
                 "venv": len(current["venv"]),
+                "user_site": len(current["user_site"]),
                 "agent_config": len(current["agent_config"]),
                 "secrets": len(current["secrets"]),
                 "vault_md_count": current["vault_md_count"],

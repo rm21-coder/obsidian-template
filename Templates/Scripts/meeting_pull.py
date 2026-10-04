@@ -358,8 +358,8 @@ def render_prompt(template_path, config, config_path, out_dir):
     if not transform.is_file():
         die("transform not found: %s" % transform)
 
-    search_tool = config.get("search_tool") or DEFAULT_SEARCH_TOOL
-    read_tool = config.get("read_tool") or DEFAULT_READ_TOOL
+    search_tool = tool_name(config, "search_tool", DEFAULT_SEARCH_TOOL)
+    read_tool = tool_name(config, "read_tool", DEFAULT_READ_TOOL)
     after_iso, before_iso, week_start, week_end = window_bounds(config)
     tokens = {
         "AFTER_DATETIME": after_iso,
@@ -384,6 +384,21 @@ def render_prompt(template_path, config, config_path, out_dir):
     return rendered
 
 
+_TOOL_NAME = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def tool_name(config, key, default):
+    """A tool-name setting, refused unless it is one plain identifier. The
+    values are joined into --allowedTools and split back out of the deny
+    list, so a space in one ("x Read") would allow a built-in tool and drop it
+    from the deny list (review, 2026-10-03)."""
+    value = config.get(key) or default
+    if not isinstance(value, str) or not _TOOL_NAME.fullmatch(value):
+        die("config %r must be a single tool-name part (letters, digits, _ and -), not %r"
+            % (key, value))
+    return value
+
+
 def allowed_tools(config):
     """Build the --allowedTools list: the two calendar tools, nothing else.
 
@@ -401,9 +416,9 @@ def allowed_tools(config):
     transform. See producer_command() for why removing Bash and Write alone
     would not have been enough.
     """
-    prefix = config.get("mcp_prefix") or DEFAULT_MCP_PREFIX
-    search_tool = config.get("search_tool") or DEFAULT_SEARCH_TOOL
-    read_tool = config.get("read_tool") or DEFAULT_READ_TOOL
+    prefix = tool_name(config, "mcp_prefix", DEFAULT_MCP_PREFIX)
+    search_tool = tool_name(config, "search_tool", DEFAULT_SEARCH_TOOL)
+    read_tool = tool_name(config, "read_tool", DEFAULT_READ_TOOL)
     return " ".join(["%s__%s" % (prefix, search_tool), "%s__%s" % (prefix, read_tool)])
 
 
@@ -450,7 +465,7 @@ EVENTS_SCHEMA = json.dumps({
 
 
 def disallowed_tools(config):
-    prefix = config.get("mcp_prefix") or DEFAULT_MCP_PREFIX
+    prefix = tool_name(config, "mcp_prefix", DEFAULT_MCP_PREFIX)
     allowed = set(allowed_tools(config).split())
     names = list(DENIED_BUILTINS) + ["%s__%s" % (prefix, t) for t in OTHER_M365_TOOLS]
     return " ".join(n for n in names if n not in allowed)

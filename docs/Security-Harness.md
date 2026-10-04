@@ -174,12 +174,21 @@ Each scope is hashed and compared with the baseline:
 - **launchagents** — the plists in `~/Library/LaunchAgents/` (on Windows, the
   `\Obsidian\` scheduled tasks).
 - **state_dir** — the controls' own trust anchors.
+- **script_config** — `Templates/Scripts/.config/*.json`, the jobs' own
+  settings. `meeting_pull.json` names the tools the unattended Claude session
+  may use; `meeting_pull.py` also refuses any tool name that is not a single
+  identifier.
 - **templates** — the `.md` and `.js` files under `Templates/` that QuickAdd
   fills or runs.
 - **venv** — every code file in the scripts' virtualenv (`.py`, `.pyc`, `.pth`,
   `.so`, `.dylib`, …), `pyvenv.cfg` and the interpreter links. A `.pth` line
   or an edited package runs inside every job without touching a watched
-  script. It changes legitimately when an update reinstalls the requirements.
+  script. The CA bundle (`cacert.pem`) and plugin registries
+  (`entry_points.txt`) count too. It changes legitimately when an update
+  reinstalls the requirements.
+- **user_site** — Python's per-user `site-packages` (`~/Library/Python/…`,
+  `%APPDATA%\Python\…`), which every interpreter started without `-s` loads,
+  Apple's `/usr/bin/python3` included. Normally empty.
 - **agent_config** — `CLAUDE.md` in `~/.claude/` and in the vault, and only the
   settings that run commands or skip asking: `hooks`, `statusLine`,
   `apiKeyHelper`, `env`, `permissions`, and the MCP servers in `~/.claude.json`.
@@ -190,7 +199,8 @@ Each scope is hashed and compared with the baseline:
 **Bytecode** needs no baseline. Every cached `.pyc` of the scripts that an
 interpreter would load instead of the source must be exactly what that source
 compiles to. That includes Apple's `/usr/bin/python3`, which runs the security
-controls and keeps its cache in `~/Library/Caches/com.apple.python`. A stale
+controls and keeps its cache in `~/Library/Caches/com.apple.python`; every
+`.pyc` there is checked, the standard library's included. A stale
 `.pyc` doesn't count, since Python recompiles it; one for another Python
 version is ignored by the interpreter that runs the job. The venv's cache is
 checked by the venv's own interpreter, in a child process whose own imports
@@ -198,6 +208,31 @@ skip the cache it is checking.
 
 A baseline taken before a scope existed reports `NOT_BASELINED` once for that
 scope, not every file in it as new. Review, then adopt with `--update`.
+
+### What the integrity monitor cannot see
+
+It runs as you, so it is a tripwire, not a boundary. Code already running as
+you can rewrite the monitor itself, or what it imports, and silence it. What
+it buys is that a change to anything the jobs run, made while the monitor is
+intact, is reported the next morning. The deploy and update steps, which
+compare the vault with the repository, are the check from outside. Not
+watched, by decision:
+
+- **The Python install the virtualenv is built on.** Homebrew's (or a per-user
+  Windows install's) standard library and `sitecustomize` are writable by you
+  and change on every upgrade. The security controls run on Apple's
+  `/usr/bin/python3`, whose library is not writable.
+- **The Claude CLI's own binary.** It updates itself.
+- **launchd's user environment** (`launchctl setenv`), which reaches every job
+  without a file changing.
+- **`CLAUDE.md` in a parent of the meeting pull's temporary working
+  directory**, and `~/.claude/rules`.
+- **Bytecode for a Python version that runs no job**, such as a Homebrew
+  `python3` used by hand. Run the controls with `/usr/bin/python3`, as shown
+  above.
+- **On Windows**, the secrets file's ACL is not checked, and when the monitor
+  runs under the venv interpreter it checks that interpreter's cache in
+  process.
 
 ## Where alerts go
 
@@ -299,7 +334,7 @@ Run any control by hand. Useful flags:
   against live state destroys it permanently.
 
   ```bash
-  OBSIDIAN_SECURITY_STATE_DIR=/tmp/sandbox python3 integrity_monitor.py --update
+  OBSIDIAN_SECURITY_STATE_DIR=/tmp/sandbox /usr/bin/python3 integrity_monitor.py --update
   ```
 
   The scheduled jobs never see this: neither plist declares
