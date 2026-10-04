@@ -227,3 +227,41 @@ def test_a_pushed_ref_name_is_scanned(repo: Path) -> None:
     proc = _push(repo, head, lref="refs/tags/Fictionalname-v1")
     assert proc.returncode == 1
     assert "pushed ref name:1: deny-list: Fictionalname" in proc.stderr
+
+
+def test_a_declared_commit_encoding_is_honoured(repo: Path) -> None:
+    # ISO-8859-2 r-caron is 0xF8, which Latin-1 reads as o-slash.
+    _deny(repo, "Bořek Fictional")
+    sha, base = _hand_commit(repo, b"encoding ISO-8859-2\n",
+                             "for Bořek Fictional\n".encode("iso-8859-2"))
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert "message:1: deny-list: Bořek Fictional" in proc.stderr
+
+
+def test_a_stray_separator_does_not_hide_the_message(repo: Path) -> None:
+    # "\r" as the blank line: git accepts the object, and a header parser
+    # that runs on into the message would read "Fictional" as a key.
+    _deny(repo, "Fictional Person")
+    sha, base = _hand_commit(repo, b"\r", b"Fictional Person wrote this\n")
+    proc = _push(repo, sha, base)
+    assert proc.returncode == 1
+    assert "deny-list: Fictional Person" in proc.stderr
+
+
+def test_a_name_in_a_branch_name_is_scanned(repo: Path) -> None:
+    _deny(repo, "Fictional Person")
+    proc = _push(repo, _git(repo, "rev-parse", "HEAD"),
+                 lref="refs/heads/fictional-person-review")
+    assert proc.returncode == 1
+    assert "pushed ref name:1: deny-list: Fictional Person" in proc.stderr
+
+
+def test_a_latin1_byte_on_the_same_line_does_not_hide_a_utf8_name(repo: Path) -> None:
+    _deny(repo, "Renée Fictional")
+    msg = repo.parent / "msg"
+    msg.write_bytes("for Renée Fictional ".encode("utf-8") + b"(\xa9 Nimbus)\n")
+    _git(repo, "tag", "-a", "v5", "-F", str(msg))
+    proc = _push(repo, _git(repo, "rev-parse", "v5"), lref="refs/tags/v5")
+    assert proc.returncode == 1
+    assert "message:1: deny-list: Renée Fictional" in proc.stderr
