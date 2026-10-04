@@ -123,12 +123,16 @@ highlighting still works.
 `tests/test_templater_guard.py` lists every guarded writer. Any new script
 that writes outside text into the vault belongs on that list.
 
-The guard has four limits:
+The guard has five limits:
 
 - **Copied text keeps the space.** Text copied out of a neutralised note
   carries the zero-width space, so a clipped JSP or ASP snippet (`<%= … %>`),
   an Excel formula in code (`` `=SUM(A1:A9)` ``) or an HTML sample using
   `<code>` no longer pastes cleanly.
+- **"=" underlined headings show as text.** A heading written as a line of
+  text over a line of `===` loses its heading formatting, because the guard
+  defuses every line that starts with `=`. Converted and clipped pages use
+  `#` headings, so this is rare.
 - **New clippings are briefly raw.** The Web Clipper writes a note directly,
   and it stays unchanged until `strip_ads` rewrites it: a few seconds on a Mac,
   where a folder watch starts it, and up to 5 minutes on Windows, where it runs

@@ -169,16 +169,16 @@ def block_queries(text: str) -> list[str]:
         # Indented code after a blank line, a heading or a rule, or straight
         # after a list marker (the item's content is then indented code).
         after_break = (not prev.strip(" \t>" + JS_WS)
-                       or re.match(r" {0,3}(?:#|([-*_])(?:[ \t]*\1){2,}[ \t]*$)", prev.lstrip(">")))
-        indented = (re.match(r"[> ]*(?: {4}|\t)", line) and after_break) \
-            or re.match(r"[> ]*(?:[-*+]|\d{1,9}[.)])(?: {5,}|[ \t]*\t)", line)
+                       or re.match(r" {0,3}(?:#|([-*_])(?:[ \t]*\1){2,}[ \t]*$)", re.sub(r"^[ \t>]*", "", prev)))
+        indented = (re.match(r"[> \t]*(?: {4}|\t)", line) and after_break) \
+            or re.match(r"[> ]*(?:[-*+]|\d+[.)])(?: {5,}|[ \t]*\t)", line)
         if opener:
             body = lines[i + 1:]
         elif indented:
             body = lines[i:]
         else:
             continue
-        block = "\n".join(re.sub(r"^[ \t>]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?", "", b) for b in body)
+        block = "\n".join(re.sub(r"^[ \t>]*(?:(?:[-*+]|\d+[.)])[ \t]+)?", "", b) for b in body)
         block = block.strip(" \t" + JS_WS)
         if block.startswith(("=", "$=")) and block[1:].strip(" \t" + JS_WS):
             out.append(block[:30])
@@ -241,7 +241,8 @@ def test_escaped_language_names_are_caught(raw: str) -> None:
     "```text\r= x\r```", "```text\r=\rthis.file.name\r```", "```text\r\n= x\r\n```",
     "# H\n    =\n    this.file.name\n", "***\n    =\n    this.file.name\n",
     "-     = x\n", "1.      = x\n", "1. \t= x", "-     =\n      this.file.name\n",
-    "> # H\n>     =\n>     x",
+    "> # H\n>     =\n>     x", "1234567890.     = x\n", "> # H\n>\t=\n>\tthis.file.name\n",
+    "> > # H\n>\t=\n>\tthis.file.name\n"
 ])
 def test_no_dataview_query_survives_inside_a_code_block(raw: str) -> None:
     assert block_queries(raw), f"case does not reach the oracle: {raw!r}"
@@ -250,9 +251,8 @@ def test_no_dataview_query_survives_inside_a_code_block(raw: str) -> None:
     assert G.is_neutral(out) and out.replace(G.ZWSP, "") == raw
 
 
-def test_setext_headings_and_ordinary_equals_are_left_alone() -> None:
-    for text in ("Title\n=====\n", "Title\n=\n", "a == b", "x = 1", "a\n  b = c",
-                 "> Title\n> ===\n", "1 + 1 = 2", "Title\n  ===\n"):
+def test_ordinary_equals_are_left_alone() -> None:
+    for text in ("a == b", "x = 1", "a\n  b = c", "1 + 1 = 2", "2026 = year"):
         assert G.neutralize(text) == text, text
 
 

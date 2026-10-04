@@ -46,9 +46,9 @@ also defuses those triggers in outside text:
     plugins trim the code's text, so the zero-width space goes straight after
     the opening backticks;
   * Dataview queries inside code blocks -- Dataview runs `=` / `$=` found in a
-    code block too (its default), so a line starting with one, after quote
-    markers and indentation, gets the space; a line of only "=" is a heading
-    underline and is left alone;
+    code block too (its default), so a line starting with one, after quote and
+    list markers and indentation, gets the space -- a heading underline of "="
+    included, so such a heading shows as text;
   * raw HTML <code> tags, which those plugins read the same way and whose text
     is entity-decoded and can be split across child tags: "<code" becomes
     literal text;
@@ -95,18 +95,15 @@ _INLINE = re.compile(r"(`+)(?=[\s\ufeff]*(?:\$?=|(?:INPUT|VIEW|BUTTON)\[))", re.
 # block's text after JS trim(). A code block can start almost anywhere -- after
 # a fence, after a heading or a rule, inside a list item or a quote -- so any
 # line that starts, after quote markers, list markers and anything trim()
-# removes, with "=" or "$=" gets the space. The one exception is a heading
-# underline: a line of only "=", indented at most three spaces, with no list
-# marker, under a non-blank line that holds no fence. Code indented less than
-# four spaces only ever starts after a fence; an indented code block's lines
-# are indented four or more, which no underline is.
+# removes, with "=" or "$=" gets the space. No exception: one for heading
+# underlines ("Title" over "===") leaked in three review rounds running (tabs
+# after ">", quote depths, long list numbers), so outside text written that
+# way shows its heading as plain text.
 _JS_SPACE = "\t\v\f \u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 # A line starts after LF or a lone CR: Obsidian turns every CR into a line
 # break before parsing.
 _BLOCK_QUERY = re.compile(
-    rf"(?:^|(?<=[\n\r]))((?:[>{_JS_SPACE}]|[-*+](?=[{_JS_SPACE}])|\d{{1,9}}[.)](?=[{_JS_SPACE}]))*)(?=\$?=)")
-_SETEXT = re.compile(r" {0,3}=+[ \t]*")
-_FENCE_LINE = re.compile(r"`{3,}|~{3,}")
+    rf"(?:^|(?<=[\n\r]))((?:[>{_JS_SPACE}]|[-*+](?=[{_JS_SPACE}])|\d+[.)](?=[{_JS_SPACE}]))*)(?=\$?=)")
 _HTML_CODE = re.compile(r"<(?=code(?![\w-]))", re.I)
 # Excalidraw opens a note as a drawing, and offers to run its onload script,
 # from frontmatter keys starting "excalidraw-". A YAML double-quoted key can
@@ -118,25 +115,6 @@ _QUOTED = r'(?:[^"\\\r\n]|\\.)*'
 _ESCAPED_KEY = re.compile(
     rf'(")(?!\u200b)(?={_QUOTED}\\{_QUOTED}"[ \t]*:)'                # "k\x": v, {"k\x": v}
     rf'|(?:^|(?<=[\n\r]))([ \t]*\?[ \t]*")(?!\u200b)(?={_QUOTED}\\)')  # ? "k\x"
-
-
-def _block_query(m: re.Match) -> str:
-    text = m.string
-    line_start = m.start()
-    line = re.split(r"[\r\n]", text[line_start:], maxsplit=1)[0]
-    if _SETEXT.fullmatch(re.sub(r"^(?:[ \t]*>)+[ \t]?", "", line)) and line_start > 0:
-        before = text[:line_start]
-        before = before[:-2] if before.endswith("\r\n") else before[:-1]
-        prev = re.split(r"[\r\n]", before)[-1]
-        # Inside a quote, judge both lines without their shared ">" markers.
-        quote = re.match(r"(?:[ \t]*>)+[ \t]?", line)
-        if quote and prev.startswith(quote.group(0).rstrip()):
-            line, prev = line[quote.end():], prev[len(quote.group(0).rstrip()):].lstrip(" \t")
-            if not _SETEXT.fullmatch(line):
-                return m.group(1) + ZWSP
-        if prev.strip(_TRIM) and not _FENCE_LINE.search(prev):
-            return m.group(0)
-    return m.group(1) + ZWSP
 
 
 def _decoded(info: str) -> str:
@@ -168,7 +146,7 @@ def neutralize(text: str) -> str:
     text = _OPENER.sub(lambda m: m.group(1) + ZWSP + m.group(2), text)
     text = _FENCE.sub(_fence, text)
     text = _INLINE.sub(lambda m: m.group(1) + ZWSP, text)
-    text = _BLOCK_QUERY.sub(_block_query, text)
+    text = _BLOCK_QUERY.sub(lambda m: m.group(1) + ZWSP, text)
     text = _EXCALIDRAW_KEY.sub(lambda m: m.group(1) + ZWSP, text)
     text = _ESCAPED_KEY.sub(lambda m: (m.group(1) or m.group(2)) + ZWSP, text)
     return _HTML_CODE.sub("<" + ZWSP, text)
