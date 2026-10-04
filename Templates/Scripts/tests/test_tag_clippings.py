@@ -84,3 +84,63 @@ def test_rag_tagger_ordinary_frontmatter_still_parses(rag_tagger):
     fm, body = rag_tagger.parse_frontmatter(ORDINARY)
     assert fm["tags"] == ["Strategy", "AI"]
     assert body == "body text\n"
+
+
+# ---------------------------------------------------------------------------
+# Alias expansion ("billion laughs"). PyYAML loads aliases as shared
+# references, so the load is instant and the 64 KB cap never trips; it is
+# str(tag) in the tagger (and yaml.dump on rewrite) that expands each level
+# ~10x. A few hundred bytes became hours of CPU or an OOM.
+# ---------------------------------------------------------------------------
+
+def laughs(levels: int) -> str:
+    lines = ['l0: &l0 ["lol","lol","lol","lol","lol","lol","lol","lol","lol","lol"]']
+    for i in range(1, levels):
+        refs = ",".join([f"*l{i - 1}"] * 10)
+        lines.append(f"l{i}: &l{i} [{refs}]")
+    lines.append(f"tags: [*l{levels - 1}]")
+    return "---\ntitle: x\n" + "\n".join(lines) + "\n---\nbody text\n"
+
+
+BILLION = laughs(9)     # ~350 bytes of YAML, 10^9 "lol"s once walked
+
+
+def test_billion_laughs_frontmatter_is_refused(tagger, capsys):
+    assert len(BILLION) < 1024
+    fm, _ = tagger.parse_frontmatter(BILLION)
+    # Never let pytest repr a parsed result: that walk IS the expansion.
+    refused = fm is None
+    assert refused, "billion-laughs frontmatter was parsed"
+    assert "frontmatter not parsed (YAML anchor in frontmatter)" in capsys.readouterr().err
+
+
+def test_an_anchor_alone_is_refused(tagger, capsys):
+    text = "---\ntitle: &t x\n---\nbody\n"
+    assert tagger.parse_frontmatter(text) == (None, text)
+    assert "YAML anchor in frontmatter" in capsys.readouterr().err
+
+
+def test_collect_all_tags_does_not_expand_aliases(tagger, tmp_path):
+    """Kept to 4 levels so the pre-fix code fails fast instead of hanging.
+    Mappings rather than lists, so the expanded str() does not start with
+    "[[" and slip past the wikilink filter: the pre-fix code then shows the
+    expansion as a 10^4-"lol" tag instead of discarding it after paying."""
+    lines = ['l0: &l0 {a: lol, b: lol, c: lol, d: lol, e: lol, f: lol, g: lol, h: lol, i: lol, j: lol}']
+    for i in range(1, 4):
+        refs = ", ".join(f"{k}: *l{i - 1}" for k in "abcdefghij")
+        lines.append(f"l{i}: &l{i} {{{refs}}}")
+    doc = "---\ntitle: x\n" + "\n".join(lines) + "\ntags: [*l3]\n---\nbody\n"
+    vault = tmp_path / "vault"
+    (vault / "Clippings").mkdir(parents=True)
+    (vault / "Clippings" / "laughs.md").write_text(doc, encoding="utf-8")
+    (vault / "Clippings" / "fine.md").write_text(ORDINARY, encoding="utf-8")
+
+    assert tagger.collect_all_tags(vault) == ["AI", "Strategy"]
+
+
+def test_rag_tagger_billion_laughs_frontmatter_is_refused(rag_tagger, capsys):
+    fm, _ = rag_tagger.parse_frontmatter(BILLION)
+    # Never let pytest repr a parsed result: that walk IS the expansion.
+    refused = fm is None
+    assert refused, "billion-laughs frontmatter was parsed"
+    assert "frontmatter not parsed (YAML anchor in frontmatter)" in capsys.readouterr().err

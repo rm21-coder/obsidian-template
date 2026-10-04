@@ -145,6 +145,36 @@ MAX_CONTENT_CHARS = 4000
 MAX_FRONTMATTER_CHARS = 64 * 1024
 
 
+class AliasRefused(yaml.YAMLError):
+    """Frontmatter used a YAML anchor or alias."""
+
+
+class _NoAliasLoader(yaml.SafeLoader):
+    """SafeLoader that refuses anchors and aliases outright.
+
+    PyYAML keeps an alias as a shared reference, so loading a "billion
+    laughs" block is instant -- but anything that walks the result (str() of
+    a tag list, yaml.dump on rewrite) expands it, ~10x per level, into hours
+    of CPU or an OOM from a few hundred bytes. No size cap on the input bounds
+    that. Notes never need anchors, so a block that uses one is not parsed."""
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.AliasEvent):
+            raise AliasRefused("YAML alias in frontmatter")
+        if getattr(self.peek_event(), "anchor", None) is not None:
+            raise AliasRefused("YAML anchor in frontmatter")
+        return super().compose_node(parent, index)
+
+
+def _load_no_alias(text: str):
+    """yaml.safe_load, minus anchors and aliases (what yaml.load does inside)."""
+    loader = _NoAliasLoader(text)
+    try:
+        return loader.get_single_data()
+    finally:
+        loader.dispose()
+
+
 def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     """Parse YAML frontmatter from markdown text.
     Returns (frontmatter_dict, body_text). Returns (None, text) if no frontmatter,
@@ -160,10 +190,14 @@ def parse_frontmatter(text: str) -> tuple[dict | None, str]:
     if len(match.group(1)) > MAX_FRONTMATTER_CHARS:
         return None, text
     try:
-        fm = yaml.safe_load(match.group(1))
+        fm = _load_no_alias(match.group(1))
         if not isinstance(fm, dict):
             return None, text
         return fm, match.group(2)
+    except AliasRefused as exc:
+        print(f"  Warning: frontmatter not parsed ({exc}); note skipped",
+              file=sys.stderr)
+        return None, text
     except (yaml.YAMLError, RecursionError, ValueError):
         return None, text
 
