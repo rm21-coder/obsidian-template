@@ -262,9 +262,11 @@ main() {
 report_control() {
     local name="$1" script="$2" from="$3" to="$4" status
     local path="$HOME/Obsidian/Templates/Scripts/$script"
-    # Hard 60 s ceiling: both controls read the Keychain, and a consent
-    # prompt nobody can see would otherwise hang the update indefinitely.
-    status="$(/usr/bin/perl -e 'alarm 60; exec @ARGV' /usr/bin/python3 "$path" --json 2>/dev/null \
+    # Hard 180 s ceiling: both controls read the Keychain, and a consent
+    # prompt nobody can see would otherwise hang the update indefinitely. Not
+    # 60: the integrity check hashes the virtualenv, under a minute from a
+    # cold disk cache, and a timeout here reads as "unreadable".
+    status="$(/usr/bin/perl -e 'alarm 180; exec @ARGV' /usr/bin/python3 "$path" --json 2>/dev/null \
         | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","unreadable"))' \
         2>/dev/null || echo unreadable)"
     case "$status" in

@@ -171,6 +171,10 @@ def tmp_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     import integrity_monitor as im
     monkeypatch.setattr(im, "STATE_DIR", state)
     monkeypatch.setattr(im, "STATE_PATH", state / "integrity_state.json")
+    # and its home (Claude config, secrets file): never the real one
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(im, "HOME", home)
 
     # append_alert is shared now (security_common, size-capped): redirect its
     # state_dir so alert writes land here, never in the real state dir.

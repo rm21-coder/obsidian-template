@@ -33,6 +33,31 @@ Four independent integrity checks, all built on a single state file
        of the prior count, whichever is greater). Catches both ransomware
        and a misbehaving sync.
 
+    5. Coverage added 2026-10-03, each its own scope:
+         templates     ~/Obsidian/Templates (outside Scripts/): the .md and
+                       .js files QuickAdd runs or fills.
+         venv          the scripts' virtualenv: every code file (.py, .pyc,
+                       .pth, .so, .dylib, ...), pyvenv.cfg and the interpreter
+                       links. A .pth line or a site-packages edit runs in
+                       every job without touching a watched script.
+         agent_config  the Claude CLI's instructions and the settings keys
+                       that run commands or widen permissions (hooks,
+                       statusLine, apiKeyHelper, env, permissions, MCP
+                       servers) in ~/.claude, ~/.claude.json and the vault.
+                       Only those keys: the rest of those files churn.
+         secrets       ~/dev/secrets/.env (the same under %USERPROFILE% on
+                       Windows): its hash, and (POSIX) a finding
+                       whenever group or others can read it.
+       plus a bytecode check with no baseline: every cached .pyc of the
+       scripts that an interpreter would load instead of the source must
+       compile from that source. Apple's /usr/bin/python3, which runs the
+       security controls, keeps its cache in ~/Library/Caches/
+       com.apple.python, outside every other scope. Each interpreter's own
+       cache is checked by that interpreter: the venv's in a child process
+       whose own imports bypass the cache being checked.
+       A baseline from before a scope existed reports NOT_BASELINED once for
+       that scope, not every file in it as new.
+
 For each detected change, the script:
     - appends a structured JSON record to the alert log in the state dir
     - emits a desktop notification
@@ -62,7 +87,9 @@ import argparse
 import datetime
 import fnmatch
 import hashlib
+import importlib.util
 import json
+import marshal
 import os
 import re
 import stat as _stat
@@ -91,8 +118,28 @@ DELETION_RATIO = 0.05         # 5% relative
 # the meeting-pull prompt template, requirements.txt, the handoff transform,
 # the dashboard applet source and pipeline config are executed or steer
 # execution, and none of them was hashed.
+# .pyc/.pyd/.so/.dylib/.pth added 2026-10-03: a module or bytecode file
+# planted beside the scripts shadows a package (the scripts' folder comes
+# first on sys.path), and a .pth there would run at startup.
 SCRIPT_EXTS = {".py", ".sh", ".plist", ".ps1", ".psd1",
-               ".js", ".applescript", ".txt", ".yaml", ".yml"}
+               ".js", ".applescript", ".txt", ".yaml", ".yml",
+               ".pyc", ".pyd", ".so", ".dylib", ".pth"}
+
+TEMPLATE_EXTS = {".md", ".js"}
+VENV_EXTS = {".py", ".pyc", ".pth", ".so", ".dylib", ".pyd", ".dll", ".exe",
+             ".metallib"}
+# Settings keys that run a command, change the environment or widen what the
+# CLI may do without asking. Everything else in these files is UI state.
+AGENT_SETTINGS_KEYS = ("hooks", "disableAllHooks", "statusLine", "apiKeyHelper",
+                       "awsAuthRefresh", "awsCredentialExport", "otelHeadersHelper",
+                       "env", "permissions", "mcpServers", "enabledMcpjsonServers",
+                       "enableAllProjectMcpServers")
+# Home of the Claude config and the secrets file; a module setting so tests
+# can point it elsewhere.
+HOME = Path.home()
+# Scopes that hash files against the baseline, in report order.
+BASELINE_SCOPES = ("scripts", "launchagents", "state_dir",
+                   "templates", "venv", "agent_config", "secrets")
 
 # Third-party LaunchAgents that rewrite themselves on their own schedule
 # (vendor auto-updaters). Their recurring CONTENT_CHANGE is noise, and a
@@ -134,7 +181,8 @@ def append_alert(record: dict) -> None:
 
 # ---------- Scanners ---------------------------------------------------------
 
-def scan_dir(directory: Path, *, exts: set[str]) -> dict[str, dict]:
+def scan_dir(directory: Path, *, exts: set[str],
+             extra_prune: frozenset[str] = frozenset()) -> dict[str, dict]:
     """Hash every file in `directory` matching `exts`. Returns {rel_path:
     {sha256, size, mtime}}.  Symlinks are followed (rare here) but their
     target file is what gets hashed; we record the symlink's own mtime."""
@@ -145,7 +193,7 @@ def scan_dir(directory: Path, *, exts: set[str]) -> dict[str, dict]:
     # the watched dir (~/Obsidian/Templates/Scripts) contains a .venv whose
     # thousands of site-package .py files would otherwise flood the baseline.
     prune = {".venv", "__pycache__", ".pytest_cache", ".git",
-             "node_modules", ".obsidian", ".trash"}
+             "node_modules", ".obsidian", ".trash"} | set(extra_prune)
     for path in directory.rglob("*"):
         if not path.is_file():
             continue
@@ -257,6 +305,221 @@ def scan_state_dir() -> dict[str, dict]:
     return out
 
 
+def _file_entry(path: Path) -> dict:
+    try:
+        st = path.stat()
+        if not _stat.S_ISREG(st.st_mode):
+            return {"error": "not a regular file"}
+        return {"sha256": sha256_file(path), "size": st.st_size, "mtime": int(st.st_mtime)}
+    except OSError as e:
+        return {"error": str(e)}
+
+
+def scan_templates(vault: Path) -> dict[str, dict]:
+    """The templates QuickAdd fills and the user scripts it runs. Scripts/ is
+    the scripts scope's."""
+    return scan_dir(vault / "Templates", exts=TEMPLATE_EXTS,
+                    extra_prune=frozenset({"Scripts"}))
+
+
+def scan_venv(venv: Path) -> dict[str, dict]:
+    """Every code file in the scripts' virtualenv, pyvenv.cfg, and the
+    interpreter links in bin/ (Scripts\\ on Windows), hashed through to their
+    targets. Changes legitimately only when the requirements are reinstalled."""
+    out: dict[str, dict] = {}
+    if not venv.is_dir():
+        return out
+    for path in venv.rglob("*"):
+        try:
+            rel_parts = path.relative_to(venv).parts
+        except ValueError:
+            continue
+        top_exe = len(rel_parts) == 2 and rel_parts[0] in ("bin", "Scripts")
+        if not (path.suffix.lower() in VENV_EXTS or path.name == "pyvenv.cfg" or top_exe):
+            continue
+        if not path.is_file():
+            continue
+        out[path.relative_to(venv).as_posix()] = _file_entry(path)
+    return out
+
+
+def _settings_digest(path: Path, *, mcp_only: bool = False) -> dict | None:
+    """Hash of the security-relevant keys of a JSON settings file, or None
+    when the file does not exist."""
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"error": f"unreadable: {e.__class__.__name__}"}
+    if not isinstance(data, dict):
+        return {"error": "not a JSON object"}
+    if mcp_only:
+        picked = {"mcpServers": data.get("mcpServers")}
+        projects = data.get("projects")
+        if isinstance(projects, dict):
+            picked["projects"] = {k: v.get("mcpServers") for k, v in sorted(projects.items())
+                                  if isinstance(v, dict) and v.get("mcpServers")}
+    else:
+        picked = {k: data[k] for k in AGENT_SETTINGS_KEYS if k in data}
+    blob = json.dumps(picked, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {"sha256": hashlib.sha256(blob).hexdigest(), "size": len(blob)}
+
+
+def scan_agent_config(vault: Path, home: Path) -> dict[str, dict]:
+    """The Claude CLI's standing instructions and the settings that make it
+    run commands or skip asking. Keys are labelled by root, not full paths,
+    so the state file does not carry the user's home path."""
+    out: dict[str, dict] = {}
+    whole = {"home:.claude/CLAUDE.md": home / ".claude" / "CLAUDE.md",
+             "vault:CLAUDE.md": vault / "CLAUDE.md",
+             "vault:.claude/CLAUDE.md": vault / ".claude" / "CLAUDE.md"}
+    for key, path in whole.items():
+        if path.exists():
+            out[key] = _file_entry(path)
+    keyed = {"home:.claude/settings.json": (home / ".claude" / "settings.json", False),
+             "home:.claude/settings.local.json": (home / ".claude" / "settings.local.json", False),
+             "vault:.claude/settings.json": (vault / ".claude" / "settings.json", False),
+             "vault:.claude/settings.local.json": (vault / ".claude" / "settings.local.json", False),
+             "home:.claude.json#mcpServers": (home / ".claude.json", True)}
+    for key, (path, mcp_only) in keyed.items():
+        entry = _settings_digest(path, mcp_only=mcp_only)
+        if entry is not None:
+            out[key] = entry
+    return out
+
+
+def scan_secrets(home: Path) -> dict[str, dict]:
+    path = home / "dev" / "secrets" / ".env"
+    if not path.exists():
+        return {}
+    entry = _file_entry(path)
+    try:
+        entry["mode"] = _stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        pass
+    return {"secrets/.env": entry}
+
+
+def secrets_permission_findings(current: dict[str, dict]) -> list[dict]:
+    """POSIX only: a secrets file group or others can read. Windows guards it
+    with an ACL, which a mode does not describe."""
+    if os.name != "posix":
+        return []
+    entry = current.get("secrets/.env") or {}
+    mode = entry.get("mode")
+    if mode is not None and mode & 0o077:
+        return [{"kind": "PERMISSIONS", "scope": "secrets", "path": "secrets/.env",
+                 "mode": oct(mode)}]
+    return []
+
+
+# ---------- Bytecode ---------------------------------------------------------
+
+def _bytecode_sources(scripts: Path) -> list[Path]:
+    return sorted([*scripts.glob("*.py"), *(scripts / "windows").glob("*.py")])
+
+
+def _pyc_problem(src: Path, pyc: Path, optimize: int) -> str | None:
+    """Why `pyc` is not what `src` compiles to, or None when it is -- or when
+    this interpreter would not load it anyway (another version's magic, or a
+    stale timestamp or hash, which makes Python recompile from source)."""
+    try:
+        if not _stat.S_ISREG(pyc.stat().st_mode):
+            return "not a regular file"
+        data = pyc.read_bytes()
+        source = src.read_bytes()
+        st = src.stat()
+    except OSError as e:
+        return f"unreadable: {e}"
+    if data[:4] != importlib.util.MAGIC_NUMBER:
+        return None
+    flags = int.from_bytes(data[4:8], "little")
+    if flags & ~0b11:
+        return None                      # rejected by the loader
+    if flags == 0:                       # timestamp-based
+        if (int.from_bytes(data[8:12], "little") != (int(st.st_mtime) & 0xFFFFFFFF)
+                or int.from_bytes(data[12:16], "little") != (st.st_size & 0xFFFFFFFF)):
+            return None
+    elif flags & 0b10:                   # checked hash: loaded only if it matches
+        if data[8:16] != importlib.util.source_hash(source):
+            return None
+    # an unchecked hash-based .pyc is loaded whatever the source says
+    try:
+        code = marshal.loads(data[16:])
+    except Exception as e:  # noqa: BLE001 -- any failure is the finding
+        return f"unreadable bytecode: {e.__class__.__name__}"
+    try:
+        expected = compile(source, str(src), "exec", dont_inherit=True, optimize=optimize)
+    except (SyntaxError, ValueError):
+        return None                      # the source itself would not import
+    return None if code == expected else "does not match its source"
+
+
+def bytecode_findings(scripts: Path, *, explicit_pycache: bool = False) -> list[dict]:
+    """Every cached .pyc of the scripts that THIS interpreter would load must
+    be the compiled source. explicit_pycache: look in <dir>/__pycache__
+    rather than where this process's own cache settings point (used by the
+    child run, whose cache is redirected so its imports skip __pycache__)."""
+    out = []
+    tag = sys.implementation.cache_tag
+    for src in _bytecode_sources(scripts):
+        for opt in (0, 1, 2):
+            suffix = "" if opt == 0 else f".opt-{opt}"
+            if explicit_pycache:
+                pyc = src.parent / "__pycache__" / f"{src.stem}.{tag}{suffix}.pyc"
+            else:
+                try:
+                    pyc = Path(importlib.util.cache_from_source(
+                        str(src), optimization="" if opt == 0 else opt))
+                except (NotImplementedError, ValueError):
+                    continue
+            if not pyc.exists():
+                continue
+            problem = _pyc_problem(src, pyc, opt)
+            if problem:
+                out.append({"kind": "BYTECODE_MISMATCH", "scope": "bytecode",
+                            "path": str(pyc), "detail": problem})
+    return out
+
+
+def _venv_python(scripts: Path) -> Path | None:
+    for rel in (("bin", "python3"), ("Scripts", "python.exe")):
+        cand = scripts / ".venv" / Path(*rel)
+        if cand.exists():
+            return cand
+    return None
+
+
+def venv_bytecode_findings(scripts: Path) -> list[dict]:
+    """The venv interpreter's cache, checked by that interpreter in a child
+    process. PYTHONPYCACHEPREFIX points the child's own imports at an empty
+    directory, so a tampered .pyc in __pycache__ cannot run inside the check
+    that is looking for it."""
+    venv_py = _venv_python(scripts)
+    if venv_py is None or venv_py.resolve().parent == Path(sys.executable).resolve().parent:
+        return []
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="integrity_pyc_") as empty:
+        try:
+            p = subprocess.run(
+                [str(venv_py), str(Path(__file__).resolve()), "--bytecode-only",
+                 "--scripts-dir", str(scripts)],
+                capture_output=True, timeout=180,
+                env={**os.environ, "PYTHONPYCACHEPREFIX": empty, "PYTHONDONTWRITEBYTECODE": "1"})
+        except (OSError, subprocess.SubprocessError) as e:
+            return [{"kind": "BYTECODE_UNCHECKED", "scope": "bytecode",
+                     "path": str(venv_py), "detail": e.__class__.__name__}]
+    try:
+        found = json.loads(p.stdout.decode("utf-8", "replace"))
+        if p.returncode == 0 and isinstance(found, list):
+            return found
+    except ValueError:
+        pass
+    return [{"kind": "BYTECODE_UNCHECKED", "scope": "bytecode", "path": str(venv_py),
+             "detail": f"exit {p.returncode}"}]
+
+
 def count_vault_md(vault: Path) -> int:
     """Count .md files outside hidden dirs and templates. We deliberately
     exclude .trash, .obsidian and node_modules to keep the count stable
@@ -355,16 +618,25 @@ def main(argv: list[str]) -> int:
     p.add_argument("--update", action="store_true",
                    help="adopt current state as new baseline")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--bytecode-only", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args(argv)
 
     scripts = Path(os.path.expanduser(args.scripts_dir)).resolve()
     launchagents = Path(os.path.expanduser(args.launchagents_dir)).resolve()
     vault = Path(os.path.expanduser(args.vault)).resolve()
 
+    if args.bytecode_only:      # the child run of venv_bytecode_findings()
+        print(json.dumps(bytecode_findings(scripts, explicit_pycache=True)))
+        return 0
+
     current = {
         "scripts": scan_dir(scripts, exts=SCRIPT_EXTS),
         "launchagents": scan_persistence(launchagents),
         "state_dir": scan_state_dir(),
+        "templates": scan_templates(vault),
+        "venv": scan_venv(scripts / ".venv"),
+        "agent_config": scan_agent_config(vault, HOME),
+        "secrets": scan_secrets(HOME),
         "vault_md_count": count_vault_md(vault),
     }
 
@@ -378,6 +650,9 @@ def main(argv: list[str]) -> int:
             "integrity",
             f"baseline updated: {n_scripts} script files, "
             f"{n_agents} agent plists, {n_state} state-dir trust anchors, "
+            f"{len(current['templates'])} templates, {len(current['venv'])} venv files, "
+            f"{len(current['agent_config'])} agent config entries, "
+            f"{len(current['secrets'])} secrets file(s), "
             f"{n_md} markdown files in vault.",
             stream=sys.stdout)
         # The adopt is already complete; this only refreshes the scheduler's
@@ -408,12 +683,17 @@ def main(argv: list[str]) -> int:
         return 2
 
     findings: list[dict] = []
-    findings += diff_dir("scripts", current["scripts"],
-                         baseline.get("scripts", {}))
-    findings += diff_dir("launchagents", current["launchagents"],
-                         baseline.get("launchagents", {}))
-    findings += diff_dir("state_dir", current["state_dir"],
-                         baseline.get("state_dir", {}))
+    for scope in BASELINE_SCOPES:
+        if scope not in baseline:
+            # A baseline from before this scope existed: one finding, not
+            # every file in it reported as new.
+            findings.append({"kind": "NOT_BASELINED", "scope": scope,
+                             "count": len(current[scope])})
+            continue
+        findings += diff_dir(scope, current[scope], baseline[scope])
+    findings += secrets_permission_findings(current["secrets"])
+    findings += bytecode_findings(scripts)
+    findings += venv_bytecode_findings(scripts)
     bulk = diff_md_count(current["vault_md_count"],
                          baseline.get("vault_md_count", 0))
     if bulk:
@@ -427,6 +707,10 @@ def main(argv: list[str]) -> int:
                 "scripts": len(current["scripts"]),
                 "launchagents": len(current["launchagents"]),
                 "state_dir": len(current["state_dir"]),
+                "templates": len(current["templates"]),
+                "venv": len(current["venv"]),
+                "agent_config": len(current["agent_config"]),
+                "secrets": len(current["secrets"]),
                 "vault_md_count": current["vault_md_count"],
             },
         }, indent=2))
@@ -443,6 +727,12 @@ def main(argv: list[str]) -> int:
             summary_parts.append(f"NEW {f['scope']}: {f['path']}")
         elif f["kind"] == "DELETED":
             summary_parts.append(f"DELETED {f['scope']}: {f['path']}")
+        elif f["kind"] == "NOT_BASELINED":
+            summary_parts.append(f"{f['scope']}: not yet baselined")
+        elif f["kind"] == "PERMISSIONS":
+            summary_parts.append(f"secrets file readable by others ({f['mode']})")
+        elif f["kind"] in ("BYTECODE_MISMATCH", "BYTECODE_UNCHECKED"):
+            summary_parts.append(f"bytecode: {Path(f['path']).name} {f['detail']}")
         elif f["kind"] == "BULK_DELETE":
             summary_parts.append(
                 f"vault: -{f['deleted']} md files "

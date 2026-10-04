@@ -156,12 +156,48 @@ Either way, the export gate blocks a dynamic command anywhere in an export
 | Control | Script | Schedule | What it checks |
 |---------|--------|----------|----------------|
 | Plugin integrity | `plugin_integrity_check.py` | daily 06:30 + on change to the plugins folder | SHA-256 of each plugin's `main.js` and `manifest.json` under `<vault>/.obsidian/plugins/`, diffed against an HMAC-signed allowlist. |
-| Workflow integrity | `integrity_monitor.py` | daily 06:35 + on change to scripts / LaunchAgents / state dir | SHA-256 of every `.py`/`.sh`/`.plist` in `Templates/Scripts/`, every plist in `~/Library/LaunchAgents/`, and the controls' own state files; plus a bulk-deletion guard on the vault's Markdown count. |
+| Workflow integrity | `integrity_monitor.py` | daily 06:35 + on change to scripts / LaunchAgents / state dir | SHA-256 of the scripts in `Templates/Scripts/` (and any module or bytecode planted beside them), every plist in `~/Library/LaunchAgents/`, the controls' own state files, the templates, the scripts' virtualenv, the Claude CLI's instructions and command-running settings, and the secrets file; every cached `.pyc` of the scripts checked against its source; plus a bulk-deletion guard on the vault's Markdown count. See "What the integrity monitor covers". |
 
 Both are wired as LaunchAgents (`com.obsidian.security.plugin-check`,
 `com.obsidian.security.integrity`), each run
 via `/usr/bin/python3` so they keep working even if the per-vault virtualenv is
 broken.
+
+### What the integrity monitor covers
+
+Each scope is hashed and compared with the baseline:
+
+- **scripts** — `Templates/Scripts/`, including any `.pyc`, `.so`, `.pyd`,
+  `.dylib` or `.pth` planted beside the scripts. The scripts' folder comes
+  first on Python's import path, so a planted `requests.pyc` would shadow the
+  real package.
+- **launchagents** — the plists in `~/Library/LaunchAgents/` (on Windows, the
+  `\Obsidian\` scheduled tasks).
+- **state_dir** — the controls' own trust anchors.
+- **templates** — the `.md` and `.js` files under `Templates/` that QuickAdd
+  fills or runs.
+- **venv** — every code file in the scripts' virtualenv (`.py`, `.pyc`, `.pth`,
+  `.so`, `.dylib`, …), `pyvenv.cfg` and the interpreter links. A `.pth` line
+  or an edited package runs inside every job without touching a watched
+  script. It changes legitimately when an update reinstalls the requirements.
+- **agent_config** — `CLAUDE.md` in `~/.claude/` and in the vault, and only the
+  settings that run commands or skip asking: `hooks`, `statusLine`,
+  `apiKeyHelper`, `env`, `permissions`, and the MCP servers in `~/.claude.json`.
+  The rest of those files changes all the time and is not compared.
+- **secrets** — `~/dev/secrets/.env`, by hash. On macOS and Linux, a mode that
+  lets group or others read it is a finding on every run.
+
+**Bytecode** needs no baseline. Every cached `.pyc` of the scripts that an
+interpreter would load instead of the source must be exactly what that source
+compiles to. That includes Apple's `/usr/bin/python3`, which runs the security
+controls and keeps its cache in `~/Library/Caches/com.apple.python`. A stale
+`.pyc` doesn't count, since Python recompiles it; one for another Python
+version is ignored by the interpreter that runs the job. The venv's cache is
+checked by the venv's own interpreter, in a child process whose own imports
+skip the cache it is checking.
+
+A baseline taken before a scope existed reports `NOT_BASELINED` once for that
+scope, not every file in it as new. Review, then adopt with `--update`.
 
 ## Where alerts go
 
@@ -287,7 +323,10 @@ Run any control by hand. Useful flags:
 
 ## Footprint
 
-Standard-library Python 3 only — no pip packages, no network. The controls read
+Standard-library Python 3 only — no pip packages, no network. With the
+transcription packages, the scripts' virtualenv is about 1.4 GB; hashing it
+adds about 10 seconds to the integrity check, or under a minute from a cold
+disk cache. The controls read
 hashes and the local unified log, write only their own state and `alerts.log`,
 and never modify your plugins, scripts, or notes. The state directory is created
 mode `0700`; state files are written `0600`.
