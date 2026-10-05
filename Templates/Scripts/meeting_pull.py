@@ -90,8 +90,17 @@ EXIT_NO_NETWORK = 5
 # holds the whole job, which is how a fourteen-hour outage started elsewhere in
 # this pipeline. A timeout is a retryable outcome here: a wedged CLI session
 # often succeeds on the next attempt, which is exactly what the retry loop is
-# for. subprocess.run kills the child when the timeout fires.
+# for. run_session kills the child when the timeout fires.
 PRODUCER_TIMEOUT_SEC = int(os.environ.get("MEETING_PULL_TIMEOUT", "600"))
+
+# Seconds between starting the CLI and handing it the prompt, multiplied by
+# the attempt number. The claude.ai calendar connector registers with a
+# session asynchronously, and a headless session given its prompt at once
+# usually started without it (2026-10-05: CLI 2.1.289 0 of 3, and 2.1.278 too
+# once stdin was closed, as it is under launchd; with the prompt sent 10s or
+# more after launch, 3 of 3). The CLI's own wait for piped stdin is a fixed
+# 3s, which is why an open stdin pipe used to paper over the race.
+CONNECTOR_WAIT_SEC = int(os.environ.get("MEETING_PULL_CONNECTOR_WAIT", "15"))
 
 
 def network_ready():
@@ -502,18 +511,76 @@ def producer_command(claude, prompt, tools, denied):
     could still have had the session read a secrets file and return it inside
     an event body, which this pipeline would carry into a vault note.
 
-    --output-format json gives one machine-readable envelope instead of prose
-    to scrape. --no-session-persistence stops the CLI saving a transcript of
-    every meeting body to disk each morning.
+    --output-format stream-json (which needs --verbose) gives one JSON
+    message per line instead of prose to scrape: the session's opening `init`
+    message lists the tools it actually has, each tool call is its own
+    message, and the last line is the same result envelope `json` gives. The
+    first two are what tell a session that never saw the calendar connector
+    from an empty calendar (2026-10-05, see extract_events).
+    --no-session-persistence stops the CLI saving a transcript of every
+    meeting body to disk each morning.
+
+    The prompt is not in the argv: with --input-format stream-json it is sent
+    on stdin as one user message, after CONNECTOR_WAIT_SEC (see
+    run_session), which is what lets the calendar connector register first.
+    `prompt` is accepted for the caller's symmetry and not used here.
     """
-    return [claude, "-p", prompt,
+    return [claude, "-p",
+            "--input-format", "stream-json",
             "--restricted",
             "--permission-mode", "dontAsk",
             "--allowedTools", tools,
             "--disallowedTools", denied,
             "--json-schema", EVENTS_SCHEMA,
-            "--output-format", "json",
+            "--output-format", "stream-json", "--verbose",
             "--no-session-persistence"]
+
+
+def user_message(prompt):
+    """The prompt as the one stream-json user message the session reads."""
+    return json.dumps({"type": "user",
+                       "message": {"role": "user", "content": prompt}}) + "\n"
+
+
+def _drain(proc, grace=5):
+    """Output of a killed CLI, waiting at most `grace` seconds. Reading until
+    the pipes close could wait forever: a helper the CLI started can outlive
+    the kill and hold them open, which would carry the job past its time
+    limit and its retries (review, 2026-10-05)."""
+    try:
+        return proc.communicate(timeout=grace)
+    except subprocess.TimeoutExpired:
+        return "", ""
+
+
+def run_session(command, prompt, wait, timeout, cwd):
+    """Start the CLI, wait `wait` seconds, send the prompt, collect output.
+
+    Returns a CompletedProcess. Raises subprocess.TimeoutExpired, carrying
+    whatever output had arrived, if the session outlives `timeout`.
+    """
+    # The CLI writes UTF-8. Without an explicit encoding, Windows decodes it
+    # in the ANSI code page: "\u00b7" arrives as "\u00c2\u00b7", and a
+    # signature match against the CLI's words can miss.
+    proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                            errors="replace", cwd=cwd)
+    deadline = time.monotonic() + timeout
+    try:
+        # Closing stdin after the one message ends the session once it has
+        # answered; the wait comes first so the connector can register.
+        time.sleep(max(0, min(wait, timeout)))
+        out, err = proc.communicate(user_message(prompt),
+                                    timeout=max(1, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = _drain(proc)
+        raise subprocess.TimeoutExpired(command, timeout, output=out, stderr=err)
+    except BaseException:
+        proc.kill()
+        _drain(proc)
+        raise
+    return subprocess.CompletedProcess(command, proc.returncode, out, err)
 
 
 class ProducerOutputError(ValueError):
@@ -535,25 +602,115 @@ def _first_json_object(text):
     return obj
 
 
-def extract_events(stdout):
-    """Return the events list from `claude -p --output-format json` stdout.
+def search_tool_name(config):
+    """The search tool's full name as the session exposes it."""
+    return allowed_tools(config).split()[0]
 
-    Only `events` is taken from the model. `user` and `week` are built from
-    config by build_calendar(): they are known here, and asking a model to
-    copy them "verbatim" was one more thing it could get wrong.
+
+def _read_session(stdout):
+    """(envelope, init, calls) from the CLI's stdout.
+
+    stream-json prints one message per line: `init` (the tools and MCP
+    servers the session actually has), then the turns, then the result
+    envelope. init and calls are None for a single `--output-format json`
+    envelope, which carries neither.
     """
     try:
         # strict=False: event bodies carry tabs and other control characters,
         # and one probe of the real CLI returned an envelope that strict
         # parsing rejects. It only relaxes control characters inside strings.
-        envelope = json.loads(stdout, strict=False)
+        whole = json.loads(stdout, strict=False)
     except ValueError:
-        raise ProducerOutputError("CLI output was not the JSON envelope --output-format json promises")
-    if not isinstance(envelope, dict):
+        whole = None
+    if isinstance(whole, dict) and whole.get("type") not in ("system", "assistant", "user"):
+        return whole, None, None           # one --output-format json envelope
+    if whole is not None and not isinstance(whole, dict):
         raise ProducerOutputError("CLI output was not a JSON object")
+    envelope, init, calls = None, None, {}
+    pending = {}           # tool_use id -> tool name, until its result arrives
+    # split("\n"), not splitlines(): that also splits on U+2028, U+0085 and
+    # other separators the CLI writes unescaped inside a meeting body, which
+    # broke the result line and failed a good run (review, 2026-10-05).
+    for line in stdout.split("\n"):
+        try:
+            msg = json.loads(line, strict=False)
+        except ValueError:
+            continue
+        if not isinstance(msg, dict):
+            continue
+        kind = msg.get("type")
+        if kind == "system" and msg.get("subtype") == "init":
+            init = msg
+        elif kind == "assistant":
+            content = (msg.get("message") or {}).get("content")
+            for block in content if isinstance(content, list) else []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    pending[block.get("id")] = str(block.get("name"))
+        elif kind == "user":
+            # A call counts only once its result came back without an error:
+            # a connector listed as connected whose token has expired answers
+            # the search with an error, and the model then reports no events.
+            content = (msg.get("message") or {}).get("content")
+            for block in content if isinstance(content, list) else []:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    name = pending.pop(block.get("tool_use_id"), None)
+                    if name and not block.get("is_error"):
+                        calls[name] = calls.get(name, 0) + 1
+        elif kind == "result":
+            envelope = msg
+    if envelope is None:
+        raise ProducerOutputError("CLI output was not the JSON envelope or message "
+                                  "stream --output-format promises")
+    return envelope, init, calls
+
+
+def _servers(init):
+    servers = init.get("mcp_servers")
+    if not isinstance(servers, list) or not servers:
+        return "none"
+    return ", ".join("%s (%s)" % (s.get("name"), s.get("status"))
+                     for s in servers if isinstance(s, dict))
+
+
+def extract_events(stdout, search_tool=None):
+    """Return the events list from `claude -p --output-format stream-json`
+    stdout (a single `json` envelope is accepted too).
+
+    Only `events` is taken from the model. `user` and `week` are built from
+    config by build_calendar(): they are known here, and asking a model to
+    copy them "verbatim" was one more thing it could get wrong.
+
+    With `search_tool` given, a session that did not have that tool, or never
+    called it, is an error and not an empty day. On 2026-10-05 the Claude CLI
+    (2.1.289 nearly always, 2.1.278 sometimes) started sessions without the
+    calendar connector: `init` listed no MCP server at all, the forced schema
+    let the model answer {"events": []}, and the pull logged "done" on a
+    Monday with eleven meetings. The tool list and the calls are facts the
+    CLI reports; the model's own account of what it did is not used.
+    """
+    envelope, init, calls = _read_session(stdout)
+    if search_tool and init is None:
+        # Requested stream-json and got a bare envelope: the checks below
+        # would have nothing to check, which is how the failure passed.
+        raise ProducerOutputError("the CLI did not report its session (no "
+                                  "stream-json init message), so whether the "
+                                  "calendar was read cannot be told")
     if envelope.get("is_error"):
         raise ProducerOutputError("the CLI reported an error: %s"
                                   % str(envelope.get("result") or envelope.get("subtype"))[:300])
+    if search_tool and init is not None:
+        tools = init.get("tools")
+        # No tools list at all is left to the call check below, rather than
+        # read as "not loaded" on a CLI that stops printing one.
+        if isinstance(tools, list) and search_tool not in tools:
+            raise ProducerOutputError(
+                "the calendar connector was not loaded into the session (MCP "
+                "servers: %s), so no calendar was read - not an empty calendar"
+                % _servers(init))
+    if search_tool and calls is not None and not calls.get(search_tool):
+        raise ProducerOutputError(
+            "the session never completed a call to %s, so no calendar was "
+            "read - not an empty calendar" % search_tool)
     structured = envelope.get("structured_output")
     if isinstance(structured, dict):
         obj = structured                   # validated against EVENTS_SCHEMA
@@ -567,6 +724,29 @@ def extract_events(stdout):
     if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
         raise ProducerOutputError("the reply had no 'events' list of objects")
     return events
+
+
+def failure_text(stdout, stderr):
+    """What a failed run may put in the log, or match a sign-in signature
+    against: stderr, the result message's own words, and any line of stdout
+    that is not JSON (a CLI that fails before its stream starts prints plain
+    text). Never a JSON line of the stream -- those carry every meeting body
+    the session read -- and never a result that is itself JSON, which is the
+    model's events when the CLI ignored --json-schema (review, 2026-10-05)."""
+    def text(x):
+        return x.decode("utf-8", "replace") if isinstance(x, bytes) else (x or "")
+    stdout, stderr = text(stdout), text(stderr)
+    parts = [stderr]
+    try:
+        envelope, _init, _calls = _read_session(stdout)
+        result = envelope.get("result")
+        if isinstance(result, str) and not result.lstrip().startswith(("{", "[")):
+            parts.append(result)
+    except ProducerOutputError:
+        pass
+    parts += [ln for ln in stdout.split("\n")
+              if ln.strip() and not ln.lstrip().startswith(("{", "["))]
+    return "\n".join(p for p in parts if p.strip())
 
 
 def build_calendar(config, events):
@@ -722,10 +902,11 @@ def main():
     prompt = render_prompt(template_path, config, config_path, out_dir)
     tools = allowed_tools(config)
     if args.dry_run:
-        log("dry run - would invoke: claude -p <prompt> --restricted "
+        log("dry run - would invoke: claude -p --input-format stream-json --restricted "
             "--permission-mode dontAsk --allowedTools %r --disallowedTools "
-            "<%d tools> --output-format json" % (
-                tools, len(disallowed_tools(config).split())))
+            "<%d tools> --output-format stream-json --verbose, prompt on stdin "
+            "after %ds" % (
+                tools, len(disallowed_tools(config).split()), CONNECTOR_WAIT_SEC))
         log("drop folder: %s" % out_dir)
         print(prompt)
         return 0
@@ -768,20 +949,14 @@ def main():
         import tempfile
         workdir = tempfile.mkdtemp(prefix="meeting_pull_cwd_")
         try:
-            # The CLI writes UTF-8. Without an explicit encoding, Windows
-            # decodes it in the ANSI code page: "·" arrives as "Â·", and
-            # a signature match against the CLI's words can miss.
-            completed = subprocess.run(command, capture_output=True, text=True,
-                                       encoding="utf-8", errors="replace",
-                                       timeout=PRODUCER_TIMEOUT_SEC, cwd=workdir)
+            completed = run_session(command, prompt, CONNECTOR_WAIT_SEC * attempt,
+                                    PRODUCER_TIMEOUT_SEC, workdir)
         except subprocess.TimeoutExpired as exc:
             shutil.rmtree(workdir, ignore_errors=True)
-            for chunk in (exc.stdout, exc.stderr):
-                if not chunk:
-                    continue
-                text = chunk.decode(errors="replace") if isinstance(chunk, bytes) else chunk
-                if text.strip():
-                    print(text.rstrip(), flush=True)
+            # The partial stream holds whatever bodies arrived before the kill.
+            shown = failure_text(exc.stdout, exc.stderr)
+            if shown.strip():
+                print(shown.rstrip()[-2000:], flush=True)
             log("producer exceeded %ds and was killed - treating as a failed "
                 "attempt" % PRODUCER_TIMEOUT_SEC)
             if attempt < attempts:
@@ -789,14 +964,17 @@ def main():
                 time.sleep(args.retry_delay)
             continue
         shutil.rmtree(workdir, ignore_errors=True)
-        transcript = (completed.stdout or "") + (completed.stderr or "")
+        # Sign-in signatures are matched in the filtered text, not the raw
+        # stream: a meeting titled "Unauthorized device remediation" matched
+        # AUTH_FAILURE_RE, blocked the day's firings and logged its own body.
+        transcript = failure_text(completed.stdout, completed.stderr)
 
         if completed.returncode == 0:
             # The session returned; now this script does what the session used
             # to do with Bash and Write. Its reply is NOT echoed to the log:
             # it contains every meeting body.
             try:
-                events = extract_events(completed.stdout or "")
+                events = extract_events(completed.stdout or "", search_tool_name(config))
             except ProducerOutputError as exc:
                 log("the session returned no usable calendar: %s" % exc)
                 if attempt < attempts:
@@ -820,7 +998,8 @@ def main():
 
         if transcript.strip():
             # Failure: keep the CLI's own words (the auth signature the
-            # dashboard looks for lives here), but not an unbounded reply.
+            # dashboard looks for lives here), but not an unbounded reply,
+            # and not the message stream, which holds meeting bodies.
             print(transcript.rstrip()[-2000:], flush=True)
 
         if ORG_POLICY_RE.search(transcript):

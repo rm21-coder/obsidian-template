@@ -108,7 +108,8 @@ class TestTheSessionHoldsOnlyCalendarTools:
 
     def test_output_is_machine_readable_and_not_persisted(self) -> None:
         cmd = mp.producer_command("claude", "PROMPT", "x y", "z")
-        assert cmd[cmd.index("--output-format") + 1] == "json"
+        assert cmd[cmd.index("--output-format") + 1] == "stream-json"
+        assert "--verbose" in cmd, "stream-json without --verbose is refused by the CLI"
         assert "--no-session-persistence" in cmd
 
     def test_prompt_no_longer_asks_the_session_to_run_anything(self) -> None:
@@ -202,14 +203,16 @@ class TestEndToEnd:
         monkeypatch.setattr(mp, "AUTH_MARKER", tmp_path / "auth.json")
         monkeypatch.setattr(mp, "notify_failure", lambda msg: None)
         monkeypatch.setattr(mp, "keep_awake", lambda cmd: cmd)
+        monkeypatch.setattr(mp, "CONNECTOR_WAIT_SEC", 0)
 
         def fake(reply: str, rc: int = 0) -> Path:
             # A real executable on every platform (see platform_caps): the
             # shebang-only stub could not be run by Windows at all.
             return make_cli_stub(tmp_path, "claude",
                 "import json, os, sys\n"
+                "stdin = sys.stdin.read()\n"
                 f"json.dump({{'argv': sys.argv[1:], 'cwd': os.getcwd(), "
-                "'cwd_contents': os.listdir('.')}, "
+                "'cwd_contents': os.listdir('.'), 'stdin': stdin}, "
                 f"open({str(argv_log)!r}, 'w'))\n"
                 f"sys.stdout.write({reply!r})\n"
                 f"sys.exit({rc})\n")
@@ -225,7 +228,7 @@ class TestEndToEnd:
     def test_a_calendar_reply_becomes_a_handoff(self, env, allow_subprocess,
                                                 capsys) -> None:
         fake, run, drop, argv_log = env
-        assert run(fake(_envelope(json.dumps({"events": [EVENT]})))) == 0
+        assert run(fake(_stream([EVENT]))) == 0
         assert any(drop.glob("schedule-handoff-*.v1.ready"))
         seen = json.loads(argv_log.read_text())
         argv = seen["argv"]
@@ -246,7 +249,7 @@ class TestEndToEnd:
     def test_an_empty_calendar_still_writes_a_handoff(self, env, allow_subprocess) -> None:
         """So the later catch-up firings see today's handoff and no-op."""
         fake, run, drop, _ = env
-        assert run(fake(_envelope('{"events": []}'))) == 0
+        assert run(fake(_stream([], calls=(SEARCH,)))) == 0
         assert any(drop.glob("schedule-handoff-*.v1.ready"))
 
     def test_a_config_naming_the_removed_graph_producer_is_refused(
@@ -256,7 +259,7 @@ class TestEndToEnd:
         fake, run, drop, argv_log = env
         (tmp_path / "meeting_pull.json").write_text(json.dumps({**CONFIG, "producer": "graph"}))
         with pytest.raises(SystemExit) as exc:
-            run(fake(_envelope(json.dumps({"events": [EVENT]}))))
+            run(fake(_stream([EVENT])))
         assert exc.value.code == 1
         assert "'graph' producer (graph_calendar_fetch.py) was removed" in capsys.readouterr().out
         assert not argv_log.exists(), "the claude session ran anyway"
@@ -266,7 +269,7 @@ class TestEndToEnd:
                                                     allow_subprocess) -> None:
         fake, run, drop, _ = env
         (tmp_path / "meeting_pull.json").write_text(json.dumps({**CONFIG, "producer": "claude"}))
-        assert run(fake(_envelope('{"events": []}'))) == 0
+        assert run(fake(_stream([], calls=(SEARCH,)))) == 0
         assert any(drop.glob("schedule-handoff-*.v1.ready"))
 
     def test_auth_failure_is_still_recognised(self, env, allow_subprocess,
@@ -301,7 +304,7 @@ class TestWindowsFindings:
         fake, run, drop, _ = env
         (tmp_path / "meeting_pull.json").write_bytes(
             b"\xef\xbb\xbf" + json.dumps(CONFIG).encode("utf-8"))
-        assert run(fake(_envelope('{"events": []}'))) == 0
+        assert run(fake(_stream([], calls=(SEARCH,)))) == 0
         assert any(drop.glob("schedule-handoff-*.v1.ready"))
 
     def test_an_org_policy_refusal_stops_at_once_with_its_own_advice(
@@ -342,13 +345,13 @@ class TestWindowsFindings:
         # page ("\u00b7" became "\u00c2\u00b7"), which can also defeat a signature match.
         fake, run, drop, _ = env
         seen: list[dict] = []
-        real = mp.subprocess.run
+        real = mp.subprocess.Popen
 
         def spy(cmd, *a, **kw):
             seen.append(kw)
             return real(cmd, *a, **kw)
-        monkeypatch.setattr(mp.subprocess, "run", spy)
-        run(fake(_envelope('{"events": []}')))
+        monkeypatch.setattr(mp.subprocess, "Popen", spy)
+        run(fake(_stream([], calls=(SEARCH,))))
         producer = seen[0]
         assert producer.get("encoding") == "utf-8"
         assert producer.get("errors") == "replace"
@@ -422,3 +425,224 @@ class TestTheLogIsWhereTheNotificationSays:
             "a hardcoded macOS log path is back in meeting_pull.py")
         assert "log_path()" in source.split("No calendar handoff written")[1][:120], (
             "the failure notification no longer names log_path()")
+
+
+SEARCH = "mcp__claude_ai_Microsoft_365__outlook_calendar_search"
+READ = "mcp__claude_ai_Microsoft_365__read_resource"
+
+
+def _stream(events, *, tools=(SEARCH, READ), calls=(SEARCH, READ), servers=None,
+            body="agenda", errored=()) -> str:
+    """What `claude -p --output-format stream-json --verbose` prints: init,
+    the turns (tool calls and their results), then the result envelope."""
+    if servers is None:
+        servers = [{"name": "claude.ai Microsoft 365", "status": "connected"}] if tools else []
+    lines = [{"type": "system", "subtype": "init",
+              "tools": ["StructuredOutput", *tools], "mcp_servers": servers}]
+    for n, name in enumerate(calls):
+        lines.append({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "tu%d" % n, "name": name, "input": {}}]}})
+        lines.append({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "tu%d" % n,
+             "is_error": name in errored, "content": body}]}})
+    lines.append({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "StructuredOutput", "input": {"events": events}}]}})
+    lines.append({"type": "result", "subtype": "success", "is_error": False,
+                  "num_turns": len(calls) + 2, "result": "",
+                  "structured_output": {"events": events}})
+    return "\n".join(json.dumps(m) for m in lines) + "\n"
+
+
+class TestASessionWithoutTheCalendar:
+    """2026-10-05: the CLI started sessions with no calendar connector, the
+    forced schema let the model answer {"events": []}, and the pull logged
+    "done" on a Monday with eleven meetings."""
+
+    def test_a_real_stream_yields_its_events(self) -> None:
+        assert mp.extract_events(_stream([EVENT]), SEARCH) == [EVENT]
+
+    def test_an_empty_calendar_that_was_searched_is_still_valid(self) -> None:
+        assert mp.extract_events(_stream([], calls=(SEARCH,)), SEARCH) == []
+
+    def test_a_session_without_the_connector_is_an_error(self) -> None:
+        with pytest.raises(mp.ProducerOutputError,
+                           match=r"connector was not loaded into the session \(MCP servers: none\)"):
+            mp.extract_events(_stream([], tools=(), calls=()), SEARCH)
+
+    def test_a_session_that_never_searched_is_an_error(self) -> None:
+        with pytest.raises(mp.ProducerOutputError, match="never completed a call to " + SEARCH):
+            mp.extract_events(_stream([], calls=()), SEARCH)
+
+    def test_a_placeholder_event_does_not_pass_for_a_calendar(self) -> None:
+        # One failing session returned a single blank event instead of none.
+        blank = {"id": None, "subject": "", "start": None}
+        with pytest.raises(mp.ProducerOutputError, match="not loaded"):
+            mp.extract_events(_stream([blank], tools=(), calls=()), SEARCH)
+
+    def test_the_search_tool_name_is_the_allowed_one(self) -> None:
+        assert mp.search_tool_name(CONFIG) == mp.allowed_tools(CONFIG).split()[0]
+
+    def test_a_stream_without_a_result_is_an_error(self) -> None:
+        head = _stream([EVENT]).splitlines()[0] + "\n"
+        with pytest.raises(mp.ProducerOutputError, match="envelope"):
+            mp.extract_events(head, SEARCH)
+
+
+class TestTheScriptRefusesAnEmptySession:
+
+    @pytest.fixture
+    def env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        return TestEndToEnd.env.__wrapped__(self, tmp_path, monkeypatch)
+
+    def test_no_connector_writes_no_handoff_and_fails(self, env, allow_subprocess,
+                                                      capsys) -> None:
+        fake, run, drop, _ = env
+        assert run(fake(_stream([], tools=(), calls=()))) == 1
+        assert not any(drop.glob("schedule-handoff-*"))
+        log = capsys.readouterr().out
+        assert "connector was not loaded into the session" in log
+        assert not log.rstrip().endswith("done")
+
+    def test_a_real_stream_becomes_a_handoff(self, env, allow_subprocess, capsys) -> None:
+        fake, run, drop, _ = env
+        assert run(fake(_stream([EVENT]))) == 0
+        assert any(drop.glob("schedule-handoff-*.v1.ready"))
+        log = capsys.readouterr().out
+        assert "agenda" not in log, "a meeting body from the stream reached the log"
+
+    def test_a_failed_run_does_not_log_the_stream(self, env, allow_subprocess,
+                                                  capsys) -> None:
+        fake, run, drop, _ = env
+        assert run(fake(_stream([EVENT], body="SECRET BODY"), rc=1)) == 1
+        log = capsys.readouterr().out
+        assert "SECRET BODY" not in log
+        assert "producer exited 1" in log
+
+
+class TestReviewFindings20261005:
+    """The review of the stream-json change: what reaches the log, and what
+    still passed for a calendar."""
+
+    def test_an_errored_search_is_not_a_search(self) -> None:
+        # Connected, token expired: the search answers with an error.
+        with pytest.raises(mp.ProducerOutputError, match="never completed a call"):
+            mp.extract_events(_stream([], calls=(SEARCH,), errored=(SEARCH,)), SEARCH)
+
+    def test_a_bare_envelope_is_refused_when_a_stream_was_asked_for(self) -> None:
+        with pytest.raises(mp.ProducerOutputError, match="no stream-json init message"):
+            mp.extract_events(_envelope('{"events": []}'), SEARCH)
+
+    def test_a_line_separator_in_a_body_does_not_break_the_stream(self) -> None:
+        ev = dict(EVENT, bodyPreview="first\u2028second\u0085third")
+        raw = _stream([ev]).replace("\\u2028", "\u2028").replace("\\u0085", "\u0085")
+        assert "\u2028" in raw, "the fixture must carry the raw separator"
+        assert mp.extract_events(raw, SEARCH)[0]["bodyPreview"] == ev["bodyPreview"]
+
+    def test_an_init_without_a_tools_list_falls_to_the_call_check(self) -> None:
+        raw = _stream([EVENT]).replace('"tools": ', '"tools_moved": ', 1)
+        assert mp.extract_events(raw, SEARCH) == [EVENT]
+
+    def test_failure_text_keeps_plain_lines_and_drops_the_stream(self) -> None:
+        stream = "Warning: something\n" + _stream([EVENT], body="SECRET BODY")
+        shown = mp.failure_text(stream, "stderr words")
+        assert "SECRET BODY" not in shown
+        assert "Warning: something" in shown and "stderr words" in shown
+
+    def test_failure_text_drops_a_result_that_is_the_events(self) -> None:
+        env = json.dumps({"type": "result", "is_error": True,
+                          "result": json.dumps({"events": [dict(EVENT, bodyPreview="SECRET BODY")]})})
+        assert "SECRET BODY" not in mp.failure_text(env, "")
+
+    def test_a_body_matching_the_auth_signature_is_not_an_auth_failure(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_subprocess,
+            capsys) -> None:
+        fake, run, drop, _ = TestEndToEnd.env.__wrapped__(self, tmp_path, monkeypatch)
+        stream = _stream([EVENT], body="Unauthorized device remediation SECRET BODY")
+        assert run(fake(stream, rc=1)) == 1           # a plain failure, not EXIT_AUTH
+        log = capsys.readouterr().out
+        assert "SECRET BODY" not in log
+        assert "cannot authenticate" not in log
+        assert not mp.AUTH_MARKER.exists()
+
+    def test_the_timeout_path_does_not_log_the_partial_stream(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+        import subprocess as sp
+        partial = _stream([EVENT], body="SECRET BODY").encode()
+        def boom(*a, **k):
+            raise sp.TimeoutExpired(cmd="claude", timeout=1, output=partial, stderr=b"stderr words")
+        monkeypatch.setattr(mp, "run_session", boom)
+        monkeypatch.setattr(mp, "network_ready", lambda: True)
+        monkeypatch.setattr(mp, "AUTH_MARKER", tmp_path / "auth.json")
+        monkeypatch.setattr(mp, "notify_failure", lambda msg: None)
+        monkeypatch.setattr(mp, "keep_awake", lambda cmd: cmd)
+        cfg = tmp_path / "c.json"; cfg.write_text(json.dumps(CONFIG))
+        stub = tmp_path / "claude"; stub.write_text(""); stub.chmod(0o755)
+        monkeypatch.setattr(sys, "argv", ["meeting_pull.py", "--config", str(cfg),
+                                          "--out-dir", str(tmp_path / "d"), "--claude", str(stub),
+                                          "--retries", "0"])
+        assert mp.main() == 1
+        log = capsys.readouterr().out
+        assert "SECRET BODY" not in log and "stderr words" in log
+        assert "exceeded" in log
+
+    def test_the_prompt_arrives_on_stdin_as_one_user_message(
+            self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_subprocess) -> None:
+        fake, run, drop, argv_log = TestEndToEnd.env.__wrapped__(self, tmp_path, monkeypatch)
+        assert run(fake(_stream([EVENT]))) == 0
+        seen = json.loads(argv_log.read_text())
+        argv = seen["argv"]
+        assert argv[argv.index("--input-format") + 1] == "stream-json"
+        msg = json.loads(seen["stdin"])
+        assert msg["type"] == "user" and msg["message"]["role"] == "user"
+        assert "MCP calendar" in msg["message"]["content"]
+        assert not any("MCP calendar" in a for a in argv), "the prompt is in the argv"
+
+    def test_the_prompt_waits_for_the_connector(self, tmp_path: Path,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+        # The wait comes before the prompt is sent, and grows per attempt.
+        slept = []
+        monkeypatch.setattr(mp.time, "sleep", lambda s: slept.append(s))
+        class FakeProc:
+            returncode = 0
+            def communicate(self, data=None, timeout=None):
+                slept.append(("sent", data is not None))
+                return ("", "")
+            def kill(self): pass
+        monkeypatch.setattr(mp.subprocess, "Popen", lambda *a, **k: FakeProc())
+        mp.run_session(["claude"], "P", 30, 600, str(tmp_path))
+        assert slept == [30, ("sent", True)]
+
+    def test_a_timeout_carries_the_partial_output(self, tmp_path: Path,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+        import subprocess as sp
+        monkeypatch.setattr(mp.time, "sleep", lambda s: None)
+        class FakeProc:
+            returncode = None
+            calls = 0
+            def communicate(self, data=None, timeout=None):
+                FakeProc.calls += 1
+                if FakeProc.calls == 1:
+                    raise sp.TimeoutExpired("claude", timeout)
+                return ("partial", "err")
+            def kill(self): pass
+        monkeypatch.setattr(mp.subprocess, "Popen", lambda *a, **k: FakeProc())
+        with pytest.raises(sp.TimeoutExpired) as exc:
+            mp.run_session(["claude"], "P", 0, 5, str(tmp_path))
+        assert exc.value.output == "partial" and exc.value.stderr == "err"
+
+
+def test_a_child_holding_the_pipes_cannot_outlast_the_kill(tmp_path: Path,
+                                                         allow_subprocess) -> None:
+    """Review round 2, 2026-10-05: after the kill, reading until the pipes
+    closed waited for any helper the CLI had started -- 30s here, forever in
+    the worst case -- past the job's time limit and its retries."""
+    import subprocess as sp, time as t
+    if sys.platform == "win32":
+        pytest.skip("POSIX shell fixture")
+    script = tmp_path / "cli.sh"
+    script.write_text("#!/bin/sh\nsleep 30 &\nsleep 30\n")
+    script.chmod(0o755)
+    start = t.monotonic()
+    with pytest.raises(sp.TimeoutExpired):
+        mp.run_session([str(script)], "P", 0, 1, str(tmp_path))
+    assert t.monotonic() - start < 15

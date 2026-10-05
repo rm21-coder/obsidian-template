@@ -39,7 +39,6 @@ semgrep  installers/lib/pin_plugins.py   dynamic-urllib-use-detected   count=1  
 # The residual is PATH resolution of `claude` (shutil.which), which requires an
 # attacker who can already write to the user's PATH, i.e. who already has
 # execution as that user.
-semgrep  Templates/Scripts/meeting_pull.py   dangerous-subprocess-use-tainted-env-args   count=1   # list form; `claude` via shutil.which, user's own PATH. re-check 2026-11-25
 semgrep  Templates/Scripts/morning_dashboard.py   dangerous-subprocess-use-tainted-env-args   count=4   # list form, no shell, constant arguments: lines 814 (plutil, MD_PLUTIL test seam, default /usr/bin/plutil), 840 and 894 (launchctl, MD_LAUNCHCTL test seam, default /bin/launchctl), 1301 (powershell.exe by absolute path from %SystemRoot%; the -Command text is a fixed string). re-check 2026-11-25
 
 # --- XML parsed with ElementTree (bandit B314 / semgrep use-defused-xml) -----
