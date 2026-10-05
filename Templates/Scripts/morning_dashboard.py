@@ -1255,6 +1255,25 @@ WIN_PIPELINE_NAMES = {
 # rag-sync has its own detailed section above (mirrors PIPELINE_EXCLUDE).
 WIN_PIPELINE_EXCLUDE = {"rag-sync"}
 
+# A scheduled job caught mid-run has no result for this run yet; what the
+# scheduler reports is the previous run's. Scoring that as PASS showed a
+# failing pull green for the rest of the day whenever a machine woke late and
+# the dashboard's catch-up run overlapped it (Rob's Windows laptop,
+# 2026-10-05: rendered 08:24:51, pull failed 08:24:55). The dashboard's own
+# job is always running while it renders, so it is exempt.
+SELF_JOBS = {"com.morning-dashboard", "morning-dashboard"}
+
+
+def _running_row(label: str, name: str, trigger: str, last_run, age_hours,
+                 previous: str | None) -> dict:
+    problems = ["Running now, so this run's result is not in yet. Re-check "
+                "when it finishes (refresh the dashboard)."]
+    if previous:
+        problems.append(previous)
+    return {"label": label, "name": name, "trigger": trigger, "status": "running",
+            "last_run": last_run, "age_hours": age_hours, "problems": problems}
+
+
 # Task Scheduler LastTaskResult sentinels that are NOT real failures.
 _WIN_TASK_NOT_RUN = 267011   # 0x00041303 SCHED_S_TASK_HAS_NOT_RUN
 _WIN_TASK_RUNNING = 267009   # 0x00041301 SCHED_S_TASK_RUNNING
@@ -1339,6 +1358,14 @@ def _collect_pipeline_health_windows() -> list[dict]:
         age_hours = ((now_naive - last_run).total_seconds() / 3600.0
                      if last_run else None)
 
+        fallback = name.replace("-", " ").strip().capitalize()
+        running = (result == _WIN_TASK_RUNNING
+                   or (t.get("state") or "").strip().lower() == "running")
+        if running and name not in SELF_JOBS:
+            results.append(_running_row(name, WIN_PIPELINE_NAMES.get(name, fallback),
+                                        trigger, last_run, age_hours, None))
+            continue
+
         problems: list[str] = []
         status = "pass"
         if result not in (0, None, _WIN_TASK_NOT_RUN, _WIN_TASK_RUNNING):
@@ -1358,7 +1385,6 @@ def _collect_pipeline_health_windows() -> list[dict]:
         if hint and status != "pass":
             problems.append(hint)
 
-        fallback = name.replace("-", " ").strip().capitalize()
         results.append({
             "label": name,
             "name": WIN_PIPELINE_NAMES.get(name, fallback),
@@ -1369,8 +1395,8 @@ def _collect_pipeline_health_windows() -> list[dict]:
             "problems": problems,
         })
 
-    order = {"fail": 0, "stale": 1, "pass": 2}
-    results.sort(key=lambda r: (order.get(r["status"], 3), r["name"].lower()))
+    order = {"fail": 0, "stale": 1, "running": 2, "pass": 3}
+    results.sort(key=lambda r: (order.get(r["status"], 4), r["name"].lower()))
     return results
 
 
@@ -1533,6 +1559,17 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
                       None)
         err_log = plist.get("StandardErrorPath") or plist.get("StandardOutPath")
 
+        if (st["loaded"] and st["running"] and not is_keepalive
+                and label not in SELF_JOBS):
+            # launchctl's LastExitStatus is the previous run's while one runs.
+            prev = (f"Its previous run exited with status {st['exit']}."
+                    if st["exit"] not in (None, 0) else None)
+            fallback_name = (label.replace("com.", "").replace("-", " ")
+                                  .replace(".", " ").strip().capitalize())
+            results.append(_running_row(label, PIPELINE_NAMES.get(label, fallback_name),
+                                        trigger, last_run, age_hours, prev))
+            continue
+
         problems: list[str] = []
         status = "pass"
         # Set when the failure is one the job has just been writing about, so
@@ -1623,8 +1660,8 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
             "problems": problems,
         })
 
-    order = {"fail": 0, "stale": 1, "pass": 2}
-    results.sort(key=lambda r: (order.get(r["status"], 3), r["name"].lower()))
+    order = {"fail": 0, "stale": 1, "running": 2, "pass": 3}
+    results.sort(key=lambda r: (order.get(r["status"], 4), r["name"].lower()))
     return results
 
 
@@ -2097,8 +2134,10 @@ def render(today: _dt.date,
     parts.append('  <section class="card combined">\n')
 
     # ----- Pipeline health sub-section (very top: a dead job must be unmissable) -----
-    n_bad = sum(1 for p in health if p["status"] != "pass")
-    pipes_accent = "var(--todo)" if n_bad else "var(--meet)"
+    n_bad = sum(1 for p in health if p["status"] in ("fail", "stale"))
+    n_running = sum(1 for p in health if p["status"] == "running")
+    pipes_accent = ("var(--todo)" if n_bad else
+                    "var(--new)" if n_running else "var(--meet)")
     parts.append(
         f'    <div class="subsection section-pipes" style="--section-accent: {pipes_accent}">\n')
     parts.append('      <h2>Pipeline health</h2>\n')
@@ -2106,11 +2145,17 @@ def render(today: _dt.date,
         parts.append('      <p class="empty">No vault pipelines discovered.</p>\n')
     else:
         summary = f'{len(health)} monitored'
-        summary += (f' · <strong>{n_bad} need attention</strong>' if n_bad
-                    else ' · all healthy')
+        if n_bad:
+            summary += f' · <strong>{n_bad} need attention</strong>'
+        if n_running:
+            summary += f' · <strong>{n_running} still running</strong>'
+        if not n_bad and not n_running:
+            summary += ' · all healthy'
+
         parts.append(f'      <div class="meta">{summary}</div>\n')
         for p in health:
-            pill = {"pass": "pass", "stale": "warn", "fail": "fail"}[p["status"]]
+            pill = {"pass": "pass", "stale": "warn", "running": "warn",
+                    "fail": "fail"}[p["status"]]
             when = f'{p["last_run"]:%a %H:%M}' if p["last_run"] else "no runs"
             parts.append('      <div class="pipe-row">\n')
             parts.append(f'        <span class="status-pill {pill}">{html.escape(p["status"])}</span>\n')
@@ -2363,7 +2408,7 @@ def main() -> int:
               + ("reachable" if gateway["reachable"]
                  else "UNREACHABLE -- LLM jobs will skip"))
     bad = [p for p in health if p["status"] != "pass"]
-    print(f"  pipelines: {len(health)} monitored, {len(bad)} need attention"
+    print(f"  pipelines: {len(health)} monitored, {len(bad)} need attention or still running"
           + (": " + ", ".join(f"{p['name']}={p['status']}" for p in bad) if bad else ""))
     return 0
 

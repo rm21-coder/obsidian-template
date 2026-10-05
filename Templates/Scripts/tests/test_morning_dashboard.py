@@ -740,3 +740,98 @@ def test_drift_still_gets_the_drift_hint():
 
 def test_other_jobs_never_get_the_security_hint():
     assert md.security_hint("com.tag-clippings", 2) is None
+
+
+# ---------------------------------------------------------------------------
+# A job caught mid-run is RUNNING, not PASS (Rob's Windows laptop, 2026-10-05:
+# the dashboard rendered at 08:24:51 while the meeting pull was still running,
+# scored it PASS, and the pull failed four seconds later).
+# ---------------------------------------------------------------------------
+
+def _win_task(name, state="Running", result=267009):
+    return {"name": name, "state": state, "lastRun": "2026-10-05T08:24:22",
+            "lastResult": result, "repetition": None,
+            "triggerType": "MSFT_TaskDailyTrigger"}
+
+
+def test_a_running_windows_task_is_running_not_pass(monkeypatch):
+    monkeypatch.setattr(md.sys, "platform", "win32")
+    _fake_task_scheduler(monkeypatch, [_win_task("meeting-pull")])
+    [row] = md._collect_pipeline_health_windows()
+    assert row["status"] == "running"
+    assert "result is not in yet" in row["problems"][0]
+
+
+def test_state_running_counts_even_with_the_previous_result(monkeypatch):
+    # LastTaskResult can still hold the previous run's 0 while State is Running.
+    monkeypatch.setattr(md.sys, "platform", "win32")
+    _fake_task_scheduler(monkeypatch, [_win_task("meeting-pull", result=0)])
+    [row] = md._collect_pipeline_health_windows()
+    assert row["status"] == "running"
+
+
+def test_the_dashboards_own_windows_task_is_not_flagged(monkeypatch):
+    monkeypatch.setattr(md.sys, "platform", "win32")
+    _fake_task_scheduler(monkeypatch, [_win_task("morning-dashboard")])
+    [row] = md._collect_pipeline_health_windows()
+    assert row["status"] == "pass"
+
+
+def _mac_jobs(monkeypatch, tmp_path, jobs):
+    """Plists for `jobs` ({label: (keepalive, launchctl status)})."""
+    import plistlib
+    monkeypatch.setattr(md.sys, "platform", "darwin")
+    monkeypatch.setattr(md, "LAUNCHAGENTS_DIR", tmp_path)
+    for label, (keepalive, _st) in jobs.items():
+        plist = {"Label": label,
+                 "ProgramArguments": ["/usr/bin/python3",
+                                      f"/Users/x/Obsidian/Templates/Scripts/{label}.py"]}
+        if keepalive:
+            plist["KeepAlive"] = True
+        else:
+            plist["StartCalendarInterval"] = {"Hour": 5, "Minute": 0}
+        (tmp_path / f"{label}.plist").write_bytes(plistlib.dumps(plist))
+    monkeypatch.setattr(md, "_launchctl_status", lambda label: jobs[label][1])
+    return {r["label"]: r for r in md.collect_pipeline_health()}
+
+
+def test_a_running_mac_job_is_running_and_names_a_failed_previous_run(monkeypatch, tmp_path):
+    rows = _mac_jobs(monkeypatch, tmp_path, {
+        "com.obsidian.meeting-pull": (False, {"loaded": True, "exit": 1, "running": True})})
+    row = rows["com.obsidian.meeting-pull"]
+    assert row["status"] == "running"
+    assert "Its previous run exited with status 1." in row["problems"]
+
+
+def test_a_running_keepalive_watcher_is_still_pass(monkeypatch, tmp_path):
+    rows = _mac_jobs(monkeypatch, tmp_path, {
+        "com.voice-cleanup": (True, {"loaded": True, "exit": 0, "running": True})})
+    assert rows["com.voice-cleanup"]["status"] == "pass"
+
+
+def test_the_dashboards_own_mac_job_is_not_flagged(monkeypatch, tmp_path):
+    rows = _mac_jobs(monkeypatch, tmp_path, {
+        "com.morning-dashboard": (False, {"loaded": True, "exit": 0, "running": True})})
+    assert rows["com.morning-dashboard"]["status"] == "pass"
+
+
+def _row(status):
+    return {"label": "x", "name": "Meeting pull", "trigger": "daily", "status": status,
+            "last_run": None, "age_hours": None, "problems": []}
+
+
+def test_running_is_amber_and_never_reads_all_healthy():
+    out = md.render(_dt.date(2026, 10, 5), [], [], [], None,
+                    [_row("running"), _row("pass")], show_actions=False)
+    assert "1 still running" in out
+    assert "all healthy" not in out
+    assert "need attention" not in out
+    assert '<span class="status-pill warn">running</span>' in out
+    assert "--section-accent: var(--new)" in out
+
+
+def test_a_failure_still_outranks_running():
+    out = md.render(_dt.date(2026, 10, 5), [], [], [], None,
+                    [_row("running"), _row("fail")], show_actions=False)
+    assert "1 need attention" in out and "1 still running" in out
+    assert "--section-accent: var(--todo)" in out
