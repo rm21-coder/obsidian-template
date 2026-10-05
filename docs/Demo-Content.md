@@ -33,7 +33,7 @@ About 74 files across every content folder:
 | Folder | Contents |
 |---|---|
 | `People/` | 19 records — a full IT leadership team, two vendor contacts, four article authors |
-| `Groups/` | 2 static rosters with photos, 2 dynamic Dataview rosters |
+| `Groups/` | 2 static rosters with photos, 2 dynamic rosters (Bases queries) |
 | `Categories/` | The 5 index notes every template's `categories:` link points at |
 | `Knowledge/` | Tag taxonomy, data classification, vendor playbook, incident runbook |
 | `Topics/` | 4 tag aggregators |
@@ -116,7 +116,7 @@ applies the same rule. Every task in the demo data is tagged accordingly.
 
 **Both group styles are present.** `IT Leadership Team` and `Security Team` are
 static rosters, so the Meeting template can read their membership and pre-fill
-attendees. `Infrastructure Team` and `Data & Analytics Team` are Dataview
+attendees. `Infrastructure Team` and `Data & Analytics Team` are Bases-query
 rosters driven by the `#Infrastructure` and `#Analytics` tags on People notes —
 which the Meeting template cannot pre-fill from. Having both makes the tradeoff
 visible.

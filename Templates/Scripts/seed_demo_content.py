@@ -381,7 +381,7 @@ updated: {stamp(created)}
 """
 
 
-def dataview_group(tag: str, blurb: str, created: dt.date) -> str:
+def tag_group(tag: str, blurb: str, created: dt.date) -> str:
     return f"""---
 tags: []
 classification: public
@@ -392,11 +392,19 @@ updated: {stamp(created)}
 
 {blurb}
 
-```dataview
-LIST
-FROM "People"
-WHERE contains(file.tags, "#{tag}")
-SORT file.name ASC
+```base
+views:
+  - type: list
+    name: "Members"
+    filters:
+      and:
+        - 'file.inFolder("People")'
+        - 'file.hasTag("{tag}")'
+    order:
+      - file.name
+    sort:
+      - property: file.name
+        direction: ASC
 ```
 
 ## Meetings
@@ -434,11 +442,18 @@ updated: {stamp(created)}
 
 {blurb}
 
-```dataview
-LIST
-FROM ""
-WHERE contains(file.tags, "#{tag}")
-SORT file.name ASC
+```base
+views:
+  - type: list
+    name: "Notes"
+    filters:
+      and:
+        - 'file.hasTag("{tag}")'
+    order:
+      - file.name
+    sort:
+      - property: file.name
+        direction: ASC
 ```
 """
 
@@ -1494,14 +1509,14 @@ def build_plan(anchor: dt.date) -> list[tuple[Path, str]]:
             "`Z_attachments/refresh_groups.py`.", made)),
         (GROUPS_DIR / "Security Team.md", static_group(
             SECURITY, "Security leadership. Another **static** roster.", made)),
-        (GROUPS_DIR / "Infrastructure Team.md", dataview_group(
+        (GROUPS_DIR / "Infrastructure Team.md", tag_group(
             "Infrastructure",
             "A **dynamic** roster — membership is whoever carries the "
-            "`#Infrastructure` tag in `People/`, resolved by Dataview at read "
+            "`#Infrastructure` tag in `People/`, resolved by a Bases query at read "
             "time. Add the tag to a person and they appear here automatically. "
             "Note that the Meeting template cannot pre-fill attendees from a "
             "dynamic group; use a static roster when you need that.", made)),
-        (GROUPS_DIR / "Data & Analytics Team.md", dataview_group(
+        (GROUPS_DIR / "Data & Analytics Team.md", tag_group(
             "Analytics",
             "A second **dynamic** roster, driven by the `#Analytics` tag.", made)),
     ]

@@ -35,7 +35,7 @@ else
 fi
 
 info "Verifying required vault folders..."
-REQUIRED=(Actions Categories Clippings Creations Daily Excalidraw Groups Knowledge Meetings Notes People Templates Topics Z_archive Z_attachments)
+REQUIRED=(Actions Categories Clippings Creations Daily Groups Knowledge Meetings Notes People Templates Topics Z_archive Z_attachments)
 for d in "${REQUIRED[@]}"; do
     if [[ -d "$VAULT/$d" ]]; then
         ok "  $d/"

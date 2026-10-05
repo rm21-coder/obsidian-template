@@ -23,52 +23,6 @@
     }
   },
   {
-    "id": "dataview",
-    "repo": "blacksmithgu/obsidian-dataview",
-    "kind": "release",
-    "ref": "0.5.70",
-    "files": {
-      "manifest.json": {
-        "url": "https://github.com/blacksmithgu/obsidian-dataview/releases/download/0.5.70/manifest.json",
-        "sha256": "9235db47112da81b85591c79ecb9ae2574e5e72207056e976472f90616286185",
-        "bytes": 357
-      },
-      "main.js": {
-        "url": "https://github.com/blacksmithgu/obsidian-dataview/releases/download/0.5.70/main.js",
-        "sha256": "6bb1cf7010afad830e73575fca0e2bfbd3279c562e3d9d24f2d2f45161eb7d00",
-        "bytes": 2377634
-      },
-      "styles.css": {
-        "url": "https://github.com/blacksmithgu/obsidian-dataview/releases/download/0.5.70/styles.css",
-        "sha256": "3306dd9032e00f989ba7233a37fd255bc4d3f4340cee661762e952f3f6aa1de9",
-        "bytes": 2965
-      }
-    }
-  },
-  {
-    "id": "obsidian-excalidraw-plugin",
-    "repo": "zsviczian/obsidian-excalidraw-plugin",
-    "kind": "release",
-    "ref": "2.26.4",
-    "files": {
-      "manifest.json": {
-        "url": "https://github.com/zsviczian/obsidian-excalidraw-plugin/releases/download/2.26.4/manifest.json",
-        "sha256": "f6b817daea2fa2106671a62d7236cdc8d806f52465f1ff3ab5343231c020b703",
-        "bytes": 463
-      },
-      "main.js": {
-        "url": "https://github.com/zsviczian/obsidian-excalidraw-plugin/releases/download/2.26.4/main.js",
-        "sha256": "b26f3fc8cfa39cfefe8c11c82e43f80afdc642d8ca4d4ece3bdd817f72d4cf5a",
-        "bytes": 5106385
-      },
-      "styles.css": {
-        "url": "https://github.com/zsviczian/obsidian-excalidraw-plugin/releases/download/2.26.4/styles.css",
-        "sha256": "615b560c5193b2ca4ef3ff1844d2807913bc51c40333c79fdd08a840b0c42735",
-        "bytes": 224752
-      }
-    }
-  },
-  {
     "id": "omnisearch",
     "repo": "scambier/obsidian-omnisearch",
     "kind": "release",

@@ -24,12 +24,6 @@
       "mode": "any"
     },
     {
-      "id": "obsidian-excalidraw-plugin:excalidraw-autocreate-popout",
-      "icon": "lucide-brush",
-      "name": "Excalidraw: Create new drawing - IN A POPOUT WINDOW",
-      "mode": "any"
-    },
-    {
       "id": "quickadd:choice:d4e5f6a7-8901-23de-f012-4567890123de",
       "icon": "lucide-move-right",
       "name": "Move note to Knowledge",

@@ -16,6 +16,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -241,7 +242,7 @@ def test_both_platforms_retire_the_same_plugins() -> None:
     common = (SCRIPTS / "windows" / "common.ps1").read_text(encoding="utf-8")
     mac = re.search(r"RETIRED_PLUGINS=\(([^)]*)\)", lib).group(1).split()
     win = re.findall(r"'([\w-]+)'", re.search(r"\$RetiredPlugins = @\(([^)]*)\)", common).group(1))
-    assert mac == win == ["templater-obsidian"]
+    assert mac == win == ["templater-obsidian", "dataview", "obsidian-excalidraw-plugin"]
     assert "Remove-RetiredPlugins -Vault $vault" in (SCRIPTS / "windows" / "update.ps1").read_text(encoding="utf-8")
     upd = (REPO / "update.sh").read_text(encoding="utf-8")
     assert 'retire_plugins "$VAULT"' in upd[upd.index("== 4/6 plugins =="):upd.index("# ---- 5.")]
@@ -395,3 +396,70 @@ def test_no_tracked_settings_file_ends_in_a_newline(allow_subprocess) -> None:
     assert ".obsidian/community-plugins.json" in files
     for rel in files:    # plugin manifests ship as released and are never rewritten
         assert not (REPO / rel).read_bytes().endswith(b"\n"), rel
+
+
+# ---------------------------------------------------------------------------
+# Dataview and Excalidraw, retired 2026-10-05: an update must not strand a
+# vault that still uses them -- the plugin is kept, with a warning.
+# ---------------------------------------------------------------------------
+
+def _retire_with(tmp_path, plugin, note_name, note_text):
+    vault = tmp_path / "vault"
+    (vault / ".obsidian" / "plugins" / plugin).mkdir(parents=True)
+    (vault / ".obsidian" / "plugins" / plugin / "main.js").write_text("x", encoding="utf-8")
+    if note_name:
+        (vault / "Notes").mkdir(parents=True, exist_ok=True)
+        (vault / "Notes" / note_name).write_text(note_text, encoding="utf-8")
+    backup = tmp_path / "backup"
+    p = subprocess.run(
+        ["bash", "-c", 'source "$1/installers/lib/common.sh"; source "$1/installers/lib/update.sh";'
+                       ' retire_plugins "$2" "$3" 0', "_", str(REPO), str(vault), str(backup)],
+        capture_output=True, text=True, env={**os.environ, "NO_COLOR": "1"})
+    return p, vault / ".obsidian" / "plugins" / plugin, p.stdout + p.stderr
+
+
+def test_a_vault_using_dataview_keeps_it(tmp_path, allow_subprocess) -> None:
+    p, plugin, out = _retire_with(tmp_path, "dataview", "Topic.md",
+                                  "# T\n\n```dataview\nLIST FROM \"\"\n```\n")
+    assert p.returncode == 0, out
+    assert plugin.exists()
+    assert "dataview: retired upstream and disabled, but kept: 1 note(s) still use Dataview queries" in out
+
+
+def test_an_inline_dataview_query_counts_as_use(tmp_path, allow_subprocess) -> None:
+    p, plugin, out = _retire_with(tmp_path, "dataview", "Note.md", "Count: `= length(this.file.tags)`\n")
+    assert plugin.exists() and "still use Dataview" in out
+
+
+def test_a_defused_dataview_copy_is_not_use(tmp_path, allow_subprocess) -> None:
+    # The ingest guard puts a zero-width space inside triggers in clipped text.
+    p, plugin, out = _retire_with(tmp_path, "dataview", "Clip.md", "```dataview\u200b\nLIST\n```\n")
+    assert not plugin.exists()
+    assert "dataview: retired upstream; removed" in out
+
+
+def test_a_vault_without_dataview_queries_loses_the_plugin(tmp_path, allow_subprocess) -> None:
+    p, plugin, out = _retire_with(tmp_path, "dataview", "Note.md", "Just text.\n")
+    assert not plugin.exists() and "dataview: retired upstream; removed" in out
+
+
+def test_a_vault_with_drawings_keeps_excalidraw(tmp_path, allow_subprocess) -> None:
+    p, plugin, out = _retire_with(tmp_path, "obsidian-excalidraw-plugin", "Sketch.excalidraw.md",
+                                  "---\nexcalidraw-plugin: parsed\n---\n")
+    assert plugin.exists()
+    assert "1 Excalidraw drawing(s) in the vault" in out
+
+
+def test_an_unanswerable_check_keeps_the_plugin(tmp_path, allow_subprocess) -> None:
+    # A vault path that is not a directory cannot be judged: keep, never remove.
+    p = subprocess.run([sys.executable, str(REPO / "installers" / "lib" / "plugin_in_use.py"),
+                        str(tmp_path / "missing"), "dataview"], capture_output=True, text=True)
+    assert p.returncode == 2
+
+
+def test_windows_keeps_a_plugin_the_vault_uses() -> None:
+    common = (SCRIPTS / "windows" / "common.ps1").read_text(encoding="utf-8")
+    fn = common[common.index("function Remove-RetiredPlugins"):]
+    fn = fn[:fn.index("\n}\n")]
+    assert "plugin_in_use.py" in fn and "if ($rc -ne 1)" in fn
+    assert fn.index("plugin_in_use.py") < fn.index("Move-Item")

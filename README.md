@@ -14,7 +14,7 @@ This template extends the [Kepano starter vault](https://github.com/kepano/obsid
 
 - **Meeting Management** — Create meetings with a type selector (Group, Individual, Ad-hoc). Group meetings auto-populate attendees from roster files and link to the group. Meeting history appears on each person's and group's record via database views.
 - **People Directory** — Contact records with photos, organizational info, and embedded meeting history via database views.
-- **Groups with Photos** — Visual rosters with 40px thumbnail photos next to each member's name. Static groups for fixed rosters, dynamic Dataview groups for tag-based membership. A scheduled task refreshes group photos from People records.
+- **Groups with Photos** — Visual rosters with 40px thumbnail photos next to each member's name. Static groups for fixed rosters, dynamic Bases groups for tag-based membership. A scheduled task refreshes group photos from People records.
 - **Software Tracking** — Note template includes a Software type with fields for vendor, product, version, licensing, cost, and owner, plus specialized status options (Evaluating, Implementing, In Production, Retired).
 - **Tag-Based Organization** — Single tagging system for all classification. Tags work in frontmatter and inline. Topics folder provides dynamic views built on tag combinations.
 - **Task Tracking** — Inline tasks in any note, aggregated into open/completed views via the Tasks plugin.
@@ -300,14 +300,13 @@ Install steps, the optional Tag Taxonomy.md format, and on-demand maintenance pr
 | Clippings | Web clippings saved via the Obsidian Web Clipper extension |
 | Creations | Original content (articles, outlines, research) plus the destination for voice-note cleanups and Markitdown drops |
 | Daily | Daily journal entries |
-| Excalidraw | Excalidraw drawings |
 | Groups | Meeting group rosters (static and dynamic) |
 | Knowledge | Reference material and learning notes — the curated, permanent home for graduated notes |
 | Meetings | Meeting notes (flat, date-prefixed). Move older notes to `Meetings/History/` after tag review to keep the active folder tidy; the tagger keeps seeing the moved notes because `History/` is a sub-folder of `Meetings/` |
 | Notes | General notes scaffold — `Dashboards/`, `Experiments/`, `NotebookLM/` for source-grounded research collections |
 | People | Contact records with metadata and photos |
 | Templates | Note templates, Bases (database views), and the optional Python helper scripts under `Templates/Scripts/` |
-| Topics | Dynamic Dataview pages aggregating content by tags |
+| Topics | Dynamic pages aggregating content by tags (Bases queries) |
 | Z_archive | Completed to-do actions and other deprecated materials |
 | Z_attachments | Images and embedded files (excluded from the RAG sync) |
 | docs | Project documentation — setup guides, the workflow graphic, and the meeting pre-population contract |
@@ -317,7 +316,6 @@ Install steps, the optional Tag Taxonomy.md format, and on-demand maintenance pr
 All plugins are pre-configured and included:
 
 - **QuickAdd** — Custom note creation commands
-- **Dataview** — Dynamic queries and lists
 - **Tasks** — Task management across vault
 - **Commander** — Sidebar icon customization
 - **Omnisearch** — Enhanced search
@@ -325,7 +323,6 @@ All plugins are pre-configured and included:
 - **Paste Image Rename** — Clean image naming
 - **Tag Wrangler** — Tag rename/merge tools
 - **Sort and Permute Lines** — Line sorting utility
-- **Excalidraw** — Drawing and diagrams
 - **Update Time on Edit** — Auto-maintains the modified timestamp in note frontmatter
 - **Metadata Menu** — Structured frontmatter field definitions and editing
 
@@ -342,7 +339,7 @@ python3 Templates/Scripts/seed_demo_content.py
 Everyone in it is invented — the organization is **Nimbus Widgets Inc.**, emails
 use the reserved `.example` TLD, phone numbers use `555`. About 74 notes: 19
 People (a full IT leadership team, vendor contacts, article authors), 4 Groups
-(two static rosters, two Dataview-driven), 5 Categories index notes, 4 Knowledge
+(two static rosters, two driven by Bases queries), 5 Categories index notes, 4 Knowledge
 notes including a working `Tag Taxonomy.md` allowlist, 4 Topics, 5 Clippings, 4
 Creations, ~22 Meetings across four weeks with three recurring-series roots, 3
 journal entries, and the aggregated to-do view.

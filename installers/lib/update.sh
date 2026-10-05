@@ -102,16 +102,33 @@ retire_agents() {
 # out of the vault here, so no dormant plugin code stays behind.
 #   templater-obsidian   Templater, retired 2026-10-03 (ran commands from note
 #                        text in reading view; QuickAdd user scripts replace it)
-RETIRED_PLUGINS=(templater-obsidian)
+#   dataview             Dataview, retired 2026-10-05 (its queries could run
+#                        JavaScript; every shipped query moved to core Bases)
+#   obsidian-excalidraw-plugin
+#                        Excalidraw, retired 2026-10-05 (unused, and it runs
+#                        scripts from its own folder)
+RETIRED_PLUGINS=(templater-obsidian dataview obsidian-excalidraw-plugin)
 
 # retire_plugins <vault> <backup_dir> <dry_run>
 # Move each retired plugin's folder from <vault>/.obsidian/plugins into
-# <backup_dir>/plugins. Prints one line per plugin removed.
+# <backup_dir>/plugins. Prints one line per plugin removed. A plugin the vault
+# still uses (plugin_in_use.py: Dataview queries, Excalidraw drawings) is left
+# in place with a warning: the pull has already disabled it, and removing its
+# files too would leave the user's own notes with nothing to bring back.
 retire_plugins() {
-    local vault="$1" backup="$2" dry="$3" id dir
+    local vault="$1" backup="$2" dry="$3" id dir uses rc
     for id in "${RETIRED_PLUGINS[@]}"; do
         dir="$vault/.obsidian/plugins/$id"
         [[ -d "$dir" ]] || continue
+        rc=0
+        uses="$(python3 "${BASH_SOURCE[0]%/*}/plugin_in_use.py" "$vault" "$id" 2>/dev/null)" || rc=$?
+        if [[ $rc -ne 1 ]]; then
+            [[ -n "$uses" ]] || uses="could not check whether the vault still uses it"
+            warn "  $id: retired upstream and disabled, but kept: $uses."
+            warn "    Convert them (docs/Obsidian Configuration Guide.md, section 3.3) and the next update removes it,"
+            warn "    or re-enable it in Settings > Community plugins if you want to keep using it."
+            continue
+        fi
         if [[ "$dry" -eq 1 ]]; then
             info "  $id: retired upstream; dry run: would remove the plugin"
             continue

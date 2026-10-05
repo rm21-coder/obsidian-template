@@ -205,15 +205,32 @@ function Unregister-DashboardActions {
 # the plugin's own files -- fetched by the installer, never tracked -- are moved
 # out of the vault so no dormant plugin code stays behind. Names only ever get
 # added here, and must match RETIRED_PLUGINS in installers/lib/update.sh.
-#   templater-obsidian   Templater, retired 2026-10-03
-$RetiredPlugins = @('templater-obsidian')
+#   templater-obsidian           Templater, retired 2026-10-03
+#   dataview                     Dataview, retired 2026-10-05 (queries moved to Bases)
+#   obsidian-excalidraw-plugin   Excalidraw, retired 2026-10-05 (unused; runs scripts)
+$RetiredPlugins = @('templater-obsidian', 'dataview', 'obsidian-excalidraw-plugin')
 
 function Remove-RetiredPlugins {
     param([Parameter(Mandatory)][string]$Vault)
     $backup = Join-Path $env:LOCALAPPDATA ("obsidian-template-update\" + (Get-Date -Format 'yyyyMMdd-HHmmss') + '\plugins')
+    $helper = Join-Path $Vault 'installers\lib\plugin_in_use.py'
     foreach ($id in $RetiredPlugins) {
         $dir = Join-Path $Vault ".obsidian\plugins\$id"
         if (-not (Test-Path -LiteralPath $dir)) { continue }
+        # A plugin the vault still uses (Dataview queries, Excalidraw
+        # drawings) is kept: the pull has disabled it, and removing its files
+        # as well would leave the user's notes with nothing to bring back.
+        # Exit 1 is "not in use"; anything else, including no python, keeps it.
+        $uses = $null; $rc = 2
+        $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+        try { $uses = (& (Get-VenvPython) $helper $Vault $id 2>$null) -join ' '; $rc = $LASTEXITCODE }
+        catch { $rc = 2 } finally { $ErrorActionPreference = $prevEAP }
+        if ($rc -ne 1) {
+            if (-not $uses) { $uses = 'could not check whether the vault still uses it' }
+            Write-Warning "  $id`: retired upstream and disabled, but kept: $uses."
+            Write-Warning "    Convert them (docs\Obsidian Configuration Guide.md, section 3.3) and the next update removes it, or re-enable it in Settings > Community plugins to keep using it."
+            continue
+        }
         try {
             New-Item -ItemType Directory -Force -Path $backup -ErrorAction Stop | Out-Null
             Move-Item -LiteralPath $dir -Destination (Join-Path $backup $id) -ErrorAction Stop
