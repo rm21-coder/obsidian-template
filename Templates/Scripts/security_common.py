@@ -138,6 +138,35 @@ def kickstart_agent(label: str, *, windows_task: str | None = None) -> bool:
 STATE_DIR_ENV = "OBSIDIAN_SECURITY_STATE_DIR"
 
 
+def last_run_path(control: str) -> Path:
+    """Where `control` records that it ran. A .txt beside the state, not a
+    .json: the integrity monitor hashes the *.json trust anchors in this
+    directory, and a file rewritten on every run would be drift every run."""
+    return state_dir() / f"last-run-{control}.txt"
+
+
+def record_run(control: str, rc) -> None:
+    """Record that a security control finished a run, with its exit code.
+
+    The controls write their log only when they find something, so the log's
+    mtime said nothing about when they last ran -- on 2026-10-06 the
+    dashboard dated the plugin check to the log's overnight rotation. Written
+    atomically (temp file, then replace, which swaps the directory entry and
+    never follows a planted link), and never raises: a control's verdict
+    must not depend on its bookkeeping."""
+    try:
+        target = last_run_path(control)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                     | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} rc={rc}\n")
+        os.replace(tmp, target)
+    except Exception:
+        pass
+
+
 def state_dir() -> Path:
     """Runtime state dir for the security controls.
 

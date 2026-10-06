@@ -47,6 +47,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 import urllib.parse
 from pathlib import Path
 
@@ -1263,6 +1264,49 @@ WIN_PIPELINE_EXCLUDE = {"rag-sync"}
 # job is always running while it renders, so it is exempt.
 SELF_JOBS = {"com.morning-dashboard", "morning-dashboard"}
 
+# Before calling a job RUNNING, wait this long (seconds, shared by all jobs in
+# one render) for it to finish and judge the result instead. The on-change
+# security checks take ~3s, so a render that overlapped one reported a healthy
+# check as running (2026-10-06, 07:00:12-07:00:15); RUNNING is meant for a
+# job that is genuinely still at work, such as a calendar pull mid-session.
+RUNNING_GRACE_SEC = float(os.environ.get("MD_RUNNING_GRACE", "30"))
+RUNNING_POLL_SEC = 1.0
+
+# The security controls write their log only when they find something, so its
+# mtime is not when they last ran (it was the overnight log rotation). Each
+# control records its own runs instead (security_common.record_run).
+SECURITY_RUN_STAMPS = {
+    "com.obsidian.security.plugin-check": "plugin-check",
+    "com.obsidian.security.integrity": "integrity",
+}
+
+
+def _security_last_run(label: str) -> _dt.datetime | None:
+    """When a security control last finished a run, from its own stamp.
+    Only the file's mtime is read; it is never opened."""
+    control = SECURITY_RUN_STAMPS.get(label)
+    if not control:
+        return None
+    try:
+        import security_common
+        path = security_common.last_run_path(control)
+    except Exception:
+        return None
+    try:
+        return _dt.datetime.fromtimestamp(os.lstat(path).st_mtime)
+    except OSError:
+        return None
+
+
+def _await_finish(label: str, deadline: float) -> dict:
+    """Poll a running launchd job until it stops or `deadline` passes; return
+    its latest status."""
+    st = _launchctl_status(label)
+    while st["running"] and time.monotonic() < deadline:
+        time.sleep(RUNNING_POLL_SEC)
+        st = _launchctl_status(label)
+    return st
+
 
 def _running_row(label: str, name: str, trigger: str, last_run, age_hours,
                  previous: str | None) -> dict:
@@ -1302,8 +1346,9 @@ def _win_cadence(repetition: str | None,
     return ("scheduled", DAILY_STALE_HOURS)
 
 
-def _collect_pipeline_health_windows() -> list[dict]:
-    """Job health from Windows Task Scheduler tasks under \\Obsidian\\."""
+def _query_windows_tasks() -> list[dict] | None:
+    """Every task under \\Obsidian\\ with its state and last result, or None
+    when Task Scheduler could not be read."""
     ps = (
         "$ErrorActionPreference='SilentlyContinue';"
         "$o=foreach($t in Get-ScheduledTask -TaskPath '\\Obsidian\\'){"
@@ -1320,16 +1365,39 @@ def _collect_pipeline_health_windows() -> list[dict]:
             [POWERSHELL_EXE, "-NoProfile", "-NonInteractive", "-Command", ps],
             capture_output=True, timeout=30)
     except Exception:
-        return []
+        return None
     raw = p.stdout.decode("utf-8", "ignore").strip()
     if not raw:
-        return []
+        return None
     try:
         data = json.loads(raw)
     except Exception:
-        return []
+        return None
     if isinstance(data, dict):
         data = [data]
+    return data if isinstance(data, list) else None
+
+
+def _win_running(t: dict) -> bool:
+    return (t.get("lastResult") == _WIN_TASK_RUNNING
+            or (t.get("state") or "").strip().lower() == "running")
+
+
+def _collect_pipeline_health_windows() -> list[dict]:
+    """Job health from Windows Task Scheduler tasks under \\Obsidian\\."""
+    data = _query_windows_tasks()
+    if data is None:
+        return []
+    # A job caught mid-run is given RUNNING_GRACE_SEC to finish, then judged
+    # on its result (see RUNNING_GRACE_SEC).
+    deadline = time.monotonic() + RUNNING_GRACE_SEC
+    while (any(_win_running(t) and (t.get("name") or "") not in SELF_JOBS
+               and (t.get("state") or "").strip().lower() != "disabled" for t in data)
+           and time.monotonic() < deadline):
+        time.sleep(RUNNING_POLL_SEC * 2)
+        again = _query_windows_tasks()
+        if again is not None:
+            data = again
 
     now_naive = now_local().replace(tzinfo=None)
     results: list[dict] = []
@@ -1359,8 +1427,7 @@ def _collect_pipeline_health_windows() -> list[dict]:
                      if last_run else None)
 
         fallback = name.replace("-", " ").strip().capitalize()
-        running = (result == _WIN_TASK_RUNNING
-                   or (t.get("state") or "").strip().lower() == "running")
+        running = _win_running(t)
         if running and name not in SELF_JOBS:
             results.append(_running_row(name, WIN_PIPELINE_NAMES.get(name, fallback),
                                         trigger, last_run, age_hours, None))
@@ -1499,6 +1566,7 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
     if not LAUNCHAGENTS_DIR.is_dir():
         return []
     now_naive = now_local().replace(tzinfo=None)
+    deadline = time.monotonic() + RUNNING_GRACE_SEC
     results: list[dict] = []
     for plist_path in sorted(LAUNCHAGENTS_DIR.glob("*.plist")):
         plist = _plist_load(plist_path)
@@ -1534,6 +1602,9 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
                     continue
                 if last_run is None or mt > last_run:
                     last_run = mt
+            stamp = _security_last_run(label)
+            if stamp is not None:
+                last_run = stamp
             # last_run must be known before calling _cadence: a
             # weekday-restricted schedule anchors its staleness window on
             # the weekday the job last actually ran, not on today.
@@ -1559,6 +1630,15 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
                       None)
         err_log = plist.get("StandardErrorPath") or plist.get("StandardOutPath")
 
+        if (st["loaded"] and st["running"] and not is_keepalive
+                and label not in SELF_JOBS):
+            st = _await_finish(label, deadline)
+            if not st["running"]:
+                # It finished while we waited: judge the run it just made.
+                stamp = _security_last_run(label)
+                if stamp is not None:
+                    last_run = stamp
+                    age_hours = (now_naive - last_run).total_seconds() / 3600.0
         if (st["loaded"] and st["running"] and not is_keepalive
                 and label not in SELF_JOBS):
             # launchctl's LastExitStatus is the previous run's while one runs.

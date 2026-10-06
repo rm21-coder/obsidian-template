@@ -884,5 +884,17 @@ def main(argv: list[str]) -> int:
     return 1
 
 
+def _main_recording(argv: list[str]) -> int:
+    """main, with the run recorded for the dashboard whichever way it ends.
+    The --bytecode-only child is part of a run, not a run of its own."""
+    try:
+        rc = main(argv)
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else 1
+    if "--bytecode-only" not in argv:
+        security_common.record_run("integrity", rc)
+    return rc
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(_main_recording(sys.argv[1:]))

@@ -835,3 +835,81 @@ def test_a_failure_still_outranks_running():
                     [_row("running"), _row("fail")], show_actions=False)
     assert "1 need attention" in out and "1 still running" in out
     assert "--section-accent: var(--todo)" in out
+
+
+@pytest.fixture(autouse=True)
+def _no_running_grace(monkeypatch):
+    """Tests that do not exercise the wait must not sit through it."""
+    monkeypatch.setattr(md, "RUNNING_GRACE_SEC", 0, raising=False)
+
+
+# ---------------------------------------------------------------------------
+# A job that finishes within the grace period is judged on its result
+# (2026-10-06: a 3-second plugin check overlapped the 07:00 render).
+# ---------------------------------------------------------------------------
+
+def test_a_mac_job_that_finishes_while_we_wait_is_judged(monkeypatch, tmp_path):
+    monkeypatch.setattr(md, "RUNNING_GRACE_SEC", 5)
+    monkeypatch.setattr(md.time, "sleep", lambda s: None)
+    seq = iter([{"loaded": True, "exit": 0, "running": True},
+                {"loaded": True, "exit": 0, "running": True},
+                {"loaded": True, "exit": 0, "running": False}])
+    last = {"loaded": True, "exit": 0, "running": False}
+    def status(label):
+        return next(seq, last)
+    import plistlib
+    monkeypatch.setattr(md.sys, "platform", "darwin")
+    monkeypatch.setattr(md, "LAUNCHAGENTS_DIR", tmp_path)
+    (tmp_path / "com.obsidian.meeting-pull.plist").write_bytes(plistlib.dumps({
+        "Label": "com.obsidian.meeting-pull",
+        "ProgramArguments": ["/usr/bin/python3", "/Users/x/Obsidian/Templates/Scripts/meeting_pull.py"],
+        "StartCalendarInterval": {"Hour": 5, "Minute": 0}}))
+    monkeypatch.setattr(md, "_launchctl_status", status)
+    [row] = md.collect_pipeline_health()
+    assert row["status"] == "pass"
+
+
+def test_a_mac_job_still_running_after_the_grace_is_running(monkeypatch, tmp_path):
+    monkeypatch.setattr(md, "RUNNING_GRACE_SEC", 0.05)
+    monkeypatch.setattr(md.time, "sleep", lambda s: None)
+    rows = _mac_jobs(monkeypatch, tmp_path, {
+        "com.obsidian.meeting-pull": (False, {"loaded": True, "exit": 0, "running": True})})
+    assert rows["com.obsidian.meeting-pull"]["status"] == "running"
+
+
+def test_a_windows_task_that_finishes_while_we_wait_is_judged(monkeypatch):
+    import json
+    monkeypatch.setattr(md.sys, "platform", "win32")
+    monkeypatch.setattr(md, "RUNNING_GRACE_SEC", 5)
+    monkeypatch.setattr(md.time, "sleep", lambda s: None)
+    answers = iter([[_win_task("security-plugin-check")],
+                    [_win_task("security-plugin-check", state="Ready", result=0)]])
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, json.dumps(next(answers)).encode(), b"")
+    monkeypatch.setattr(md.subprocess, "run", fake_run)
+    [row] = md._collect_pipeline_health_windows()
+    assert row["status"] == "pass"
+
+
+def test_a_security_job_is_dated_by_its_own_run_record(monkeypatch, tmp_path):
+    """Not by its log, which it writes only on findings and newsyslog rotates."""
+    import plistlib
+    state = tmp_path / "state"; state.mkdir()
+    monkeypatch.setenv("OBSIDIAN_SECURITY_STATE_DIR", str(state))
+    log = tmp_path / "obsidian-security.log"; log.write_text("x")
+    os.utime(log, (1_700_000_000, 1_700_000_000))                  # the rotation
+    stamp = state / "last-run-plugin-check.txt"; stamp.write_text("ts rc=0\n")
+    os.utime(stamp, (1_790_000_000, 1_790_000_000))                # the real run
+    agents = tmp_path / "agents"; agents.mkdir()
+    monkeypatch.setattr(md.sys, "platform", "darwin")
+    monkeypatch.setattr(md, "LAUNCHAGENTS_DIR", agents)
+    (agents / "com.obsidian.security.plugin-check.plist").write_bytes(plistlib.dumps({
+        "Label": "com.obsidian.security.plugin-check",
+        "ProgramArguments": ["/usr/bin/python3",
+                             "/Users/x/Obsidian/Templates/Scripts/plugin_integrity_check.py"],
+        "WatchPaths": ["/Users/x/Obsidian/.obsidian/plugins"],
+        "StandardOutPath": str(log)}))
+    monkeypatch.setattr(md, "_launchctl_status",
+                        lambda label: {"loaded": True, "exit": 0, "running": False})
+    [row] = md.collect_pipeline_health()
+    assert row["last_run"] == md._dt.datetime.fromtimestamp(1_790_000_000)

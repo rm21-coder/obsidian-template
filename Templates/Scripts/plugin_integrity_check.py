@@ -880,5 +880,15 @@ def _run(argv: list[str]) -> int:
         return 3
 
 
+def _main_recording(argv: list[str]) -> int:
+    """_run, with the run recorded for the dashboard whichever way it ends."""
+    try:
+        rc = _run(argv)
+    except SystemExit as e:
+        rc = e.code if isinstance(e.code, int) else 1
+    security_common.record_run("plugin-check", rc)
+    return rc
+
+
 if __name__ == "__main__":
-    sys.exit(_run(sys.argv[1:]))
+    sys.exit(_main_recording(sys.argv[1:]))
