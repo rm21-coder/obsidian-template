@@ -43,7 +43,7 @@ The following core plugins are enabled (beyond Kepano defaults):
 
 **Word Count:** Displays word and character count in the status bar at the bottom of the editor.
 
-**Daily Notes:** Generates daily journal entries. Template: Templates/Daily Note Template. Folder: Daily.
+**Daily Notes:** Generates daily journal entries. Template: Templates/Journal Template. Folder: Daily.
 
 **Unique Note Creator (zk-prefixer):** Creates timestamped notes. Format: YYYY-MM-DD HHmm. Note: This plugin creates notes in the root folder by default. We use QuickAdd instead for meeting and note creation to control the destination folder.
 

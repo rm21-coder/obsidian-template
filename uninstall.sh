@@ -26,14 +26,12 @@
 #   --demo        remove the synthetic demo dataset (see below)
 #   --all         all of the above
 #
-# --demo delegates to Templates/Scripts/seed_demo_content.py --remove-all, so it
-# deletes exactly the notes carrying a demo_seed marker - the dated slice that
-# script generates AND the static demo notes the template ships (the Widget,
-# Wanda cast and friends). Notes without the marker are never considered, so
-# this cannot reach your real content. It is opt-in because on a vault you have
-# started using, demo notes are indistinguishable from notes at a glance and you
-# may have linked to them; and because in a repo checkout the static half is
-# tracked, so removing it shows up as deletions to commit or revert.
+# --demo delegates to Templates/Scripts/seed_demo_content.py --remove, so it
+# deletes exactly the notes carrying a demo_seed marker -- the dataset that
+# script generates (the content folders ship empty). Notes without the marker
+# are never considered, so this cannot reach your real content. It is opt-in
+# because on a vault you have started using, demo notes are indistinguishable
+# from notes at a glance and you may have linked to them.
 #
 # NEVER touched (remove by hand if you really want to):
 #   - your vault content / notes (the ~/Obsidian folder itself) - the demo
@@ -385,7 +383,7 @@ if [[ "$DO_DEMO" -eq 1 ]]; then
         # where run() would only echo the command. The seeder is stdlib-only,
         # so this deliberately uses the system python3 rather than the vault
         # .venv, which section 4 has already deleted by now.
-        demo_args=(--remove-all)
+        demo_args=(--remove)
         [[ "$DRY_RUN" -eq 1 ]] && demo_args+=(--dry-run)
         if [[ "$INTERACTIVE" -eq 0 ]] || confirm "Delete the demo dataset (every note marked demo_seed) from $VAULT?" N; then
             if OBSIDIAN_VAULT="$VAULT" python3 "$SEEDER" "${demo_args[@]}"; then
