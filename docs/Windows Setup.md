@@ -18,8 +18,8 @@ part of the workflow. Validated end-to-end on Windows 11 (x64), including a
 clean bare-metal rebuild, and on Windows 11 ARM64 with native ARM64 Python —
 see [Windows on ARM64](#windows-on-arm64) for the details. A 2026-08-25
 re-validation on ARM64 found that plugin installation and toast notifications
-did not run at all under Windows PowerShell 5.1 (an encoding defect, fixed the
-same day); both are pending re-verification on real hardware.
+did not run at all under Windows PowerShell 5.1 (an encoding defect); both
+were fixed and re-verified on the same hardware the same day.
 
 ## Quick Start
 
@@ -47,7 +47,7 @@ then call scripts directly, e.g. `.\Templates\Scripts\windows\install.ps1`.)
 - Link `%USERPROFILE%\Obsidian` to wherever you cloned the repo, via a
   directory junction (see [Architecture](#architecture) below)
 - Create a secrets stub at `%USERPROFILE%\dev\secrets\.env`
-- Fetch the 12 community plugins from their GitHub releases into
+- Fetch the 10 community plugins from their GitHub releases into
   `.obsidian\plugins\`
 - Patch QuickAdd's folder-picker fall-through and apply the canonical ribbon
   icon order
@@ -89,15 +89,16 @@ and the watchers read only the local `~/SourceMedia/` drop folders.
    **Trust author and enable plugins**, then quit and reopen so the ribbon
    order and hotkeys bind correctly.
 2. **Fill in your API keys** — see [Getting your API keys](#getting-your-api-keys).
-3. **Validate a script by hand before enabling its task.** `tag-clippings` is
-   the recommended first one:
+3. **Optionally, run a script by hand to confirm your keys work.** Most jobs
+   ship enabled, `tag-clippings` among them, so this is a check, not a
+   prerequisite:
    ```powershell
    & "$env:USERPROFILE\Obsidian\Templates\Scripts\.venv\Scripts\python.exe" `
      "$env:USERPROFILE\Obsidian\Templates\Scripts\tag_clippings.py"
-   Enable-ScheduledTask -TaskName tag-clippings -TaskPath '\Obsidian\'
    ```
-   Repeat for whichever other jobs you want running (see
-   [Scheduled jobs](#scheduled-jobs) below for the full list).
+   The jobs that ship **disabled** need configuration first; enable each with
+   `Enable-ScheduledTask -TaskName <name> -TaskPath '\Obsidian\'` once it is
+   set up (see [Scheduled jobs](#scheduled-jobs) below for the full list).
 
 ### Common flags
 
@@ -335,7 +336,7 @@ prerequisite, validate the script by hand, then
 | `podcast-watch` | `podcast_watch.py --once` | every 15 min | enabled | Watches `~/SourceMedia/PodcastInput/`. Runs cleanly against an empty queue. |
 | `strip-ads` | `strip_ads.py` | every 5 min | enabled | Cleans ad cruft from clipped articles. |
 | `meeting-prep` | `meeting_prep.py` | every 5 min | enabled | Inserts/refreshes open follow-up task callouts into today's individual meeting notes already in the vault. Gated to weekday business hours; a no-op the rest of the time. |
-| `meeting-prepopulate` | `meeting_prepopulate.py` | every 30 min | enabled | Reads a schedule-handoff JSON from a local drop folder via a pluggable source (`drop` or `mcp`) — see [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md). The producer side is yours to build; the consumer runs cleanly and reports "no handoffs to process" until it's wired up. |
+| `meeting-prepopulate` | `meeting_prepopulate.py` | every 30 min | enabled | Reads a schedule-handoff JSON from a local drop folder via a pluggable source (`drop` or `mcp`) — see [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md). The producer is the `meeting-pull` task below; until it (or another producer) writes a handoff, the consumer runs cleanly and reports "no handoffs to process". |
 | `meeting-pull` | `meeting_pull.py` | weekdays 5:00 AM | **disabled** | Producer side of meeting pre-population: shells out to the Claude CLI over an MCP calendar connector. Exercised end-to-end on macOS only — needs the Claude CLI on `PATH` and a registered MCP calendar connector before it can even reach its own config; validate with `python meeting_pull.py --dry-run` first. |
 | `group-photos` | `run_group_photos.py` | daily 2:00 AM | enabled | Runs `Z_attachments/insert_group_placeholders.py` then `refresh_groups.py` in sequence, mirroring the macOS `insert && refresh` pipeline. |
 | `rag-sync` | `obsidian-rag-sync.py` | daily 3:00 AM | when RAG is set up | Pushes the vault into Open WebUI's Knowledge collection. Enabled exactly when the optional local RAG layer is set up — `OBSIDIAN_COLLECTION_ID` filled in (`rag_status.py`) — and disabled otherwise, because without Open WebUI it fails every night. `install.ps1` and `update.ps1` re-check on each run, so filling in the collection ID and updating turns it on. |
@@ -357,7 +358,7 @@ How the Windows layer maps onto the macOS original:
 | Runtime state | `~/.local/share/*` | `%LOCALAPPDATA%\*` |
 | State-file permissions | `chmod 0600` | `icacls`: inheritance dropped, owner + `SYSTEM` only (`chmod` alone is a no-op on Windows) |
 | Trust-anchor key | Keychain | DPAPI-encrypted file under `%LOCALAPPDATA%` |
-| Secrets | `~/dev/secrets/.env` | `%USERPROFILE%\dev\secrets\.env` |
+| Secrets | Keychain via `secret_store.py`; `~/dev/secrets/.env` for config, and an env value wins | DPAPI-encrypted file via `secret_store.py`; `%USERPROFILE%\dev\secrets\.env` for config, and an env value wins |
 | Interpreter | Homebrew python3 venv | `Templates\Scripts\.venv\Scripts\python.exe` |
 | Vault link | symlink (`10-vault-bootstrap.sh`) | directory junction (no admin / Developer Mode needed) |
 
@@ -403,8 +404,9 @@ signup can't be scripted):
    Keys → create one** for `OPEN_WEBUI_API_KEY` — the key is only shown
    once, so copy it before navigating away.
 4. Set `OPEN_WEBUI_URL=http://localhost:3000`, `OPEN_WEBUI_API_KEY`, and
-   `OBSIDIAN_COLLECTION_ID` in `.env`, then
-   `Enable-ScheduledTask -TaskName rag-sync -TaskPath '\Obsidian\'`.
+   `OBSIDIAN_COLLECTION_ID` in `.env`, then re-run `update.ps1`: it enables
+   `rag-sync` once the collection ID is set (and would disable a hand-enabled
+   task again on a machine where it is not).
 
 Easy to miss: several of Open WebUI's settings pages (Authentication, and
 the Knowledge Base name/description) don't save on blur — there's a
@@ -571,10 +573,10 @@ x64 box that can offload to a discrete GPU.
   cleanly on Windows with no meetings scheduled, but has not yet had a live
   validation pass against a real day of individual meetings.
 - **`meeting_prepopulate.py`** is fully ported and unit/e2e-tested (11 + 8
-  cases) on its pluggable handoff-source design, but wiring up a real
-  producer (a relay into its local drop folder, or an MCP transport) is left
-  to you — see [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md) for the
-  contract, same as the equivalent macOS feature. A cloud-drive-sync-client
+  cases) on its pluggable handoff-source design. Its shipped producer,
+  `meeting_pull.py` (the `meeting-pull` task), has been exercised end-to-end
+  on macOS only — see [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md) for
+  the contract, same as the equivalent macOS feature. A cloud-drive-sync-client
   transport (e.g. OneDrive) is deliberately not implemented — see
   `HANDOFF-ARCHITECTURE.md`'s Tier A note for why.
 - **QuickAdd's folder-picker patch** rewrites a minified call in `main.js`.
@@ -617,8 +619,8 @@ x64 box that can offload to a discrete GPU.
   invocation above is the Windows equivalent, and needs no `PYTHONPATH` —
   `conftest.py` resolves `Templates/Scripts/` onto `sys.path` itself. Add
   `-rs` to print the skip reasons. The five skips are platform-conditional,
-  not disabled tests: four macOS-only branches (Keychain trust anchor, the
-  Keychain fallback in `get_api_key`) and one `bash -n` syntax check, which
+  not disabled tests: four macOS-only branches (the Keychain trust-anchor
+  store and its bounded `security` calls) and one `bash -n` syntax check, which
   skips only when no `bash` is on `PATH` and runs and passes with Git Bash
   there.
 
@@ -675,13 +677,12 @@ x64 box that can offload to a discrete GPU.
 
 - [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md) — the meeting-prepopulate
   handoff-source contract (drop folder / MCP)
-  there is no longer a Windows-specific difference here
 - [`Voice Notes (Optional).md`](Voice%20Notes%20%28Optional%29.md) — the
   sibling mail-drop pipeline behind the `voice-cleanup` task
 - [`YouTube Summarizer.md`](YouTube%20Summarizer.md) — the on-demand
   `youtube_summarize.py` CLI (no scheduled task on either platform)
 - [`Local LLM with Obsidian Vault RAG.md`](Local%20LLM%20with%20Obsidian%20Vault%20RAG.md) —
-  the RAG design in full, including the macOS Tailscale remote-access option
+  the RAG design in full
 - [`Security-Harness.md`](Security-Harness.md) — what the security
   monitors defend against and how to respond to alerts
 - `Templates/Scripts/windows/README.md` — quick file-by-file reference for

@@ -121,4 +121,4 @@ production failure to learn:
 
 - [[Semantic Auto-Tagger Setup]] — tags the note on its next 30-minute pass
 - [[Voice Notes (Optional)]] — sibling on-demand-vs-watcher comparison: iPhone dictation pipeline
-- [[Windows Setup]] — Windows-specific notes (no Keychain fallback; venv invocation)
+- [[Windows Setup]] — Windows-specific notes (DPAPI keystore in place of the Keychain; venv invocation)
