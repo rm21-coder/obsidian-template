@@ -1,0 +1,11 @@
+{
+  "_comment": "Copy to ~/.config/obsidian-drift-review/config.json (Windows: %APPDATA%\\obsidian-drift-review\\config.json) to turn the per-change drift reviewer on. Without that file the pre-push hook does nothing. See docs/Drift-Review.md.",
+  "companions": [
+    {"path": "~/dev/repos/my-security-review/review.md", "label": "Security review document kept outside this repo"},
+    {"path": "~/Obsidian/Knowledge/How my vault syncs.md", "label": "Vault note describing sync scope"}
+  ],
+  "report_dir": "~/dev/drift-reviews",
+  "task_note": "~/Obsidian/Actions/Drift Review.md",
+  "model": null,
+  "claude": null
+}

@@ -142,7 +142,7 @@ Why these defaults:
 
 Two files do this work (place both in `~/Obsidian/Templates/Scripts/`):
 
-- `sync-vault.sh` — a thin shell wrapper that loads `OPEN_WEBUI_API_KEY` and `OBSIDIAN_COLLECTION_ID` from `~/dev/secrets/.env` and execs the Python indexer.
+- `sync-vault.sh` — an optional wrapper for running the indexer by hand; it sources `~/dev/secrets/.env` and execs the Python indexer. The scheduled run does not use it.
 - `obsidian-rag-sync.py` — the indexer itself.
 
 ### Usage
@@ -264,7 +264,7 @@ This is the recommended way to use a high-memory second machine: rather than rep
 
 ### Secrets configuration
 
-Required by `obsidian-rag-sync.py` (set by `sync-vault.sh` from `~/dev/secrets/.env`):
+Read by `obsidian-rag-sync.py` itself. `OPEN_WEBUI_API_KEY` comes from the environment, then the OS keystore, where the installer's secrets step stores it. The others come from `~/dev/secrets/.env`, which the script loads:
 
 | Variable | Purpose |
 |---|---|

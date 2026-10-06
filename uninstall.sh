@@ -137,7 +137,7 @@ LOGS=(
     obsidian-security obsidian-rag-sync group-photos meeting-prepopulate
     obsidian-template-install vault-lint
     source-mail-pull podcast-watch morning-dashboard meeting-pull
-    handoff-blob-pull dashboard-actions obsidian-classify
+    handoff-blob-pull dashboard-actions obsidian-classify claude-auth-check
 )
 
 # rm_path <path>: delete a file/dir/symlink if it exists (dry-run aware).

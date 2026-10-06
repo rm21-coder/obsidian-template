@@ -51,3 +51,21 @@ def test_the_uninstaller_removes_every_launchagent_the_template_ships() -> None:
     shipped = {plistlib.loads(p.read_bytes())["Label"]
                for p in (REPO / "Templates" / "Scripts").glob("com.*.plist")}
     assert shipped <= listed, sorted(shipped - listed)
+
+
+def test_the_uninstaller_removes_every_log_a_shipped_agent_writes() -> None:
+    """2026-10-06, found by the first drift review: claude-auth-check was
+    added to LABELS but not LOGS, so an uninstall left its log behind."""
+    import plistlib
+    text = (REPO / "uninstall.sh").read_text(encoding="utf-8")
+    block = re.search(r"^LOGS=\((.*?)^\)", text, re.M | re.S).group(1)
+    listed = {w for ln in block.splitlines() if not ln.strip().startswith("#")
+              for w in ln.split()}
+    written = set()
+    for p in (REPO / "Templates" / "Scripts").glob("com.*.plist"):
+        plist = plistlib.loads(p.read_bytes())
+        for key in ("StandardOutPath", "StandardErrorPath"):
+            path = plist.get(key, "")
+            if "/Library/Logs/" in path:
+                written.add(Path(path).stem)
+    assert written <= listed, sorted(written - listed)

@@ -20,7 +20,7 @@ This page covers the core macOS LaunchAgents under `Templates/Scripts/` by hand.
 | Podcast watcher | `com.obsidian.podcast-watch.plist` | every 900 seconds | runs `podcast_watch.py` to transcribe drops in `~/SourceMedia/PodcastInput/` into `Clippings/` |
 | RAG sync | `com.obsidian-rag-sync.plist` | daily at 03:15 | runs `obsidian-rag-sync.py` to push the vault into an Open WebUI Knowledge collection so a local Ollama-backed LLM can use the vault as RAG context |
 
-Each agent is independent — you can install only the ones you actually use. The tagger, source-mail-pull and voice-cleanup are always-on automation; rag-sync only matters if you've stood up the local LLM stack ([[Local LLM with Obsidian Vault RAG]]). The vault ships other agents too (strip-ads, podcast watch, meeting pull and pre-population, meeting prep, classification, morning dashboard, group photos, vault lint, the security harness); those are documented on their own pages and installed by their own components.
+Each agent is independent — you can install only the ones you actually use. The tagger, source-mail-pull and voice-cleanup are always-on automation; rag-sync only matters if you've stood up the local LLM stack ([[Local LLM with Obsidian Vault RAG]]). The vault ships other agents too (strip-ads, meeting pull and pre-population, meeting prep, classification, morning dashboard, group photos, vault lint, the security harness); those are documented on their own pages and installed by their own components. One more, the Claude CLI auth check (`com.obsidian.claude-auth-check`), is opt-in and installed by hand; its plist says how.
 
 ---
 

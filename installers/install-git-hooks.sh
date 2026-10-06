@@ -37,9 +37,11 @@ echo "And 'git push' will run the full security suite (~40s: pip-audit, semgrep,
 echo "bandit, shellcheck, gitleaks, dynamic checks) and refuse on any FAIL."
 echo ""
 echo "Override with --no-verify on either command if needed."
-echo ""
-echo "NEXT STEP -- the identity gate needs a local deny-list of the values you"
-echo "are protecting. It is gitignored, because committing the list would"
-echo "publish exactly what it guards. Build it from this machine with:"
-echo "  installers/lib/check_identity_leak.py --init"
-echo "Until you do, only the generic email-address rule runs."
+if [ ! -s "$REPO_ROOT/installers/lib/identity-denylist.local" ]; then
+    echo ""
+    echo "NEXT STEP -- the identity gate needs a local deny-list of the values you"
+    echo "are protecting. It is gitignored, because committing the list would"
+    echo "publish exactly what it guards. Build it from this machine with:"
+    echo "  installers/lib/check_identity_leak.py --init"
+    echo "Until you do, only the generic email-address rule runs."
+fi

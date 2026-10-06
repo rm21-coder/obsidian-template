@@ -93,4 +93,22 @@ if ! "$CHECKS" --full --artifacts "$HOOK_ARTIFACTS" > "$HOOK_ARTIFACTS/summary.t
 fi
 grep -E "^RESULT:" "$HOOK_ARTIFACTS/summary.txt" | sed 's/ (artifacts:.*//; s/^/pre-push: /' >&2
 rm -rf "$HOOK_ARTIFACTS"
+
+# Per-change drift review (opt-in, docs/Drift-Review.md). It starts in the
+# background and this returns at once, so it never delays or blocks a push;
+# unconfigured, it does nothing. A new branch is reviewed from where it left
+# the remote's default branch.
+review_ranges=()
+for r in "${ranges[@]}"; do
+    case "$r" in
+        *..*) review_ranges+=("$r") ;;
+        *)  lsha="${r%% *}"
+            base="$(git merge-base "$lsha" "refs/remotes/$REMOTE/HEAD" 2>/dev/null \
+                    || git merge-base "$lsha" "refs/remotes/$REMOTE/main" 2>/dev/null)"
+            [[ -n "$base" ]] && review_ranges+=("$base..$lsha") ;;
+    esac
+done
+if [[ ${#review_ranges[@]} -gt 0 ]]; then
+    python3 "$LIB/drift_review.py" --hook "${review_ranges[@]}" >/dev/null 2>&1 || true
+fi
 exit 0

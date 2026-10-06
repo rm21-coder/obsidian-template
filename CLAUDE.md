@@ -183,6 +183,20 @@ be re-argued, not renewed by habit.
 A run that reports nothing is not evidence of a secure system. It is evidence
 of a check that was not run, or not reported.
 
+## Drift review on every push
+
+The security passes check code; nothing checked the documents, and they
+drifted (a 2026-10-06 sweep found ~100 stale statements). `pre-push` now
+starts `installers/lib/drift_review.py` in the background after the suite
+passes: a confined, read-only Claude session checks the docs, and any
+configured companion documents, against the pushed change, and a second
+session tries to disprove each finding. Survivors become `#task` lines in the
+configured vault note. It is opt-in (a config file outside the repo) and
+never blocks a push. See [`docs/Drift-Review.md`](docs/Drift-Review.md).
+
+When you change behaviour, still update the docs in the same change. The
+reviewer is the net, not the plan.
+
 ## When working on the Windows layer
 
 Start from [`docs/Windows Setup.md`](docs/Windows%20Setup.md) and
