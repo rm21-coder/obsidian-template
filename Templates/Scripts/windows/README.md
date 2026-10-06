@@ -22,7 +22,9 @@ for the full setup guide.
   if you must, but the junction is the canonical setup.
 - Scripts: `<vault>\Templates\Scripts\`.
 - Python venv: `<vault>\Templates\Scripts\.venv\Scripts\python.exe` (3.10+).
-- Secrets: `$env:USERPROFILE\dev\secrets\.env` (gitignored, never committed).
+- Secrets: a DPAPI-encrypted keystore via `..\secret_store.py`, with
+  `$env:USERPROFILE\dev\secrets\.env` for config (gitignored, never
+  committed); an env value wins over the keystore.
 - Runtime state: `$env:LOCALAPPDATA\obsidian-*\`.
 - Job logs: `$env:LOCALAPPDATA\obsidian-logs\<task-name>.log`, written by
   `..\run_logged.py`, which every task runs its script through.
