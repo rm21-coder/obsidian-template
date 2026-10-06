@@ -135,6 +135,11 @@ def scratch(tmp_path):
            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
     subprocess.run(["git", "init", "-q"], cwd=vault, check=True, env=env)
+    # No detached auto-gc: it repacks .git/objects while a test copies the
+    # tree. Whether it fires depends on how the blob hashes fall, so any
+    # edit to the copied files could turn it on.
+    for key, value in (("gc.auto", "0"), ("maintenance.auto", "false")):
+        subprocess.run(["git", "config", key, value], cwd=vault, check=True, env=env)
     subprocess.run(["git", "add", "-A"], cwd=vault, check=True, env=env)
     subprocess.run(["git", "commit", "-qm", "base"], cwd=vault, check=True, env=env)
     venv = scripts / ".venv" / "bin"

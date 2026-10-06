@@ -14,7 +14,7 @@ This template extends the [Kepano starter vault](https://github.com/kepano/obsid
 
 - **Meeting Management** — Create meetings with a type selector (Group, Individual, Ad-hoc). Group meetings auto-populate attendees from roster files and link to the group. Meeting history appears on each person's and group's record via database views.
 - **People Directory** — Contact records with photos, organizational info, and embedded meeting history via database views.
-- **Groups with Photos** — Visual rosters with 40px thumbnail photos next to each member's name. Static groups for fixed rosters, dynamic Bases groups for tag-based membership. A scheduled task refreshes group photos from People records.
+- **Groups with Photos** — Visual rosters with 40px thumbnail photos next to each member's name. Static groups for fixed rosters, dynamic Bases groups for tag-based membership. A nightly job puts each member's headshot from `Z_attachments/` next to their name.
 - **Software Tracking** — Note template includes a Software type with fields for vendor, product, version, licensing, cost, and owner, plus specialized status options (Evaluating, Implementing, In Production, Retired).
 - **Tag-Based Organization** — Single tagging system for all classification. Tags work in frontmatter and inline. Topics folder provides dynamic views built on tag combinations.
 - **Task Tracking** — Inline tasks in any note, aggregated into open/completed views via the Tasks plugin.

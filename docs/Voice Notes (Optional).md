@@ -52,7 +52,7 @@ Worst-case latency from speaking to a polished note is the mail pull (≤5 min) 
 | iPhone Shortcut ("Obsidian Note") | `Ask for Input` → sign with Scriptable → `Send Email` as a `type: voice` drop |
 | A dedicated intake mailbox + `SOURCE_MAIL_*` in `~/dev/secrets/.env` | The transport; see [[Source-Mail-Transport]] |
 | `com.obsidian.source-mail-pull` | Drains the mailbox into `~/SourceMedia/VoiceInput/` |
-| `ANTHROPIC_API_KEY` in `~/dev/secrets/.env` | Used by `voice_cleanup.py` for the polish step |
+| `ANTHROPIC_API_KEY` (in the Keychain, where the installer stores it; an environment or `~/dev/secrets/.env` value takes precedence) | Used by `voice_cleanup.py` for the polish step |
 | `Templates/Scripts/voice_cleanup.py` + `com.voice-cleanup.plist` | Bundled in this template |
 | `~/Obsidian/Creations/` | Where polished voice notes land |
 

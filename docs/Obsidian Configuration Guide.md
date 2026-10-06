@@ -292,7 +292,7 @@ Both are plain QuickAdd templates — no scripting.
 
 **File:** Templates/Journal Template.md
 
-A simple static template used by the Unique Note Creator (zk-prefixer) for timestamped journal entries. Contains only frontmatter with a created date, a classification and default tags:
+A simple static template used by the Unique Note Creator (zk-prefixer) for timestamped journal entries, and by Daily Notes. Contains only frontmatter with a created date, a classification and default tags:
 
 ```yaml
 ---

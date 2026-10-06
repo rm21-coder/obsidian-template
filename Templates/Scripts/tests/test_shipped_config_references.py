@@ -38,3 +38,16 @@ def test_the_uninstallers_demo_flags_are_ones_the_seeder_accepts(tmp_path, allow
                        env={"OBSIDIAN_VAULT": str(vault), "PATH": "/usr/bin:/bin", "HOME": str(tmp_path)})
     assert "unrecognized arguments" not in p.stderr, p.stderr
     assert p.returncode == 0, p.stderr
+
+
+def test_the_uninstaller_removes_every_launchagent_the_template_ships() -> None:
+    """2026-10-06: com.obsidian.claude-auth-check shipped but was not in the
+    uninstaller's list, so an uninstall left it loaded."""
+    import plistlib
+    text = (REPO / "uninstall.sh").read_text(encoding="utf-8")
+    block = re.search(r"^LABELS=\((.*?)^\)", text, re.M | re.S).group(1)
+    listed = {ln.strip() for ln in block.splitlines()
+              if ln.strip() and not ln.strip().startswith("#")}
+    shipped = {plistlib.loads(p.read_bytes())["Label"]
+               for p in (REPO / "Templates" / "Scripts").glob("com.*.plist")}
+    assert shipped <= listed, sorted(shipped - listed)

@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1992" font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 2256" font-family="-apple-system, 'Helvetica Neue', Arial, sans-serif">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#fafafb"/>
@@ -25,12 +25,12 @@
     </filter>
   </defs>
 
-  <rect width="1400" height="2084" fill="url(#bg)"/>
+  <rect width="1400" height="2256" fill="url(#bg)"/>
 
   <!-- Title bar -->
   <rect x="0" y="0" width="1400" height="80" fill="#1f2937"/>
   <text x="40" y="52" font-size="28" font-weight="700" fill="#ffffff">Obsidian Second Brain</text>
-  <text x="1360" y="50" font-size="12" fill="#9ca3af" text-anchor="end">v26 · 2026-08-20</text>
+  <text x="1360" y="50" font-size="12" fill="#9ca3af" text-anchor="end">v27 · 2026-10-06</text>
 
   <!-- Column headers -->
   <g font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">
@@ -80,7 +80,7 @@
     <circle cx="68" cy="544" r="14" fill="#3b82f6"/>
     <text x="68" y="549" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">P</text>
     <text x="92" y="540" font-size="14" font-weight="700" fill="#111827">People Create</text>
-    <text x="92" y="558" font-size="11" fill="#6b7280">QuickAdd / Templater</text>
+    <text x="92" y="558" font-size="11" fill="#6b7280">QuickAdd</text>
     <text x="56" y="580" font-size="11" fill="#374151">Title · Org · Email · Mobile · Photo</text>
     <text x="56" y="594" font-size="10" fill="#6b7280">→ People/  (links Categories/People)</text>
 
@@ -98,8 +98,8 @@
     <circle cx="68" cy="736" r="14" fill="#3b82f6"/>
     <text x="68" y="741" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">H</text>
     <text x="92" y="732" font-size="14" font-weight="700" fill="#111827">Hand-written / Creations</text>
-    <text x="92" y="750" font-size="11" fill="#6b7280">Note Template · Excalidraw · Journal</text>
-    <text x="56" y="772" font-size="10" fill="#6b7280">→ Creations/ · Excalidraw/ · topical folders</text>
+    <text x="92" y="750" font-size="11" fill="#6b7280">Note Template · Journal</text>
+    <text x="56" y="772" font-size="10" fill="#6b7280">→ Creations/ · topical folders</text>
 
     <!-- YouTube Summarizer -->
     <rect x="40" y="800" width="280" height="80" rx="8" fill="#ffffff" stroke="#dbeafe" stroke-width="1.5"/>
@@ -126,7 +126,7 @@
     <rect x="360" y="156" width="260" height="100" rx="8" fill="#fffbeb" stroke="#fde68a" stroke-width="1.5"/>
     <rect x="360" y="156" width="260" height="32" rx="8" fill="#f59e0b"/>
     <rect x="360" y="174" width="260" height="14" fill="#f59e0b"/>
-    <text x="490" y="177" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">Templates · Templater · QuickAdd</text>
+    <text x="490" y="177" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">Templates · QuickAdd</text>
     <text x="376" y="210" font-size="11" fill="#374151">Clipping · Voice · People · Meeting</text>
     <text x="376" y="226" font-size="11" fill="#374151">Note · Journal · Move-to-Knowledge</text>
     <text x="376" y="244" font-size="10" fill="#9ca3af" font-style="italic">applied at create time, in-app</text>
@@ -231,8 +231,8 @@
       <text x="1014" y="523" text-anchor="end" font-size="10" fill="#7c3aed">to-dos &amp; lists</text>
 
       <rect x="676" y="534" width="348" height="22" rx="4" fill="#f5f3ff"/>
-      <text x="686" y="549">Excalidraw/</text>
-      <text x="1014" y="549" text-anchor="end" font-size="10" fill="#7c3aed">diagrams</text>
+      <text x="686" y="549">Daily/</text>
+      <text x="1014" y="549" text-anchor="end" font-size="10" fill="#7c3aed">daily notes</text>
 
       <rect x="676" y="560" width="348" height="22" rx="4" fill="#f5f3ff"/>
       <text x="686" y="575">Syntheses/</text>
@@ -275,7 +275,7 @@
       <text x="1014" y="823" text-anchor="end" font-size="10" fill="#059669">never leaves device</text>
 
       <rect x="676" y="834" width="348" height="16" rx="4" fill="#fff7ed"/>
-      <text x="686" y="846" font-size="10" font-style="italic" fill="#9a3412">Secrets at ~/dev/secrets/.env are OUTSIDE the vault — not synced</text>
+      <text x="686" y="846" font-size="10" font-style="italic" fill="#9a3412">API keys in the OS keystore, outside the vault — not synced</text>
     </g>
 
     <!-- Data classification (cross-cutting frontmatter property) -->
@@ -296,14 +296,14 @@
     <text x="1132" y="200" font-size="11" fill="#6b7280">Maps of content (MOCs)</text>
     <text x="1096" y="230" font-size="10" fill="#374151">e.g., People · Projects · Companies · Places ·</text>
     <text x="1096" y="246" font-size="10" fill="#374151">Meetings · Clippings · Journal · …</text>
-    <text x="1096" y="266" font-size="10" font-style="italic" fill="#9ca3af">One page per content type, with dataview index</text>
+    <text x="1096" y="266" font-size="10" font-style="italic" fill="#9ca3af">One page per content type, with a Bases index</text>
 
     <rect x="1080" y="292" width="280" height="92" rx="8" fill="#ffffff" stroke="#a7f3d0" stroke-width="1.5"/>
     <circle cx="1108" cy="322" r="14" fill="#10b981"/>
     <text x="1108" y="327" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">T</text>
     <text x="1132" y="318" font-size="14" font-weight="700" fill="#111827">Topics</text>
     <text x="1132" y="336" font-size="11" fill="#6b7280">Subject hubs that aggregate notes</text>
-    <text x="1096" y="362" font-size="10" fill="#374151">One page per subject area, dataview-driven</text>
+    <text x="1096" y="362" font-size="10" fill="#374151">One page per subject area, Bases-driven</text>
 
     <rect x="1080" y="400" width="280" height="92" rx="8" fill="#ffffff" stroke="#a7f3d0" stroke-width="1.5"/>
     <circle cx="1108" cy="430" r="14" fill="#10b981"/>
@@ -324,7 +324,7 @@
     <circle cx="1108" cy="646" r="14" fill="#10b981"/>
     <text x="1108" y="651" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">K</text>
     <text x="1132" y="642" font-size="14" font-weight="700" fill="#111827">Knowledge graph</text>
-    <text x="1132" y="660" font-size="11" fill="#6b7280">Backlinks + Dataview queries</text>
+    <text x="1132" y="660" font-size="11" fill="#6b7280">Backlinks + Bases views</text>
     <text x="1096" y="684" font-size="10" fill="#374151">Person ↔ Meetings ↔ Topics ↔ Groups</text>
     <text x="1096" y="698" font-size="10" fill="#374151">Dashboards surface live views</text>
 
@@ -449,8 +449,8 @@
       <rect x="704" y="1048" width="316" height="26" rx="8" fill="#0891b2"/>
       <rect x="704" y="1062" width="316" height="12" fill="#0891b2"/>
       <text x="862" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Meeting Pre-Population</text>
-      <text x="716" y="1092" font-size="10" fill="#111827"><tspan font-weight="700">Producer:</tspan> Claude Code + MCP connector</text>
-      <text x="716" y="1108" font-size="10" fill="#374151">mcp_meeting_transform.py → HandoffDrop/</text>
+      <text x="716" y="1092" font-size="10" fill="#111827"><tspan font-weight="700">Producer:</tspan> meeting_pull.py (headless Claude)</text>
+      <text x="716" y="1108" font-size="10" fill="#374151">M365 connector · weekdays 05:00 → ~/MeetingIngest</text>
       <text x="716" y="1128" font-size="10" fill="#111827"><tspan font-weight="700">Consumer:</tspan> meeting_prepopulate.py</text>
       <text x="716" y="1142" font-size="10" fill="#6b7280">com.meeting-prepopulate · Sun 21:00 + WatchPaths + poll</text>
       <text x="716" y="1162" font-size="10" fill="#374151">Builds upcoming meeting notes</text>
@@ -489,7 +489,7 @@
       <rect x="56" y="1056" width="316" height="26" rx="8" fill="#64748b"/>
       <rect x="56" y="1070" width="316" height="12" fill="#64748b"/>
       <text x="214" y="1074" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Inference &amp; UI</text>
-      <text x="68" y="1100" font-size="11" font-weight="700" fill="#111827">Ollama 0.23.0  (MLX runtime)</text>
+      <text x="68" y="1100" font-size="11" font-weight="700" fill="#111827">Ollama  (MLX runtime)</text>
       <text x="68" y="1116" font-size="10" fill="#6b7280">MLX auto-selected on Apple Silicon; runs existing GGUFs.</text>
       <text x="68" y="1140" font-size="11" font-weight="700" fill="#111827">Open WebUI  (Docker)</text>
       <text x="68" y="1156" font-size="10" fill="#6b7280">Bound to 127.0.0.1:3000  ·  signups locked</text>
@@ -534,9 +534,64 @@
     </g>
   </g>
 
+  <!-- ============ BAND 8: SECURITY CONTROLS & GATES (v27) ============ -->
+  <g transform="translate(0,768)">
+    <rect x="40" y="992" width="1320" height="220" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.4"/>
+    <rect x="40" y="992" width="1320" height="40" rx="10" fill="#991b1b"/>
+    <rect x="40" y="1010" width="1320" height="22" fill="#991b1b"/>
+    <text x="60" y="1019" font-size="13" font-weight="700" fill="#ffffff">8 · SECURITY CONTROLS &amp; GATES</text>
+    <text x="400" y="1019" font-size="11" font-style="italic" fill="#fecaca">tripwires, not boundaries: they run as the user and report what changes</text>
+    <text x="1340" y="1019" font-size="11" fill="#fecaca" text-anchor="end">alerts → notification + alerts.log</text>
+    <g filter="url(#shadow)">
+      <rect x="56" y="1048" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="56" y="1048" width="316" height="26" rx="8" fill="#dc2626"/>
+      <rect x="56" y="1062" width="316" height="12" fill="#dc2626"/>
+      <text x="214" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Plugin Integrity Check</text>
+      <text x="68" y="1092" font-size="11" font-weight="700" fill="#111827">com.obsidian.security.plugin-check</text>
+      <text x="68" y="1108" font-size="10" fill="#6b7280">on change to plugins · HMAC-signed allowlist</text>
+      <text x="68" y="1128" font-size="10" fill="#374151">Pinned releases, per-file SHA-256</text>
+      <text x="68" y="1142" font-size="10" fill="#374151">Code-running settings watched</text>
+      <text x="68" y="1162" font-size="10" fill="#374151">Re-vet by the operator after any update</text>
+      <text x="68" y="1186" font-size="10" font-style="italic" fill="#9ca3af">local · no network</text>
+
+      <rect x="380" y="1048" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="380" y="1048" width="316" height="26" rx="8" fill="#dc2626"/>
+      <rect x="380" y="1062" width="316" height="12" fill="#dc2626"/>
+      <text x="538" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Workflow Integrity Monitor</text>
+      <text x="392" y="1092" font-size="11" font-weight="700" fill="#111827">com.obsidian.security.integrity</text>
+      <text x="392" y="1108" font-size="10" fill="#6b7280">on change + daily · hash baseline</text>
+      <text x="392" y="1128" font-size="10" fill="#374151">Scripts · agents · venv · templates</text>
+      <text x="392" y="1142" font-size="10" fill="#374151">job settings · Claude config · secrets file</text>
+      <text x="392" y="1162" font-size="10" fill="#374151">Baseline adopted only on known drift</text>
+      <text x="392" y="1186" font-size="10" font-style="italic" fill="#9ca3af">fails closed on an unreadable scan</text>
+
+      <rect x="704" y="1048" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="704" y="1048" width="316" height="26" rx="8" fill="#dc2626"/>
+      <rect x="704" y="1062" width="316" height="12" fill="#dc2626"/>
+      <text x="862" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Classification &amp; Export Gate</text>
+      <text x="716" y="1092" font-size="11" font-weight="700" fill="#111827">com.obsidian.classify · daily</text>
+      <text x="716" y="1108" font-size="10" fill="#6b7280">L0 detectors · L1 model · L2 human review</text>
+      <text x="716" y="1128" font-size="10" fill="#374151">Proposes tiers; never lowers one</text>
+      <text x="716" y="1142" font-size="10" fill="#374151">Export gate fails closed on what</text>
+      <text x="716" y="1162" font-size="10" fill="#374151">it cannot read or classify</text>
+      <text x="716" y="1186" font-size="10" font-style="italic" fill="#9ca3af">restricted never leaves the vault</text>
+
+      <rect x="1028" y="1048" width="316" height="148" rx="8" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.2"/>
+      <rect x="1028" y="1048" width="316" height="26" rx="8" fill="#dc2626"/>
+      <rect x="1028" y="1062" width="316" height="12" fill="#dc2626"/>
+      <text x="1186" y="1066" font-size="12" font-weight="700" fill="#ffffff" text-anchor="middle">Ingest Guard &amp; Standing Checks</text>
+      <text x="1040" y="1092" font-size="11" font-weight="700" fill="#111827">Outside text cannot trigger plugin code</text>
+      <text x="1040" y="1108" font-size="10" fill="#6b7280">applied by every pipeline that writes</text>
+      <text x="1040" y="1128" font-size="10" fill="#374151">Seven security passes on every push</text>
+      <text x="1040" y="1142" font-size="10" fill="#374151">Public-tree gates: classification + identity</text>
+      <text x="1040" y="1162" font-size="10" fill="#374151">Installed git hooks must be current</text>
+      <text x="1040" y="1186" font-size="10" font-style="italic" fill="#9ca3af">artifacts outside the repo</text>
+    </g>
+  </g>
+
   <!-- Footer: architecture rationale -->
-  <g font-size="11" fill="#374151" transform="translate(0,528)">
-    <rect x="40" y="1240" width="1320" height="212" rx="8" fill="#ffffff" stroke="#e5e7eb"/>
+  <g font-size="11" fill="#374151" transform="translate(0,768)">
+    <rect x="40" y="1240" width="1320" height="230" rx="8" fill="#ffffff" stroke="#e5e7eb"/>
     <text x="56" y="1264" font-weight="700" fill="#111827">Architecture rationale</text>
     <text x="56" y="1281" font-size="11" fill="#6b7280">Each input lands in its target capture folder under ~/Obsidian (destinations noted inside each input box). Ingest LaunchAgents do mechanical, deterministic cleanup at the edge: voice_cleanup polishes dictations (~1 Claude API call</text>
     <text x="56" y="1296" font-size="11" fill="#6b7280">each); strip_ads removes NYT/WSJ ad blocks (no API); YouTube share-sheet captures route through the Claude summarizer; podcast_watch transcribes drops locally (MLX Whisper → faster-whisper → ONNX, one episode</text>
@@ -546,8 +601,9 @@
     <text x="56" y="1360" font-size="11" fill="#111827">were unchanged — and it removes Apple iCloud for Windows from machines that otherwise need nothing from Apple. A mailbox is world-writable, which is why the payload carries its own proof: unguessable address, sender</text>
     <text x="56" y="1375" font-size="11" fill="#111827">allowlist, MAC over a length-prefixed canonical string, routing type taken from inside the MAC, a 7-day replay bound, and locally generated filenames. The token itself is never transmitted.</text>
     <text x="56" y="1393" font-size="11" fill="#6b7280">A second class of jobs (band 6) operates ON the vault rather than ingesting: com.morning-dashboard builds a 7 AM weekday HTML surface; meeting-prep grafts attendee follow-ups into today's notes; meeting-prepopulate consumes</text>
-    <text x="56" y="1408" font-size="11" fill="#6b7280">an MCP-connector-fed schedule handoff (mcp_meeting_transform.py, no OneDrive/Cowork); group-photo refresh runs nightly.</text>
+    <text x="56" y="1408" font-size="11" fill="#6b7280">a schedule handoff from meeting_pull.py, a headless Claude session on the Microsoft 365 connector, via ~/MeetingIngest outside the vault; group-photo refresh runs nightly. Band 8 watches all of it.</text>
     <text x="56" y="1423" font-size="11" fill="#6b7280">Every note now carries a policy-aligned `classification` property (public / internal-use-only / confidential / restricted), set at create-time; restricted is excluded from the local RAG sync. All automation scripts are canonically</text>
-    <text x="56" y="1438" font-size="11" fill="#6b7280">located at ~/Obsidian/Templates/Scripts. Vault content is replicated cross-device via Obsidian Sync with E2E encryption (key in the local OS keychain only); secrets, code repos and ~/SourceMedia sit outside the sync scope.</text>
+    <text x="56" y="1438" font-size="11" fill="#6b7280">located at ~/Obsidian/Templates/Scripts. Vault content is replicated cross-device via Obsidian Sync with E2E encryption (key in the local OS keychain only).</text>
+    <text x="56" y="1453" font-size="11" fill="#6b7280">API keys stay in the OS keystore; code repos and ~/SourceMedia sit outside the sync scope. Band 8's controls are tripwires: they report a change, they do not prevent it.</text>
   </g>
 </svg>

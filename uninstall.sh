@@ -125,6 +125,7 @@ LABELS=(
     com.obsidian.podcast-watch
     com.morning-dashboard
     com.obsidian.classify
+    com.obsidian.claude-auth-check
     # Retired 2026-09-30 with the Azure Blob relay; still removed so an
     # older install that loaded it is cleaned up.
     com.obsidian.handoff-blob-pull
