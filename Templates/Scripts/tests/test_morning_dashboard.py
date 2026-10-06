@@ -749,7 +749,10 @@ def test_other_jobs_never_get_the_security_hint():
 # ---------------------------------------------------------------------------
 
 def _win_task(name, state="Running", result=267009):
-    return {"name": name, "state": state, "lastRun": "2026-10-05T08:24:22",
+    # A run an hour ago, never a fixed date: a hard-coded one goes stale once
+    # the job's window has passed, and the "pass" tests then read "stale".
+    last_run = (_dt.datetime.now() - _dt.timedelta(hours=1)).isoformat(timespec="seconds")
+    return {"name": name, "state": state, "lastRun": last_run,
             "lastResult": result, "repetition": None,
             "triggerType": "MSFT_TaskDailyTrigger"}
 
