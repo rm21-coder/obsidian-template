@@ -11,9 +11,8 @@
   Also fires within ~30s of any write into:
     - ~/Library/LaunchAgents (the classic persistence vector)
     - ~/Obsidian/Templates/Scripts (the integrity baseline target)
-    - ~/.local/share/obsidian-security (the controls' own state dir;
-      tampering with plugin_allowlist.json would otherwise be invisible
-      for up to 24 hours)
+  The controls' own state dir is deliberately not watched; see the comment
+  above WatchPaths below.
 
   Stdlib-only - uses /usr/bin/python3 so the watcher runs even if the
   per-vault venv is broken.
