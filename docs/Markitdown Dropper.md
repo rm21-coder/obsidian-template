@@ -21,15 +21,15 @@ Drag any supported file (Word, Excel, PowerPoint, PDF, HTML, audio, image, etc.)
 
 ## Files
 
-- `markitdown_dropper.py` — the PySide6 GUI app (place in `/Applications/` or any always-accessible folder)
-- `Markitdown Dropper.command` — double-click launcher that creates and maintains the venv
+- `Templates/Scripts/markitdown_dropper.py` — the PySide6 GUI app
+- `~/Applications/Markitdown Dropper.app` — the launcher the installer builds (component 43): an AppleScript app bundle carrying its own copy of `markitdown_dropper.py`, which it starts with the dropper venv's Python
 - `Templates/Scripts/markitdown_cleanup.py` — post-conversion cleanup module (imported by the dropper)
 - `~/.markitdown-dropper-venv/` — isolated Python 3.13 environment with `markitdown[all]` and `PySide6`, installed only from `Templates/Scripts/requirements-dropper.lock` (every package hash-checked, wheels only)
 - `~/.markitdown_dropper.json` — saved destination folder
 
 ## Cleanup pass
 
-After Markitdown converts a file, the dropper imports `markitdown_cleanup.py` from `~/Obsidian/Templates/Scripts/` (you place a copy there during setup) and runs the converted text through `clean()` before writing it. The cleanup is intentionally conservative — it only changes things it can be confident about, so it doesn't mangle nuance in dictation-style notes or pasted email content.
+After Markitdown converts a file, the dropper imports `markitdown_cleanup.py` from `~/Obsidian/Templates/Scripts/` (where the template already ships it) and runs the converted text through `clean()` before writing it. The cleanup is intentionally conservative — it only changes things it can be confident about, so it doesn't mangle nuance in dictation-style notes or pasted email content.
 
 **What it does:**
 
@@ -91,21 +91,20 @@ Prerequisite: Homebrew Python 3.13.
 brew install python@3.13
 ```
 
-Then:
+Then run the installer: component 43 (`installers/components/43-markitdown-dropper.sh`) does the rest.
 
-1. Copy `Templates/Scripts/markitdown_cleanup.py` from this vault to `~/Obsidian/Templates/Scripts/markitdown_cleanup.py` (the dropper's launcher inserts `~/Obsidian/Templates/Scripts/` on `sys.path` so the module is importable).
-2. Place `markitdown_dropper.py` and `Markitdown Dropper.command` together in a stable folder — `/Applications/` (or any always-accessible folder). They must live next to each other; the launcher resolves the script via `dirname`.
-3. Build the venv from the lock (the installer's component 43 does exactly this):
+1. It builds the venv from the lock:
 
    ```bash
    /opt/homebrew/bin/python3.13 -m venv ~/.markitdown-dropper-venv
    ~/.markitdown-dropper-venv/bin/python3 -m pip install --require-hashes --no-deps --only-binary :all: -r ~/Obsidian/Templates/Scripts/requirements-dropper.lock
    ```
 
-   Then double-click `Markitdown Dropper.command`. It no longer installs anything itself; if it still runs `pip install`, replace it with the app the installer builds. Subsequent launches take a few seconds because markitdown loads its [magika](https://github.com/google/magika) ONNX model once at startup; after that, drops are near-instant.
+2. It compiles `~/Applications/Markitdown Dropper.app` and bundles a copy of `markitdown_dropper.py` inside it, so a change to that script reaches the app only when component 43 runs again. The bundled script still imports `markitdown_cleanup.py` from `~/Obsidian/Templates/Scripts/`, which is on its `sys.path`.
+3. Launch it from Spotlight (type "Markitdown") or Finder. If Gatekeeper warns on the first launch, right-click it and choose Open. Launches take a few seconds because markitdown loads its [magika](https://github.com/google/magika) ONNX model once at startup; after that, drops are near-instant. Launching it while it is already running brings the open window forward.
 4. On first launch the app prompts for the destination folder — point it at this vault's `Creations/` folder. The choice persists in `~/.markitdown_dropper.json`.
 
-A Terminal window stays open behind the app while it's running — that's the launcher process. Closing it quits the app.
+The app runs in the background with no Terminal window; quit it from its own window.
 
 ## Updating markitdown
 

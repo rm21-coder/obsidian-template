@@ -1,4 +1,4 @@
-# Security Harness (Optional)
+# Security Harness
 
 Two lightweight monitors that watch the parts of this workflow an attacker
 would actually target: the community-plugin code Obsidian loads, and the
@@ -98,7 +98,9 @@ triggers the same way (since 2026-10-03):
   Live Preview as well as reading view. Tasks 8, the pinned version,
   refuses them unless its scripting setting is turned on; 7.x ran them always.
   For Tasks the guard is the second layer, for anyone who turns scripting on.
-- **Dataview.** `` `= …` `` inline queries are on by default, and their result
+- **Dataview.** (The template stopped shipping Dataview on 2026-10-05 and
+  updates remove it; this stays for anyone who installs it themselves.)
+  `` `= …` `` inline queries are on by default, and their result
   renders as markdown. A crafted query could build a remote image URL out of
   another note's text, so opening the note sends that text to an outside
   server. `dataview` / `dataviewjs` blocks and `` `$= …` `` are covered too.
@@ -110,6 +112,9 @@ triggers the same way (since 2026-10-03):
   `mdm`, `excalidraw-script-install`) and Meta Bind's inline `INPUT[`,
   `VIEW[` and `BUTTON[` render controls that act on a click. Excalidraw's
   frontmatter keys would open a note as a drawing and offer to run its script.
+  Of these the template ships only Metadata Menu. Excalidraw was retired on
+  2026-10-05 and updates remove it; Meta Bind was never shipped. Both stay
+  guarded for anyone who installs them themselves.
 
 A zero-width space goes between the fence and the language, after the
 opening backticks of inline code, before a line that starts a code-block
@@ -157,7 +162,7 @@ Either way, the export gate blocks a dynamic command anywhere in an export
 | Control | Script | Schedule | What it checks |
 |---------|--------|----------|----------------|
 | Plugin integrity | `plugin_integrity_check.py` | daily 06:30 + on change to the plugins folder | SHA-256 of each plugin's `main.js` and `manifest.json` under `<vault>/.obsidian/plugins/`, diffed against an HMAC-signed allowlist. |
-| Workflow integrity | `integrity_monitor.py` | daily 06:35 + on change to scripts / LaunchAgents / state dir | SHA-256 of the scripts in `Templates/Scripts/` (and any module or bytecode planted beside them), every plist in `~/Library/LaunchAgents/`, the controls' own state files, the templates, the scripts' virtualenv, the Claude CLI's instructions and command-running settings, and the secrets file; every cached `.pyc` of the scripts checked against its source; plus a bulk-deletion guard on the vault's Markdown count. See "What the integrity monitor covers". |
+| Workflow integrity | `integrity_monitor.py` | daily 06:35 + on change to scripts / LaunchAgents | SHA-256 of the scripts in `Templates/Scripts/` (and any module or bytecode planted beside them), every plist in `~/Library/LaunchAgents/`, the controls' own state files, the templates, the scripts' virtualenv, the Claude CLI's instructions and command-running settings, and the secrets file; every cached `.pyc` of the scripts checked against its source; plus a bulk-deletion guard on the vault's Markdown count. See "What the integrity monitor covers". |
 
 Both are wired as LaunchAgents (`com.obsidian.security.plugin-check`,
 `com.obsidian.security.integrity`), each run
@@ -256,6 +261,13 @@ watched, by decision:
   (the `  - {...}` finding details) are stamped too, so slicing the file
   by date keeps a finding together with its header. `--json` output is
   deliberately left unstamped so it stays machine-parseable.
+- **Last-run stamps:** each control finishes every run, clean or not, by
+  writing `last-run-plugin-check.txt` or `last-run-integrity.txt` in the state
+  directory (one line: timestamp and exit code). The controls write their log
+  only when they find something, so the morning dashboard dates each control
+  from its stamp instead. The stamps are `.txt` on purpose: the integrity
+  monitor hashes the state directory's `*.json` trust anchors, and a file
+  rewritten on every run would be drift on every run.
 - **Exit codes:** `0` clean · `1` drift / suspicious activity · `2` hard error
   **or no baseline yet** (see below).
 
@@ -299,7 +311,7 @@ allowlist first:
   until you vet and run `--update`. A failure of the check itself raises
   `CONTROL_ERROR` instead of dying quietly.
 - **Not covered:** a setting flipped and flipped back between two runs, for a
-  plugin that reloads settings live (Meta Bind, Templater). On macOS the agent
+  plugin that reloads settings live (Meta Bind or Templater, where installed). On macOS the agent
   reruns when a watched settings file changes; on Windows the task runs daily
   only.
 - The workflow baseline lives at `~/.local/share/obsidian-security/integrity_state.json`.
@@ -315,13 +327,20 @@ First question: **did you make the change?**
 
 Finding kinds you'll see:
 
-- **Plugin:** `NEW`, `REMOVED`, `VERSION_CHANGE`, and `BUNDLE_CHANGE`.
+- **Plugin:** `NEW`, `REMOVED`, `VERSION_CHANGE`, `BUNDLE_CHANGE`,
+  `MANIFEST_DRIFT`, `ENABLED_CHANGE`, `SETTINGS_CHANGE`, `REFERENCE_LIMIT`,
+  `NOT_BASELINED`, `ALLOWLIST_TAMPER`, and `CONTROL_ERROR`.
   `BUNDLE_CHANGE` means a plugin's `main.js` changed **without a version bump** —
   the strongest supply-chain signal; investigate before adopting.
+  `MANIFEST_DRIFT` is the same for `manifest.json`. `REFERENCE_LIMIT` means a
+  plugin's settings point to more scripts and templates than the check will
+  hash, so not all of them are watched.
 - **Workflow:** `NEW_FILE`, `CONTENT_CHANGE`, `DELETED`, and `BULK_DELETE`
   (vault Markdown count dropped by at least `max(50, 5%)`); `SCAN_FAILED`
-  when the Windows scheduled-task scan could not run.
-- **Process:** each suspicious spawn, with the offending binary path.
+  when the Windows scheduled-task scan could not run; `PERMISSIONS` when the
+  secrets file is group- or world-readable; `BYTECODE_MISMATCH` /
+  `BYTECODE_UNCHECKED` for a cached `.pyc` that does not match its source or
+  could not be checked; `NOT_BASELINED` for a scope added after the baseline.
 
 ## Manual / on-demand use
 
@@ -354,7 +373,6 @@ Run any control by hand. Useful flags:
   choosing.
 - `--vault PATH` (plugin + integrity), `--scripts-dir` / `--launchagents-dir`
   (integrity) — point at a non-default vault or layout.
-- `--since 24h` and `--stream` (process audit) — set the retro window, or live-tail.
 
 ## Customization
 
@@ -372,7 +390,7 @@ Standard-library Python 3 only — no pip packages, no network. With the
 transcription packages, the scripts' virtualenv is about 1.4 GB; hashing it
 adds about 10 seconds to the integrity check, or under a minute from a cold
 disk cache. The controls read
-hashes and the local unified log, write only their own state and `alerts.log`,
+hashes, write only their own state, last-run stamps and `alerts.log`,
 and never modify your plugins, scripts, or notes. The state directory is created
 mode `0700`; state files are written `0600`.
 
@@ -390,17 +408,19 @@ not stop a control from writing its state.
 
 ## Tests
 
-`Templates/Scripts/tests/` has a pytest suite covering `url_safety.py`,
-`integrity_monitor.py`, `plugin_integrity_check.py`, and `youtube_summarize.py`
-— static AST invariants, unit tests, and the headline security scenarios
-(DNS rebinding, redirect-to-private-IP, allowlist tamper detection, HMAC
-forgery resistance). Fully mocked — safe to run repeatedly on a live Mac;
+`Templates/Scripts/tests/` has a pytest suite covering the scripts, the two
+controls among them (`integrity_monitor.py`, `plugin_integrity_check.py`,
+`security_common.py`) — static AST invariants, unit tests, and the headline
+security scenarios (DNS rebinding, redirect-to-private-IP, allowlist tamper
+detection, HMAC forgery resistance). Fully mocked — safe to run repeatedly on a live Mac;
 see `Templates/Scripts/tests/README.md`. Run it with
 `Templates/Scripts/tests/run_tests.sh`.
 
 ## Uninstall
 
-`./uninstall.sh` unloads the three agents and (by default) removes the security
-state directory. `./uninstall.sh --newsyslog` also removes the sudo-installed log
-rotation config at `/etc/newsyslog.d/obsidian-security.conf`, and `--secrets`
-removes the Keychain HMAC key (`obsidian-allowlist-hmac`).
+`./uninstall.sh` unloads both security agents, with every other LaunchAgent
+the installer loaded (and the retired process-audit agent, if an older install
+left one), and (by default) removes the security state directory.
+`./uninstall.sh --newsyslog` also removes the sudo-installed log rotation
+config at `/etc/newsyslog.d/obsidian-security.conf`, and `--secrets` removes
+the Keychain HMAC key (`obsidian-allowlist-hmac`).

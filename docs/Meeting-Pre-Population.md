@@ -13,11 +13,12 @@ It is **off by default** and is not required for any other part of the vault.
 The pipeline is deliberately split in two so the calendar-specific,
 tenant-specific work stays out of the template:
 
-- **Producer (yours to build):** anything that can read your calendar and
-  write a JSON "handoff" file, following the delivery convention below. The
-  only requirement is that it emits the JSON contract below.
-  **Recommended:** a Claude Code session with an MCP connector to your
-  calendar system (Microsoft 365, Google Workspace, etc.) doing the read and
+- **Producer (shipped, or bring your own):** anything that can read your
+  calendar and write a JSON "handoff" file, following the delivery convention
+  below. The only requirement is that it emits the JSON contract below.
+  **Recommended, and shipped:** `Templates/Scripts/meeting_pull.py` (component
+  `54-meeting-pull`), which runs a Claude Code session with an MCP connector to
+  your calendar system (Microsoft 365, Google Workspace, etc.) doing the read and
   running a deterministic transform — no relay or custom server needed. See
   [`Meeting-Handoff-MCP-Producer.md`](Meeting-Handoff-MCP-Producer.md), with
   a ready-to-use M365 reference transform at
@@ -26,7 +27,7 @@ tenant-specific work stays out of the template:
   [`Templates/Scripts/meeting_handoff_transform.js`](../Templates/Scripts/meeting_handoff_transform.js)
   to build against.
 - **Consumer (shipped here):** `Templates/Scripts/meeting_prepopulate.py`, run
-  on a poll (5-minute Task Scheduler task on Windows; a `com.meeting-prepopulate`
+  on a poll (30-minute Task Scheduler task on Windows; a `com.meeting-prepopulate`
   LaunchAgent on macOS). It watches a local drop folder, validates and
   de-duplicates each handoff, and writes/updates notes in the vault.
 
@@ -49,8 +50,10 @@ reference implementation.
 
 - **A local folder for the consumer to watch** — created automatically by
   `meeting_prepopulate.py` on first run (`~/MeetingIngest` by
-  default). No special filesystem permissions needed; it's a plain vault
-  subfolder.
+  default). No special filesystem permissions needed. It sits outside the
+  vault on purpose: raw handoff JSON is ingest staging, not content, and a
+  folder inside the vault would be synced to every device and walked by every
+  vault scan.
 - **A producer** that writes the contract below into that folder (directly,
   or via a relay you build).
 
@@ -63,12 +66,13 @@ Run the opt-in component:
 ```
 
 **macOS:** loads the `com.meeting-prepopulate` LaunchAgent.
-**Windows:** the `meeting-prepopulate` Task Scheduler task is registered
-disabled by `install.ps1`; enable it once your producer/relay is in place:
-`Enable-ScheduledTask -TaskName meeting-prepopulate -TaskPath '\Obsidian\'`.
+**Windows:** the `meeting-prepopulate` Task Scheduler task ships registered
+and enabled by `install.ps1`; with no handoff in the folder it has nothing to
+do. The producer's `meeting-pull` task is the one that ships disabled.
 
 The one remaining manual step either way: **stand up your producer** so
-handoff files actually arrive. The recommended path needs no relay at all —
+handoff files actually arrive. The shipped one installs with
+`./install.sh --only 54-meeting-pull` and needs no relay at all —
 see [`Meeting-Handoff-MCP-Producer.md`](Meeting-Handoff-MCP-Producer.md). A
 relay (below) is only needed if your producer's environment can't reach the
 drop folder directly.

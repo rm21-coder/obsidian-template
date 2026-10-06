@@ -52,7 +52,7 @@ weren't corrupted), **authenticity** (a trusted producer created them), and a
 
 ### 2.2 Payload — top level
 
-`schema_version` (int, currently 1) · `source` (e.g. `microsoft-cowork`) ·
+`schema_version` (int, currently 1) · `source` (e.g. `m365-mcp`) ·
 `source_version` · `generated_at` (ISO-8601) · `user{ display_name, email,
 tenant, timezone }` · `week{ start, end }` · `meetings[]` · `contacts[]` ·
 `notes[]`.
@@ -80,8 +80,10 @@ solo / individual / group / broadcast.
 Times are normalized to **true UTC** (DST-aware), group/distribution/resource
 mailboxes are excluded, and the payload is emitted by a **deterministic**
 transform (never hand-written) so the same inputs yield byte-identical output —
-which is what makes the SHA-256 and signature meaningful. Reference transform:
-`Templates/Scripts/meeting_handoff_transform.js`.
+which is what makes the SHA-256 and signature meaningful. Shipped transform:
+`Templates/Scripts/mcp_meeting_transform.py`, run by the shipped producer
+`meeting_pull.py`. `Templates/Scripts/meeting_handoff_transform.js` stays as a
+reference transform for a producer that starts from raw Graph data.
 
 ## 3. The fetch/ack interface
 
@@ -123,13 +125,14 @@ Storage relay (`handoff_blob_pull.py`) shipped here until 2026-09-30; it was
 removed because it was never the recommended path and carried its own SAS
 credential and network surface.
 
-**Recommended producer for this tier:** rather than building a Cowork/Graph
+**Recommended producer for this tier:** rather than building a Graph
 job or Power Automate flow, a Claude Code session with an off-the-shelf MCP
 connector to your calendar system (Microsoft 365, Google Workspace, etc.) can
 do the privileged read and run the deterministic transform itself, writing
 straight into the drop folder — no relay needed at all when it runs on the
 same machine as the vault. This needs no custom server and no Tier C
-build-out. Fully documented, with a ready-to-use M365 reference transform:
+build-out. It ships as `meeting_pull.py` (installer component 54). Fully
+documented, with a ready-to-use M365 reference transform:
 [`Meeting-Handoff-MCP-Producer.md`](Meeting-Handoff-MCP-Producer.md).
 
 ### Tier C — tenant MCP server (the endgame)
@@ -170,7 +173,8 @@ These are contract-level, independent of transport:
 ## 6. Adopting this (for another CIO)
 
 1. Stand up a **producer** that emits the schema-v1 contract for your tenant
-   (Cowork transform, a Graph job, or your MCP server). Reuse the reference
+   (the shipped `meeting_pull.py` with an MCP calendar connector, or your own
+   MCP server). Reuse the reference
    transform's normalization rules.
 2. Choose a **transport tier** for your endpoint posture (A/B/C above).
 3. Run the **consumer** unchanged; point `MEETING_PREPOP_SOURCE` at your tier

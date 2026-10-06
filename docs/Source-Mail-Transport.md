@@ -171,8 +171,9 @@ python3 Templates/Scripts/source_mail_pull.py --once --dry-run
 ### 4. Enable the job
 
 macOS: `com.obsidian.source-mail-pull.plist` (300s interval).
-Windows: `source-mail-pull` in `schedules.psd1`, registered disabled like
-everything else.
+Windows: `source-mail-pull` in `schedules.psd1`, registered disabled (with
+`meeting-pull`, one of the two jobs that need a per-user resource first; the
+rest ship enabled).
 
 ```powershell
 Enable-ScheduledTask -TaskName source-mail-pull -TaskPath '\Obsidian\'
