@@ -63,9 +63,11 @@ is a one-line edit; ignoring leaves the note where it was.
 
 The queue is worked from a generated page, `Actions/Classification Review`,
 for one reason: reviewing a backlog of seventy notes by opening seventy notes
-is a workflow nobody completes. Each pending proposal on that page carries a
-tier dropdown and a Reject toggle bound to the note itself, so ruling on it
-never means leaving the page (see "Working the queue" below). A Bases table
+is a workflow nobody completes. With the Meta Bind plugin installed, each
+pending proposal on that page carries a tier dropdown and a Reject toggle bound
+to the note itself, so ruling on it never means leaving the page. The template
+does not ship Meta Bind; without it the page is a read-only list and you rule
+from the command line (see "Working the queue" below). A Bases table
 did this job first and was replaced: Obsidian has no pick-list property type,
 so the tier could only be typed, and accepting took a second step.
 
@@ -97,11 +99,8 @@ Set the floor and the reviewer only sees genuine exceptions. It also gives the
 *absence* of an elevation meaning: a `Meetings/` note that is not confidential
 was marked down deliberately.
 
-An external `source:` URL still demotes a note to `public`, but only where the
-folder floor is at or below the working default — a meeting note that cites a
-URL is still a meeting note. Two other places encode the same defaults and must
-move together, or one will write the old value back while another proposes
-raising it: `vault_lint.py`'s `SCHEMA_DEFAULTS` and `add_classification.py`'s
+Two other places encode the same folder defaults and must move together, or
+one will write the old value back while another proposes raising it: `vault_lint.py`'s `SCHEMA_DEFAULTS` and `add_classification.py`'s
 `FOLDER_DEFAULT`.
 
 **Nothing defaults to `public`.** Clipped articles, YouTube summaries and
@@ -232,8 +231,8 @@ The command line does the same in bulk:
 3. `--set-tier` records a tier of your choosing when you agree the note should
    move but not with where.
 
-The Bases table (`Templates/Bases/Classification Review.base`, embedded in
-`Topics/Classification`) stays as the audit view: detector auto-applications,
+The Bases table (`Templates/Bases/Classification Review.base`, which you can
+embed in a note of your own, e.g. under `Topics/`) stays as the audit view: detector auto-applications,
 the sensitive inventory, and what has been ruled on. Its cells can edit in
 place too, but Obsidian has no pick-list property type, so a tier has to be
 typed exactly, and accepting there still needs the next run's reconcile.
@@ -374,7 +373,10 @@ What it checks, since 2026-10-04:
 
 Both scripts resolve credentials through `llm_endpoint.py`: stock Anthropic with
 `ANTHROPIC_API_KEY` by default, or set `LLM_BASE_URL` and `LLM_API_KEY_NAME` in
-`~/dev/secrets/.env` to route through an institutional gateway. Routing is
+`~/dev/secrets/.env` to route through an institutional gateway. The key itself
+is looked up by that name through `secret_store.get_secret`: the environment
+(which includes `.env`) first, then the platform keystore (the macOS Keychain,
+or DPAPI on Windows), where the installer stores it. Routing is
 therefore configuration, not a code divergence between your vault's copy of
 these files and this repo's.
 

@@ -92,7 +92,7 @@ to ask for. Three pieces, all opt-in:
 | --- | --- |
 | `Templates/Scripts/meeting_pull.py` | The runner. Renders the prompt template, invokes `claude -p` headlessly with the connector's tools allowlisted, and lets the transform write the trio. Stdlib-only and cross-platform. |
 | `Templates/Scripts/meeting_pull_prompt.txt` | The prompt, with `{{TOKEN}}` placeholders — the repo carries no identity or paths. |
-| `Templates/Scripts/com.obsidian.meeting-pull.plist` | macOS scheduler: weekdays 05:00 (an hour ahead of the morning dashboard) plus 06:30/08:00 catch-up firings. On Windows the equivalent is the `meeting-pull` task in `windows/schedules.psd1`. |
+| `Templates/Scripts/com.obsidian.meeting-pull.plist` | macOS scheduler: weekdays 05:00 (two hours ahead of the 07:00 morning dashboard) plus 06:30/08:00 catch-up firings. On Windows the equivalent is the `meeting-pull` task in `windows/schedules.psd1`. |
 
 Install it with `./install.sh --only 54-meeting-pull`, which prompts for the
 identity block (name, email, tenant, timezone, internal domains) and the

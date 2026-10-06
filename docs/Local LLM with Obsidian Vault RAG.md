@@ -19,8 +19,8 @@ A local-only chat-with-your-vault setup running on Apple Silicon. Ollama serves 
 ## Architecture at a glance
 
 ```
-~/Obsidian  ──►  ~/Obsidian/Templates/Scripts/sync-vault.sh  ──►  Open WebUI Knowledge  ──►  RAG retrieval  ──►  Ollama model  ──►  Answer
-                 (nightly via LaunchAgent)        (vector + BM25)       (Top K = 6)        (llama.cpp + Metal)
+~/Obsidian  ──►  ~/Obsidian/Templates/Scripts/obsidian-rag-sync.py  ──►  Open WebUI Knowledge  ──►  RAG retrieval  ──►  Ollama model  ──►  Answer
+                 (nightly 03:15 via LaunchAgent)            (vector + BM25)       (Top K = 6)        (llama.cpp + Metal)
 ```
 
 The model itself never sees the raw vault — Open WebUI retrieves relevant chunks at query time and injects them into the prompt context. This is conventional retrieval-augmented generation; the contribution is the wiring, the personalization layers, and the security posture, not the architecture.
@@ -83,12 +83,12 @@ docker rm open-webui
 
 ## Models
 
-The bootstrap script pulls a tiered set automatically. Each base model gets wrapped as a "Custom Model" in **Open WebUI → Workspace → Models** with the vault Knowledge collection pre-attached and a tailored system prompt — those wrappers appear in the model picker as **`<model> + Vault`**:
+The bootstrap script pulls `llama3.1:8b-instruct-q8_0`, plus `qwen2.5:14b-instruct-q6_K` and `llama3.3:70b-instruct-q5_K_M` unless run with `--minimal` (the installer runs it `--minimal`, so only the 8B). Gemma 4, Nemotron and the embedding model below are pulled by hand with `ollama pull`. Each base model gets wrapped as a "Custom Model" in **Open WebUI → Workspace → Models** with the vault Knowledge collection pre-attached and a tailored system prompt — those wrappers appear in the model picker as **`<model> + Vault`**:
 
 | Custom model | Base model tag | Loaded size | Speed | Use it for |
 |---|---|---|---|---|
 | **Llama 8B + Vault** | `llama3.1:8b-instruct-q8_0` | ~8 GB | Fastest | Quick lookups, name/date pulls |
-| **Gemma 4 26B + Vault** | `gemma4:26b` (MoE) | ~16 GB | Fast (MoE fires ~4–8B params/token) | Everyday default |
+| **Gemma 4 26B + Vault** | `gemma4:26b` (MoE) *(pulled separately)* | ~16 GB | Fast (MoE fires ~4–8B params/token) | Everyday default |
 | **Llama 70B + Vault** | `llama3.3:70b-instruct-q5_K_M` | ~50 GB | Slow (~15s first-load) | Synthesis, multi-source reasoning |
 | **Nemotron + Vault** | `nvidia/nemotron-...` *(pulled separately)* | ~86 GB | Slowest | Grounding-critical work; strict citations |
 
@@ -166,7 +166,7 @@ The sync skips `.obsidian/`, `.trash/`, `Templates/`, `Excalidraw/`, and `Z_atta
 
 ### Thin-content filtering
 
-Files whose extractable body text is below `MIN_BODY_CHARS = 100` (after stripping frontmatter, wikilinks, and image embeds) are skipped on **fresh adds only**. This prevents most People notes — which are typically a frontmatter block + photo + Meetings dataview query and almost no prose — from being indexed as semantic noise.
+Files whose extractable body text is below `MIN_BODY_CHARS = 100` (after stripping frontmatter, wikilinks, and image embeds) are skipped on **fresh adds only**. This prevents most People notes — which are typically a frontmatter block + photo + Meetings Bases view and almost no prose — from being indexed as semantic noise.
 
 To make a thin People note (or any sparse file) indexable, add a paragraph of real content.
 
@@ -204,35 +204,7 @@ After three consecutive failures on the same content hash, a file is quarantined
 
 ### Nightly schedule
 
-Wire the nightly LaunchAgent by placing this at `~/Library/LaunchAgents/com.obsidian-rag-sync.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.obsidian-rag-sync</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/sync-vault.sh</string>
-    </array>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key><integer>3</integer>
-        <key>Minute</key><integer>0</integer>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>/tmp/obsidian-rag-sync.log</string>
-    <key>StandardErrorPath</key>
-    <string>/tmp/obsidian-rag-sync.err</string>
-    <key>RunAtLoad</key>
-    <false/>
-</dict>
-</plist>
-```
-
-Replace `YOUR_USERNAME`, then `launchctl load ~/Library/LaunchAgents/com.obsidian-rag-sync.plist`.
+The template ships the LaunchAgent as `Templates/Scripts/com.obsidian-rag-sync.plist`, and the installer (component `50-llm-rag`) loads it. It runs `obsidian-rag-sync.py` under the scripts' virtualenv (`Templates/Scripts/.venv/bin/python3`) daily at 03:15, logging to `~/Library/Logs/obsidian-rag-sync.log` and `.err`. The script reads `~/dev/secrets/.env` and the keystore itself, so the scheduled run does not go through `sync-vault.sh`.
 
 ## Personalization layers
 
@@ -247,7 +219,7 @@ If a response is generic or hallucinated, click the **Sources** panel under the 
 ## Known limitations and how to work around them
 
 - **Short colloquial queries fail** more often than direct queries. *"Who reports to me?"* won't reliably retrieve `About <Name>.md`; *"What are the names of my eight direct reports?"* will. Use the file's actual vocabulary.
-- **Sparse files don't retrieve well.** Most People notes are templates with frontmatter + photo + Meetings dataview query — almost no prose. Add a 100–200 word bio paragraph to make a person queryable.
+- **Sparse files don't retrieve well.** Most People notes are templates with frontmatter + photo + Meetings Bases view — almost no prose. Add a 100–200 word bio paragraph to make a person queryable.
 - **Avoid duplicate profile files.** Two near-identical files will both rank highly and consume retrieval slots. Keep one.
 - **Synthesis across many notes is RAG's weakest pattern.** "Which meetings are most relevant to my AI strategy work?" is hard. Use the 70B for this; phrase the query specifically.
 
