@@ -43,7 +43,7 @@ Once running, and without you doing anything:
 |---|---|
 | every :00 and :30 | new notes get semantically tagged against a fixed taxonomy |
 | weekdays 05:00 | your calendar is pulled through the M365 connector |
-| weekdays 06:00 | that becomes tomorrow's meeting notes + People stubs |
+| as soon as it lands | that becomes today's and the next working day's meeting notes + People stubs |
 | 05:00 | changed notes get a proposed data-classification tier for you to review |
 | weekdays 07:00 | a morning dashboard renders: today's meetings, open to-dos, new notes |
 | Mondays 07:00 | a vault lint reports duplicate tags, broken links, schema gaps |
@@ -99,8 +99,9 @@ The Windows installer does **not** prompt for the gateway key. It prints a
 `secret_store.py set <KEY_NAME>` command at the end — run that once. The key
 goes into a DPAPI-encrypted file readable only by your Windows account.
 
-Windows also ships three scheduled jobs disabled on purpose, because each needs
-something per-user first. Enable one deliberately after you have validated it:
+Windows also ships two scheduled jobs disabled on purpose, `meeting-pull` and
+`source-mail-pull`, because each needs something per-user first. Enable one
+deliberately after you have validated it:
 
 ```powershell
 Enable-ScheduledTask -TaskName meeting-pull -TaskPath '\Obsidian\'

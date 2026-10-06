@@ -66,7 +66,7 @@ The same logic applies to the tagger: the [[Semantic Auto-Tagger Setup|tagger]] 
 
 ### Activation
 
-See [[LaunchAgents — Setup & Migration]] for full prerequisites (per-vault venv, `~/dev/secrets/.env`, `~/Library/Logs/`, Full Disk Access, post-migration restoration). The short version:
+See [[LaunchAgents — Setup & Migration]] for full prerequisites (per-vault venv, `~/dev/secrets/.env`, `~/Library/Logs/`, post-migration restoration). The short version:
 
 ```bash
 # 1) Create the config from the example

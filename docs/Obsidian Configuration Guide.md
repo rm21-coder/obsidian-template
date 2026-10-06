@@ -4,7 +4,7 @@ tags:
   - Documentation
 classification: public
 ---
-Last Updated: March 2026
+Last Updated: October 2026
 
 ---
 
@@ -63,11 +63,11 @@ The following core plugins are enabled (beyond Kepano defaults):
 
 ## 3. Community Plugins
 
-Install all community plugins via Settings → Community plugins → Browse. After installing each plugin, enable it and configure as described below.
+The installer fetches every community plugin from a pinned, SHA256-verified release (`installers/plugin-pins.json`; component `30-plugins` on macOS, `Install-Plugins.ps1` on Windows), and the settings below ship pre-configured in `.obsidian/`. Don't install or update them through Settings → Community plugins → Browse: that pulls whatever release is current and bypasses the pins.
 
 ### 3.1 QuickAdd
 
-QuickAdd provides every command that creates or acts on notes. Seven are configured; the four that create notes have sidebar icons managed by Commander.
+QuickAdd provides every command that creates or acts on notes. Seven are configured; five have sidebar icons managed by Commander (New Meeting, New Note, New Person, Move to Knowledge and Clean Filenames).
 
 #### New Meeting Command (macro)
 
@@ -170,13 +170,15 @@ Tasks can be created in meeting notes, daily notes, or any other file. They appe
 
 ### 3.5 Commander
 
-Commander manages the left sidebar ribbon icons. It provides custom icons for the three QuickAdd commands:
+Commander manages the left sidebar ribbon icons. It provides custom icons for five QuickAdd commands:
 
 | Command | Icon | Source |
 |---------|------|--------|
 | New Meeting | lucide-handshake | QuickAdd |
 | New Note | lucide-notebook-pen | QuickAdd |
 | New Person | lucide-person-standing | QuickAdd |
+| Move note to Knowledge | lucide-move-right | QuickAdd |
+| Clean Filenames | lucide-brush-cleaning | QuickAdd |
 
 ### 3.6 Other Community Plugins
 
@@ -189,14 +191,6 @@ Commander manages the left sidebar ribbon icons. It provides custom icons for th
 **Sort and Permute Lines:** Utility for sorting selected lines alphabetically.
 
 **Tag Wrangler:** Right-click tag management: rename, merge, or delete tags across the vault.
-
-**Calendar:** Calendar sidebar view. Useful for navigating daily notes by date.
-
-**Actions URI:** Enables iOS Shortcuts integration with Obsidian via custom URI schemes. Allows automation of vault actions from outside Obsidian (e.g., creating notes, opening files, or appending content via Shortcuts on iPhone/iPad).
-
-**Text Extractor:** Utility for extracting text from various file types within the vault.
-
-**AI Image Analyzer:** Analyzes images within the vault using AI.
 
 ---
 
@@ -256,15 +250,25 @@ categories:
   - "[[Categories/People]]"
 Title:
 Organization:
-Email:
+Email-Personal:
+Email-Work:
 Mobile Phone:
+preferred_name:
+aliases: []
+classification: confidential
 tags: []
 ---
 
 ## Photo
 
 
+
 ## Notes
+
+
+
+## Bio
+
 
 
 ## Meetings
@@ -288,11 +292,12 @@ Both are plain QuickAdd templates — no scripting.
 
 **File:** Templates/Journal Template.md
 
-A simple static template used by the Unique Note Creator (zk-prefixer) for timestamped journal entries. Contains only frontmatter with a created date and default tags:
+A simple static template used by the Unique Note Creator (zk-prefixer) for timestamped journal entries. Contains only frontmatter with a created date, a classification and default tags:
 
 ```yaml
 ---
 created: {{date}}
+classification: internal-use-only
 tags:
   - note
   - journal
@@ -309,13 +314,13 @@ A static template for web clippings saved via the Obsidian Web Clipper browser e
 ---
 categories:
   - "[[Clippings]]"
-tags:
-  - clippings
+tags: []
 author: []
 url: ""
 created: {{date}}
-published:
+published: 
 topics: []
+classification: internal-use-only
 ---
 ```
 
@@ -440,58 +445,12 @@ Photos are stored in Z_attachments with the naming convention `Lastname-Firstnam
 
 **Placeholder Image:** `Z_attachments/placeholder-person.png` is a 40x40 transparent PNG used in group files for people who don't have photos yet. This ensures consistent formatting.
 
-**Photo Refresh Process:** A Claude task scans all People files for photos under the `## Photo` section, verifies the photo exists in Z_attachments, then updates all static group files: replacing placeholders with real photos where available, adding placeholders for people without photos, and handling plain wiki links that need photo/placeholder added. To run a refresh, ask Claude to "rerun the photo refresh." A sample Python implementation of the same logic is included below for reference.
+**Photo Refresh Process:** A scheduled job runs nightly at 02:00 — `com.obsidian.group-photos` on macOS (component `51-group-photos`), the `group-photos` scheduled task on Windows (`run_group_photos.py`). It runs two scripts in order, both in `Z_attachments/`:
 
-**Photo Refresh Script:**
+1. `insert_group_placeholders.py` prepends `![[placeholder-person.png|40]]` to any member line in a static group file that is exactly a bare `[[Last, First]]` link.
+2. `refresh_groups.py` swaps a placeholder for the real photo once a matching `LastName-FirstName.{png,jpg,jpeg,webp}` file exists in `Z_attachments/` (case-insensitive; spaces, `-` and `_` are interchangeable).
 
-```python
-import os, re, glob
-
-people_dir = "People"
-attachments_dir = "Z_attachments"
-photo_lookup = {}
-
-for f in glob.glob(os.path.join(people_dir, "*.md")):
-    name = os.path.splitext(os.path.basename(f))[0]
-    with open(f, 'r') as fh:
-        content = fh.read()
-    photo_match = re.search(r'## Photo\s*\n\s*!\[\[([^\]]+)\]\]', content)
-    if photo_match:
-        photo_file = photo_match.group(1).split('|')[0].strip()
-        if os.path.exists(os.path.join(attachments_dir, photo_file)):
-            photo_lookup[name] = photo_file
-
-groups_dir = "Groups"
-total_updates = 0
-for gf in sorted(glob.glob(os.path.join(groups_dir, "*.md"))):
-    with open(gf, 'r') as fh:
-        content = fh.read()
-    lines = content.split('\n')
-    new_lines = []
-    file_updates = 0
-    for line in lines:
-        wiki_match = re.search(r'\[\[([^\]]+)\]\]', line)
-        if wiki_match:
-            all_links = re.findall(r'\[\[([^\]]+)\]\]', line)
-            people_links = [l for l in all_links if not re.match(
-                r'.*\.(png|jpg|jpeg|gif|svg|webp|bmp)', l, re.I)]
-            if people_links:
-                person_name = people_links[0]
-                if person_name in photo_lookup:
-                    photo = photo_lookup[person_name]
-                    expected = f'![[{photo}|40]] [[{person_name}]]'
-                else:
-                    expected = f'![[placeholder-person.png|40]] [[{person_name}]]'
-                if line.strip() != expected:
-                    new_lines.append(expected)
-                    file_updates += 1
-                    continue
-        new_lines.append(line)
-    if file_updates > 0:
-        with open(gf, 'w') as fh:
-            fh.write('\n'.join(new_lines))
-        total_updates += file_updates
-```
+Both are deliberately conservative: they only ever add a placeholder or upgrade one, and never modify or downgrade any other photo reference, even one pointing at a missing file. Each takes `--dry-run`.
 
 **Cropping:** Crop source photo files using Preview on Mac. Obsidian automatically updates the embedded preview when the source file changes.
 
@@ -546,9 +505,13 @@ Organization fields can be populated in bulk based on email domain patterns. For
 
 ### 9.1 Photo Refresh
 
-After adding new photos to People files, ask Claude to "rerun the photo refresh" to update all static group files with the latest photos.
+The group-photo job (Section 6.2) runs nightly at 02:00, so a new photo file in `Z_attachments/`, or a new `[[Last, First]]` line in a static Group file, is picked up the next night with no manual step. To run it now, run the two scripts in order:
 
-**Automating it:** The photo-refresh logic is mechanical (scan People for `## Photo` entries, verify each exists in `Z_attachments/`, update static Group files to replace placeholders with real photos and add placeholders where photos are missing). If you want it to run on a recurring schedule, two options work equally well: (1) register a daily Claude desktop scheduled task with the prompt above, or (2) port the logic to a Python script under `Templates/Scripts/` and load it as a `launchd` agent the same way `com.tag-clippings.plist` is loaded. Either way, no manual intervention is needed once it's set up — adding a person's wiki link to a Group file means the next run inserts the correct photo.
+```bash
+/usr/bin/python3 ~/Obsidian/Z_attachments/insert_group_placeholders.py && /usr/bin/python3 ~/Obsidian/Z_attachments/refresh_groups.py
+```
+
+or, on macOS, `launchctl kickstart gui/$(id -u)/com.obsidian.group-photos`.
 
 ### 9.2 Template Audit
 

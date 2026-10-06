@@ -80,11 +80,11 @@ Every 30 minutes (at :00 and :30):
 3. **Skip unchanged.** A `.tag_tracking.json` ledger at the vault root keys files by relative path with a body-content hash. Files whose body hasn't changed since last run are skipped.
 4. **Body-only derivation.** For each in-scope file, the script strips the YAML frontmatter and sends only the body text to Claude (capped at 4 000 characters). The script is forbidden from inferring tags from `people:`, `group:`, `type:`, the filename, or any other metadata. The empty-body guard skips files with <50 chars of body content so freshly-templated meeting notes don't pick up tags from their participant lists.
 5. **Allowlist-only.** Claude returns 1–6 candidate tags. The script normalizes case (PascalCase, with an acronym whitelist for things like `AI`, `GPU`, `AWS`) and validates each against the loaded allowlist. Tags that don't match are dropped and logged to `Templates/Scripts/tag-promotion-candidates.md` for weekly review.
-6. **Write.** Validated tags are merged with any preserved base tags (the `clippings` base tag on `Clippings/` files) and written back to the file's YAML frontmatter. Other frontmatter keys are preserved in original order.
+6. **Write.** Validated tags are written back to the file's YAML frontmatter. Other frontmatter keys are preserved in original order.
 
 Two folder-specific rules:
 
-- `Clippings/*` always keeps the `clippings` base tag.
+- `Clippings/*` no longer gets a `clippings` base tag (retired 2026-05-27 — it restated the folder); the tagger strips any lingering one from notes it reprocesses.
 - `Meetings/*` puts meeting type in the `type:` frontmatter field, not as a tag.
 
 ---
@@ -201,7 +201,7 @@ These don't need the LaunchAgent — paste them into a Claude desktop chat when 
 > *Dry run: what tags would the tagger set on every file in `Clippings/` modified in the last 7 days? Don't write anything — just show me the proposed changes.*
 
 **Build a Topic page**
-> *Put all the [TagName] tags in the [TagName] Topic file — create a Dataview query in `Topics/` that lists every note with that tag.*
+> *Put all the [TagName] tags in the [TagName] Topic file — create a Bases list (a `base` code block) in `Topics/` that lists every note with that tag.*
 
 Or trigger the LaunchAgent to run immediately (skip the wait):
 
