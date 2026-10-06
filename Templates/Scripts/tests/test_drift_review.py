@@ -262,3 +262,11 @@ def test_the_hook_starts_the_review_only_after_the_suite_passed_and_never_fails_
 def test_a_companion_is_named_by_its_own_file_on_the_note(dr):
     assert dr._task_text("companions/04-Workflow Security Controls.md, line 18") == \
         "Workflow Security Controls.md, line 18"
+
+
+def test_duplicate_ids_are_made_unique_so_verdicts_cannot_cross(dr):
+    """Found by the drift reviewer on its own code (2026-10-06): a renamed
+    duplicate could collide again, and verdicts are matched by id."""
+    found = dr._clean_findings({"findings": [_finding(2), _finding(2), _finding(9)]})
+    ids = [f["id"] for f in found]
+    assert len(set(ids)) == 3, ids

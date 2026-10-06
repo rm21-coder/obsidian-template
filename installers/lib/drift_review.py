@@ -407,7 +407,10 @@ def _clean_findings(raw: dict) -> list[dict]:
             continue
         f = {k: str(f.get(k, "")).strip() for k in keys}
         if not f["id"] or f["id"] in seen:
-            f["id"] = "D%d" % (len(out) + 1)
+            n = len(out) + 1
+            while "D%d" % n in seen:
+                n += 1
+            f["id"] = "D%d" % n
         seen.add(f["id"])
         out.append(f)
     return out

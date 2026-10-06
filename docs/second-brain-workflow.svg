@@ -30,7 +30,7 @@
   <!-- Title bar -->
   <rect x="0" y="0" width="1400" height="80" fill="#1f2937"/>
   <text x="40" y="52" font-size="28" font-weight="700" fill="#ffffff">Obsidian Second Brain</text>
-  <text x="1360" y="50" font-size="12" fill="#9ca3af" text-anchor="end">v27 · 2026-10-06</text>
+  <text x="1360" y="50" font-size="12" fill="#9ca3af" text-anchor="end">v28 · 2026-10-06</text>
 
   <!-- Column headers -->
   <g font-size="13" font-weight="700" fill="#ffffff" text-anchor="middle">
@@ -516,8 +516,8 @@
       <text x="716" y="1116" font-size="10" fill="#111827"><tspan font-weight="700">Retrieval:</tspan> hybrid search  ·  Top K = 6</text>
       <text x="716" y="1132" font-size="10" fill="#111827"><tspan font-weight="700">Chunking:</tspan> Markdown header splitter</text>
       <text x="716" y="1148" font-size="10" fill="#111827"><tspan font-weight="700">Reranker:</tspan> bge-reranker-v2-m3  <tspan fill="#9ca3af">(optional)</tspan></text>
-      <text x="716" y="1168" font-size="10" font-weight="700" fill="#111827">Sync: ~/Obsidian/Templates/Scripts/sync-vault.sh</text>
-      <text x="716" y="1182" font-size="10" fill="#6b7280">Nightly LaunchAgent  ·  pushes to Open WebUI Knowledge</text>
+      <text x="716" y="1168" font-size="10" font-weight="700" fill="#111827">Sync: Templates/Scripts/obsidian-rag-sync.py</text>
+      <text x="716" y="1182" font-size="10" fill="#6b7280">Nightly LaunchAgent 03:15  ·  pushes to Open WebUI Knowledge</text>
       <text x="716" y="1198" font-size="10" font-style="italic" fill="#9ca3af">Indexes ~/Obsidian; profile note anchors role context</text>
 
       <!-- Card 4: Access & security -->
