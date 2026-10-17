@@ -253,6 +253,7 @@ Organization:
 Email-Personal:
 Email-Work:
 Email-Work-2:
+Email-Priority:
 Mobile Phone:
 preferred_name:
 aliases: []
@@ -278,6 +279,8 @@ tags: []
 ```
 
 The three email fields are what the meeting pipeline matches invite attendees on. `Email-Work-2` holds a second work address for someone who has two (a university and a health-system address, say); it is matched exactly like `Email-Work`, but only ever filled by hand, since the pipeline's automatic email backfill writes only `Email-Work` and `Email-Personal`.
+
+`Email-Priority` says how much weight email from this person carries: `high`, `medium`, `none`, or empty for no opinion. It is filled by hand and nothing shipped in the template reads it yet; it is there so an email-triage job (for example a scheduled Claude task that turns requests in your inbox into `#task` lines) can mark a request ⏫ or 🔼 by matching the sender against this note's three email fields. It is not an email address, so the meeting pipeline and the email backfill ignore it.
 
 The `## Photo` section is where a photo embed is placed (e.g., `![[Smith-John.png]]`). The `## Meetings` section embeds the Person view from Meetings.base, which dynamically shows all meetings where this person appears in the people property.
 
