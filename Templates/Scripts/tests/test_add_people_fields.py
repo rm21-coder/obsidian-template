@@ -72,3 +72,17 @@ def test_dry_run_writes_nothing_and_write_is_refused_while_obsidian_runs(
     assert apf.main(["--vault", str(tmp_path), "--write"]) == 0
     assert "Email-Priority:" in note.read_text(encoding="utf-8")
     assert not list(people.glob("*.tmp"))
+
+
+def test_every_people_email_field_has_a_shipped_property_type() -> None:
+    """An empty, untyped property gets a guessed type: Email-Priority came up
+    as a number, and setting it to "high" asked to convert the type
+    (2026-10-18). The template's email fields are typed text up front."""
+    import json
+    repo = Path(__file__).resolve().parents[3]
+    types = json.loads((repo / ".obsidian" / "types.json").read_text(encoding="utf-8"))["types"]
+    tpl = (repo / "Templates" / "People Template.md").read_text(encoding="utf-8")
+    fields = [l.split(":")[0] for l in tpl.split("---")[1].splitlines() if l.startswith("Email")]
+    assert set(fields) >= {"Email-Work-2", "Email-Priority"}
+    for f in fields:
+        assert types.get(f) == "text", f

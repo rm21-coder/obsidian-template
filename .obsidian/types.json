@@ -75,6 +75,10 @@
     "classification_suggested": "text",
     "classification_rationale": "text",
     "classification_prior": "text",
-    "classification_reviewed": "checkbox"
+    "classification_reviewed": "checkbox",
+    "Email-Personal": "text",
+    "Email-Work": "text",
+    "Email-Work-2": "text",
+    "Email-Priority": "text"
   }
 }
