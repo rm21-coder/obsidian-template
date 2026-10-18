@@ -90,9 +90,15 @@ load_dotenv(Path.home() / "dev" / "secrets" / ".env")
 VAULT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
 # Skipped entirely. Z_archive is retired content, Excalidraw/Z_attachments are
-# not prose, Templates would poison the queue with placeholder text.
+# not prose, Templates would poison the queue with placeholder text. docs/ and
+# installers/ (and the root files below) are the template's own documentation:
+# in a vault that is a clone of the repo they are tracked, public files, and a
+# classification written into one is a local change that blocks the next
+# update (found on a Windows clone, 2026-10-17). Same scaffolding list as
+# installers/lib/check_classification.py.
 SKIP_TOP = {"Templates", ".obsidian", ".trash", "Z_attachments", "Z_archive",
-            "Excalidraw", "Z_dashboards"}
+            "Excalidraw", "Z_dashboards", "docs", "installers"}
+SKIP_ROOT_FILES = {"README.md", "CLAUDE.md", "ONBOARDING.md"}
 
 # Subtrees of machine-generated operational output that happen to live under a
 # content folder. Same list vault_lint excludes from its schema check — they are
@@ -1184,6 +1190,8 @@ def collect_files(folders: list[str] | None) -> list[Path]:
     for md in sorted(VAULT_ROOT.rglob("*.md")):
         rel = md.relative_to(VAULT_ROOT)
         if not rel.parts or rel.parts[0] in SKIP_TOP:
+            continue
+        if len(rel.parts) == 1 and rel.name in SKIP_ROOT_FILES:
             continue
         if any(p.startswith(".") for p in rel.parts):
             continue

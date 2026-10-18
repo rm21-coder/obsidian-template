@@ -960,3 +960,23 @@ def test_a_restricted_note_is_never_sent_to_the_model(vault: Path):
         assert C.process_file(p, client, dry_run=False, detectors_only=False,
                               force=force) is None
     assert client.calls == []
+
+
+def test_the_templates_own_documentation_is_never_collected(vault: Path):
+    """In a vault that is a clone of the repo, docs/, installers/ and the root
+    README/CLAUDE/ONBOARDING are tracked public files. Classifying them wrote
+    frontmatter into tracked files (Windows clone, 2026-10-17)."""
+    for rel in ("docs/Guide.md", "installers/profiles/README.md", "README.md",
+                "CLAUDE.md", "ONBOARDING.md", "Knowledge/Real.md", "Notes/Mine.md",
+                "My Root Note.md"):
+        write(vault, rel, "some prose body text")
+    got = {p.relative_to(vault).as_posix() for p in C.collect_files(None)}
+    assert got == {"Knowledge/Real.md", "Notes/Mine.md", "My Root Note.md"}
+
+
+def test_the_tracking_file_is_gitignored(allow_subprocess):
+    import subprocess
+    repo = Path(__file__).resolve().parents[3]
+    r = subprocess.run(["git", "-C", str(repo), "check-ignore", "-q", "--no-index",
+                        ".classification_tracking.json"], check=False)
+    assert r.returncode == 0

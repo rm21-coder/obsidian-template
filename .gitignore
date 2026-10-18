@@ -70,6 +70,8 @@ Z_dashboards/
 # Tag tracking files written by Templates/Scripts/tag_clippings.py
 .tag_tracking.json
 .tag_km_tracking.json
+# The classifier's own tracking file (classify_notes.py, at the vault root)
+.classification_tracking.json
 
 # Promotion-candidate audit log (per-vault, not portable)
 Templates/Scripts/tag-promotion-candidates.md
