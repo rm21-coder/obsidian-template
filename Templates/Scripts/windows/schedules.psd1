@@ -12,13 +12,15 @@
 # Enabled=$true/$false is each job's registered starting state. Jobs with no
 # unconfigured external dependency (mailbox, MCP calendar connector, ...) ship Enabled=$true -- they were validated end-to-end on a
 # clean Windows 11 install by running the script by hand
-# (.venv\Scripts\python.exe <script>) before flipping the flag. The three
+# (.venv\Scripts\python.exe <script>) before flipping the flag. The four
 # still shipping Enabled=$false each fail cleanly with a clear config error
 # rather than silently no-op, because they depend on a per-user resource this
 # template can't assume exists:
 #   meeting-pull        needs the Claude CLI + an MCP calendar connector
 #   source-mail-pull    needs a dedicated IMAP mailbox (see docs/Source-Mail-Transport.md)
 #   email-tasks         needs the Claude CLI + the Microsoft 365 connector
+#   classify            its first pass reads the whole vault: run it by hand,
+#                       with Obsidian closed, before enabling (docs/Data-Classification.md)
 # Set up the prerequisite, run the script by hand to confirm it works, then:
 #   Enable-ScheduledTask -TaskName <name> -TaskPath '\Obsidian'
 
@@ -63,6 +65,14 @@
         # 06:45, ahead of morning-dashboard. A missed run loses nothing: each
         # run reads from the last successful one.
         @{ Name='email-tasks';          Script='email_tasks.py';        Args=@();            Trigger=@{ Type='Weekly'; At='06:45'; DaysOfWeek=@('Monday','Tuesday','Wednesday','Thursday','Friday') }; Enabled=$false }
+        # Data-classification assistant (docs/Data-Classification.md). Proposes
+        # tiers into classification_suggested; never writes classification
+        # except restricted from a detector. Disabled at registration: the first
+        # pass reads every note and must run by hand with Obsidian closed. Daily
+        # 05:00; -StartWhenAvailable covers a run missed while off or off-VPN
+        # only when the machine was off, so a gateway behind a VPN can still
+        # skip a day (a skip costs nothing: the next run catches up).
+        @{ Name='classify';             Script='classify_notes.py';     Args=@();            Trigger=@{ Type='Daily';  At='05:00' };        Enabled=$false; TimeLimitMinutes=240 }
         @{ Name='group-photos';         Script='run_group_photos.py';   Args=@();            Trigger=@{ Type='Daily';  At='02:00' };        Enabled=$true }
         # Only where the optional local-LLM RAG layer is set up (rag_status.py:
         # OBSIDIAN_COLLECTION_ID configured). Elsewhere it would fail every

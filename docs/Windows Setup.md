@@ -55,13 +55,14 @@ then call scripts directly, e.g. `.\Templates\Scripts\windows\install.ps1`.)
 - Create a per-vault Python venv and install `requirements.lock`: every
   package at a locked release, each file checked against its SHA256, wheels
   only (see `requirements.lock` in the README)
-- Register all 14 scheduled jobs in Task Scheduler under `\Obsidian\` — 11
+- Register all 16 scheduled jobs in Task Scheduler under `\Obsidian\` — 11
   ship **enabled** by default, plus `rag-sync` where the local RAG layer is set
   up (validated end-to-end on a clean Windows 11
   install) and begin firing on their triggers as soon as the installer
-  finishes, the other 2 ship **disabled** because they each need a per-user
-  resource this template can't assume exists (a dedicated mailbox or an MCP
-  calendar connector) — see
+  finishes, the other 4 ship **disabled**: three need a per-user resource
+  this template can't assume exists (a dedicated mailbox, an MCP calendar
+  connector, the Microsoft 365 mail connector), and the classifier's first
+  pass has to be run by hand — see
   [Scheduled jobs](#scheduled-jobs) below
 - Print a final status table of every registered task
 
@@ -342,26 +343,29 @@ Add these to `%USERPROFILE%\dev\secrets\.env` (created as a stub by
 - **`OPEN_WEBUI_API_KEY` / `OBSIDIAN_COLLECTION_ID`** — only if you're using
   `-WithRAG`; see [Local LLM RAG](#local-llm-rag) below.
 
-## Not on Windows (yet)
+## Classification on Windows
 
-The nightly classification assistant (`classify_notes.py`, macOS agent
-`com.obsidian.classify`) is not yet a Windows scheduled task. The
-script itself is cross-platform — run it manually or register your own
-task if you want nightly classification on Windows; `install.ps1` already
-seeds the `LLM_*`/`CLASSIFIER_*` config it reads.
+The classification assistant (`classify_notes.py`) is registered as the
+`classify` task, daily at 05:00, **disabled**. Its first pass reads every
+note, so run it once by hand with Obsidian closed (see
+[`Data-Classification.md`](Data-Classification.md)), then enable it.
+`install.ps1` already seeds the `LLM_*`/`CLASSIFIER_*` config it reads. If you
+registered a task for it by hand earlier, unregister that one.
 
 ## Scheduled jobs
 
-All 14 jobs are registered by `Register-Tasks.ps1` under the Task Scheduler
+All 16 jobs are registered by `Register-Tasks.ps1` under the Task Scheduler
 path `\Obsidian\`, from the manifest in `schedules.psd1`. 11 ship **enabled**
 by default (`rag-sync` too, where RAG is set up) — each was validated end-to-end on a clean Windows 11 install by
 running its script by hand before its task was enabled. Because they are
 enabled at registration time, they start firing as soon as `install.ps1`
 finishes, so fill in `.env` first or expect logged errors until you do. The
-other 2 ship
-**disabled** because each needs a per-user resource this template can't
-assume exists (a dedicated mailbox or an MCP calendar connector); set up the
-prerequisite, validate the script by hand, then
+other 4 ship
+**disabled**: `source-mail-pull`, `meeting-pull` and `email-tasks` each need a
+per-user resource this template can't assume exists (a dedicated mailbox, an
+MCP calendar connector, the mail connector), and `classify` needs its first
+full pass run by hand; set up the prerequisite, validate the script by hand,
+then
 `Enable-ScheduledTask -TaskName <name> -TaskPath '\Obsidian\'`.
 
 | Task | Script | Trigger | Default | Notes |

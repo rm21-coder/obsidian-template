@@ -668,7 +668,7 @@ if ($SkipTasks) {
     Write-Host '.env first if you have not, or they will log errors until you do.'
     Write-Host 'Sanity-check one by hand:'
     Write-Host ("  {0} `"{1}`"" -f $venvPy, (Join-Path $scriptsDir 'tag_clippings.py'))
-    Write-Host 'The 3 disabled jobs (source-mail-pull, meeting-pull, email-tasks) each'
+    Write-Host 'The 4 disabled jobs (source-mail-pull, meeting-pull, email-tasks, classify) each'
     Write-Host 'need a per-user resource first; validate the script, then enable deliberately:'
     Write-Host "  Enable-ScheduledTask -TaskName source-mail-pull -TaskPath '\Obsidian\'"
 }

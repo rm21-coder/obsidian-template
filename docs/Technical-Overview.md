@@ -162,7 +162,7 @@ only when you accept their component.
 | `claude_auth_check.py` (opt-in, macOS, installed by hand) | 21:00 Sunday to Friday | none | a state marker | one Claude CLI request |
 | group photos | daily 02:00 / daily 02:00 | `Groups/*.md`, `Z_attachments/` | photo embeds in rosters | none |
 | `obsidian-rag-sync.py` (optional) | daily 03:15 / daily 03:00, enabled only where RAG is set up | the vault | Open WebUI Knowledge collection; a health report in `Creations/` | localhost |
-| `classify_notes.py` (optional, macOS) | 05:00, 08:00, 12:30 / no task yet | changed note bodies | `classification_suggested`, or `restricted` from a detector | model endpoint (none with `--detectors-only`) |
+| `classify_notes.py` (optional) | 05:00, 08:00, 12:30 / daily 05:00, registered disabled | changed note bodies | `classification_suggested`, or `restricted` from a detector | model endpoint (none with `--detectors-only`) |
 | `plugin_integrity_check.py` | daily 06:30 and watch on the plugins folder / daily 06:30 | `.obsidian/plugins/` | alert log, notification | none |
 | `integrity_monitor.py` | daily 06:35 and watch on scripts and LaunchAgents / daily 06:35 | scripts, job definitions, venv, config | alert log, notification | none |
 | `morning_dashboard.py` | weekdays 07:00 / weekdays 07:00 | the vault, usage log, job status | `Z_dashboards/` HTML | none |

@@ -282,6 +282,8 @@ The three email fields are what the meeting pipeline matches invite attendees on
 
 `Email-Priority` says how much weight email from this person carries: `high`, `medium`, `none`, or empty for no opinion. It is filled by hand and read by the optional email-tasks job ([`Email-Tasks.md`](Email-Tasks.md)), which marks a request from this person ⏫ (`high`) or 🔼 (`medium`), or with no priority marker at all (`none`, even for a sender with a senior title), by matching the sender against this note's three email fields. It is not an email address, so the meeting pipeline and the email backfill ignore it.
 
+People notes created before these two fields existed do not have them, since a template applies only to new notes. `Templates/Scripts/add_people_fields.py` adds both, empty, to every existing People note in template order and changes nothing else; run it without arguments for a dry run, then quit Obsidian and run it with `--write`.
+
 The `## Photo` section is where a photo embed is placed (e.g., `![[Smith-John.png]]`). The `## Meetings` section embeds the Person view from Meetings.base, which dynamically shows all meetings where this person appears in the people property.
 
 ### 4.3 Note Template and Software Note Template
