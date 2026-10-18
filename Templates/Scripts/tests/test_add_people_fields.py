@@ -14,9 +14,9 @@ OLD = ("---\ncategories:\n  - \"[[Categories/People]]\"\nTitle: Engineer\n"
 def test_both_fields_are_added_after_email_work_in_template_order() -> None:
     new, added = apf.add_fields(OLD)
     assert added == ["Email-Work-2", "Email-Priority"]
-    assert "Email-Work: bob@example.edu\nEmail-Work-2:\nEmail-Priority:\nMobile Phone: 555-0100\n" in new
+    assert "Email-Work: bob@example.edu\nEmail-Work-2:\nEmail-Priority: false\nMobile Phone: 555-0100\n" in new
     assert new.split("\n---\n", 1)[1] == OLD.split("\n---\n", 1)[1], "body untouched"
-    assert new.replace("Email-Work-2:\nEmail-Priority:\n", "") == OLD
+    assert new.replace("Email-Work-2:\nEmail-Priority: false\n", "") == OLD
 
 
 def test_an_existing_second_address_is_kept_and_priority_follows_it() -> None:
@@ -24,7 +24,16 @@ def test_an_existing_second_address_is_kept_and_priority_follows_it() -> None:
                        "Email-Work: bob@example.edu\nEmail-Work-2: b2@example.edu\n")
     new, added = apf.add_fields(text)
     assert added == ["Email-Priority"]
-    assert "Email-Work-2: b2@example.edu\nEmail-Priority:\nMobile Phone" in new
+    assert "Email-Work-2: b2@example.edu\nEmail-Priority: false\nMobile Phone" in new
+
+
+def test_an_empty_priority_is_turned_off_and_a_checked_one_kept() -> None:
+    empty = OLD.replace("Email-Work: bob@example.edu\n",
+                        "Email-Work: bob@example.edu\nEmail-Work-2:\nEmail-Priority:\n")
+    new, added = apf.add_fields(empty)
+    assert added == ["Email-Priority"] and "\nEmail-Priority: false\n" in new
+    checked = empty.replace("Email-Priority:\n", "Email-Priority: true\n")
+    assert apf.add_fields(checked) == (checked, [])
 
 
 def test_idempotent() -> None:
@@ -36,7 +45,7 @@ def test_idempotent() -> None:
 def test_crlf_notes_stay_crlf() -> None:
     new, added = apf.add_fields(OLD.replace("\n", "\r\n"))
     assert added and "\n" not in new.replace("\r\n", "")
-    assert "Email-Work-2:\r\nEmail-Priority:\r\n" in new
+    assert "Email-Work-2:\r\nEmail-Priority: false\r\n" in new
 
 
 def test_a_list_value_stays_with_its_key() -> None:

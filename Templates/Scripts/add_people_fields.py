@@ -5,11 +5,13 @@ email fields.
 The People template gained `Email-Work-2` (a second work address) and
 `Email-Priority` (read by the email-tasks job) after many vaults already held
 hundreds of People notes. Templates only apply to new notes, so this inserts
-the missing keys, empty, into each existing note's frontmatter in template
-order: `Email-Work-2:` after `Email-Work:`, `Email-Priority:` after
-`Email-Work-2:`. Nothing else in the note changes: no value is read or
-rewritten, the body is untouched, and a note with no `Email-Work:` line is
-left alone and counted.
+the missing keys into each existing note's frontmatter in template order:
+`Email-Work-2:` (empty) after `Email-Work:`, `Email-Priority: false` after
+`Email-Work-2:`. An `Email-Priority:` left empty by an earlier version of this
+script is set to `false`: Obsidian draws an empty checkbox in its no-value
+state, which looks checked (2026-10-18). Nothing else in the note changes: no
+other value is read or rewritten, a checked box is kept, the body is
+untouched, and a note with no `Email-Work:` line is left alone and counted.
 
 Quit Obsidian first: it rewrites the frontmatter of notes changed under it.
 The script refuses to write while it is running (--force overrides).
@@ -29,9 +31,9 @@ import sys
 from pathlib import Path
 
 VAULT_ROOT = Path(__file__).resolve().parent.parent.parent
-# (key to add, key it goes after). Order matters: Email-Priority follows
+# (key to add, key it goes after, value it gets). Order matters: Email-Priority follows
 # Email-Work-2, which may itself have just been added.
-FIELDS = (("Email-Work-2", "Email-Work"), ("Email-Priority", "Email-Work-2"))
+FIELDS = (("Email-Work-2", "Email-Work", ""), ("Email-Priority", "Email-Work-2", "false"))
 
 
 def _has_key(lines: list, key: str) -> int:
@@ -53,8 +55,12 @@ def add_fields(text: str):
     head = text[len("---" + nl):end]
     lines = head.split(nl)
     added = []
-    for key, after in FIELDS:
-        if _has_key(lines, key) >= 0:
+    for key, after, value in FIELDS:
+        at = _has_key(lines, key)
+        if at >= 0:
+            if value and lines[at].strip() == key + ":":
+                lines[at] = "%s: %s" % (key, value)
+                added.append(key)
             continue
         anchor = _has_key(lines, after)
         if anchor < 0:
@@ -63,7 +69,7 @@ def add_fields(text: str):
         at = anchor + 1
         while at < len(lines) and lines[at][:1] in (" ", "\t", "-") and lines[at].strip():
             at += 1
-        lines.insert(at, key + ":")
+        lines.insert(at, ("%s: %s" % (key, value)) if value else key + ":")
         added.append(key)
     if not added:
         return text, []

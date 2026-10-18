@@ -6,7 +6,7 @@ Organization:
 Email-Personal:
 Email-Work:
 Email-Work-2:
-Email-Priority:
+Email-Priority: false
 Mobile Phone:
 preferred_name:
 aliases: []

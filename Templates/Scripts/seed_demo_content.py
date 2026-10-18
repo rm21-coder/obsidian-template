@@ -302,7 +302,7 @@ Organization: {org}
 Email-Personal:
 Email-Work: {email}
 Email-Work-2:{work2}
-Email-Priority:
+Email-Priority: false
 Mobile Phone: {phone}
 preferred_name: {display.split()[0]}
 aliases:
@@ -342,7 +342,7 @@ Organization: {org}
 Email-Personal:
 Email-Work:
 Email-Work-2:
-Email-Priority:
+Email-Priority: false
 Mobile Phone:
 preferred_name: {display.split()[0]}
 aliases:
