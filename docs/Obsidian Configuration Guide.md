@@ -280,7 +280,7 @@ tags: []
 
 The three email fields are what the meeting pipeline matches invite attendees on. `Email-Work-2` holds a second work address for someone who has two (a university and a health-system address, say); it is matched exactly like `Email-Work`, but only ever filled by hand, since the pipeline's automatic email backfill writes only `Email-Work` and `Email-Personal`.
 
-`Email-Priority` says how much weight email from this person carries: `high`, `medium`, `none`, or empty for no opinion. It is filled by hand and read by the optional email-tasks job ([`Email-Tasks.md`](Email-Tasks.md)), which marks a request from this person ⏫ (`high`) or 🔼 (`medium`), or with no priority marker at all (`none`, even for a sender with a senior title), by matching the sender against this note's three email fields. It is not an email address, so the meeting pipeline and the email backfill ignore it.
+`Email-Priority` is a checkbox: check it for the people whose email requests should come first. It is set by hand and read by the optional email-tasks job ([`Email-Tasks.md`](Email-Tasks.md)), which marks a request from a checked person ⏫ by matching the sender against this note's three email fields. Empty and unchecked mean the same thing. It is not an email address, so the meeting pipeline and the email backfill ignore it.
 
 People notes created before these two fields existed do not have them, since a template applies only to new notes. `Templates/Scripts/add_people_fields.py` adds both, empty, to every existing People note in template order and changes nothing else; run it without arguments for a dry run, then quit Obsidian and run it with `--write`.
 

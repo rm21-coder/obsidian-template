@@ -61,9 +61,10 @@ Priority comes from your own data, never from the email:
 
 1. a sender in `high_priority_senders` (config) gets ⏫;
 2. otherwise the sender's People note, matched on `Email-Work`,
-   `Email-Work-2` or `Email-Personal`, decides through an optional
-   `Email-Priority: high | medium | none` frontmatter field (`none` means no
-   marker even when rule 3 would add one);
+   `Email-Work-2` or `Email-Personal`: a checked `Email-Priority` checkbox
+   gets ⏫. Unchecked or empty is no opinion. (Notes written before it was a
+   checkbox may hold `high`, `medium` or `none`; those are still honoured,
+   `none` meaning no marker even when rule 3 would add one.)
 3. otherwise, with `title_priority: true`, a sender whose signature gives a
    Director-or-above title gets 🔼. The title is the model's reading of the
    signature, so this one an email can influence; it is off by default.

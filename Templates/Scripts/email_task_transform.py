@@ -90,7 +90,11 @@ def clean_due(value, today: _dt.date) -> str:
 
 def people_priorities(vault: Path) -> dict:
     """{address: "high" | "medium" | "none"} from People notes' frontmatter:
-    Email-Priority, keyed by each address field the meeting pipeline uses."""
+    Email-Priority, keyed by each address field the meeting pipeline uses.
+
+    Email-Priority ships as a checkbox: checked (`true`) is high, unchecked
+    or empty is no opinion. The words high, medium and none are still read,
+    for notes written before it became a checkbox."""
     out = {}
     people = vault / "People"
     if not people.is_dir():
@@ -111,6 +115,7 @@ def people_priorities(vault: Path) -> dict:
             if m:
                 fields[m.group(1).strip()] = m.group(2).strip().strip("'\"")
         level = fields.get("Email-Priority", "").lower()
+        level = {"true": "high"}.get(level, level)
         if level not in ("high", "medium", "none"):
             continue
         for key in ("Email-Work", "Email-Work-2", "Email-Personal"):

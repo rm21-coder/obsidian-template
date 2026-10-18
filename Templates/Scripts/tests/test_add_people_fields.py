@@ -77,7 +77,8 @@ def test_dry_run_writes_nothing_and_write_is_refused_while_obsidian_runs(
 def test_every_people_email_field_has_a_shipped_property_type() -> None:
     """An empty, untyped property gets a guessed type: Email-Priority came up
     as a number, and setting it to "high" asked to convert the type
-    (2026-10-18). The template's email fields are typed text up front."""
+    (2026-10-18). The template's email fields are typed up front: addresses as text,
+    Email-Priority as a checkbox (on/off, Rich's call the same day)."""
     import json
     repo = Path(__file__).resolve().parents[3]
     types = json.loads((repo / ".obsidian" / "types.json").read_text(encoding="utf-8"))["types"]
@@ -85,4 +86,4 @@ def test_every_people_email_field_has_a_shipped_property_type() -> None:
     fields = [l.split(":")[0] for l in tpl.split("---")[1].splitlines() if l.startswith("Email")]
     assert set(fields) >= {"Email-Work-2", "Email-Priority"}
     for f in fields:
-        assert types.get(f) == "text", f
+        assert types.get(f) == ("checkbox" if f == "Email-Priority" else "text"), f

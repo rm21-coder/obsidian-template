@@ -181,6 +181,15 @@ class TestPriority:
         assert T.PRIORITY_MARK["medium"] in bob
         assert not any(m in cy for m in T.PRIORITY_MARK.values())
 
+    def test_a_checked_box_is_high_and_an_unchecked_one_is_no_opinion(self, tmp_path: Path) -> None:
+        people = tmp_path / "People"
+        people.mkdir()
+        for name, addr, value in (("A", "a@example.edu", "true"), ("B", "b@example.edu", "false"),
+                                  ("C", "c@example.edu", ""), ("D", "d@example.edu", "True")):
+            (people / (name + ".md")).write_text(
+                "---\nEmail-Work: %s\nEmail-Priority: %s\n---\n" % (addr, value), encoding="utf-8")
+        assert T.people_priorities(tmp_path) == {"a@example.edu": "high", "d@example.edu": "high"}
+
     def test_a_senior_title_counts_only_when_configured(self) -> None:
         [off] = _lines(_req(senior_title=True))
         [on] = _lines(_req(senior_title=True), config=dict(CONFIG, title_priority=True))

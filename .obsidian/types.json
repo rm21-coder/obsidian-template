@@ -79,6 +79,6 @@
     "Email-Personal": "text",
     "Email-Work": "text",
     "Email-Work-2": "text",
-    "Email-Priority": "text"
+    "Email-Priority": "checkbox"
   }
 }
