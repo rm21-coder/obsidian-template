@@ -15,6 +15,7 @@ observed by calling the matcher directly.
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -456,6 +457,41 @@ class TestPushedRange:
         subprocess.run(("git", "commit", "-qm", "fix", "--no-verify"), cwd=repo, check=True, capture_output=True)
         hits = m.scan(m.range_added_lines(f"{base}..HEAD"), m.load_denylist(), m.load_allowed_domains())
         assert [(h[0], h[1]) for h in hits] == [("a.md", 2)]
+
+    def _commit_as(self, repo: Path, ident: str, text: str) -> None:
+        name, _, addr = ident.partition(" <")
+        stage(repo, "a.md", text)
+        env = dict(os.environ, GIT_AUTHOR_NAME=name, GIT_AUTHOR_EMAIL=addr.rstrip(">"))
+        subprocess.run(("git", "commit", "-qm", "x", "--no-verify"), cwd=repo, check=True,
+                       capture_output=True, env=env)
+
+    def test_an_allowed_contributor_passes_only_in_the_author_header(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.setattr(m, "ALLOWED_IDENTITIES", lib / "identity-allowed-identities.local")
+        monkeypatch.chdir(repo)
+        (lib / "identity-denylist.local").write_text("Dana Ackerman\n", encoding="utf-8")
+        stage(repo, "a.md", "clean\n")
+        subprocess.run(("git", "commit", "-qm", "base", "--no-verify"), cwd=repo, check=True, capture_output=True)
+        base = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+        who = "Dana Ackerman <1+dana@users.noreply.github.com>"
+        self._commit_as(repo, who, "clean\nok\n")
+
+        def hits():
+            return m.scan(m.range_added_lines(f"{base}..HEAD"), m.load_denylist(), m.load_allowed_domains())
+
+        assert any("author header" in h[0] for h in hits()), "not allowed yet: the header is flagged"
+        (lib / "identity-allowed-identities.local").write_text("# agreed\n" + who + "\n", encoding="utf-8")
+        assert hits() == []
+        # The same name in content is still caught.
+        self._commit_as(repo, who, "clean\nok\nby Dana Ackerman\n")
+        assert [(h[0], h[1]) for h in hits()] == [("a.md", 3)]
+
+    def test_an_allowed_identity_must_match_exactly(self, monkeypatch, lib) -> None:
+        m = load_module(monkeypatch, lib)
+        f = lib / "identity-allowed-identities.local"
+        monkeypatch.setattr(m, "ALLOWED_IDENTITIES", f)
+        f.write_text("Dana Ackerman\nre:.*\nDana Ackerman <d@x.example>\n", encoding="utf-8")
+        assert m.load_allowed_identities() == {"Dana Ackerman <d@x.example>"}
 
     def test_the_pre_push_hook_runs_both_gates_over_the_pushed_range(self) -> None:
         hook = (LIB / "hooks" / "pre-push").read_text(encoding="utf-8")

@@ -22,6 +22,11 @@ Two rule classes, deliberately different in kind:
               the allowed domains live in `identity-allowed-domains.txt`,
               which is safe to publish because it names only placeholders.
 
+  headers     A pushed commit's author, committer and tagger lines are scanned
+              like content. A contributor who has agreed to be named is listed
+              by exact `Name <address>` in `identity-allowed-identities.local`
+              (GITIGNORED); that exempts those header lines and nothing else.
+
 Usage:
     check_identity_leak.py --staged        # added lines in the index (the hook)
     check_identity_leak.py --worktree      # tracked + untracked, not ignored
@@ -45,6 +50,12 @@ from pathlib import Path
 LIB_DIR = Path(__file__).resolve().parent
 DENYLIST = LIB_DIR / "identity-denylist.local"
 ALLOWED_DOMAINS = LIB_DIR / "identity-allowed-domains.txt"
+# Contributors who have agreed to be named in public history, one exact
+# `Name <address>` per line. Matched only against a commit's or tag's
+# author/committer/tagger header, never against file content or messages, so
+# the deny-list still keeps the same name out of everything else. GITIGNORED,
+# like the deny-list: the decision is the maintainer's, made per contributor.
+ALLOWED_IDENTITIES = LIB_DIR / "identity-allowed-identities.local"
 
 # Files whose whole purpose is to hold these strings, plus anything binary-ish.
 #
@@ -58,7 +69,8 @@ ALLOWED_DOMAINS = LIB_DIR / "identity-allowed-domains.txt"
 # For the same reason, do not quote a fixture address in a comment here: this
 # file is NOT self-excluded, and the first draft of this very comment tripped
 # the scanner on itself.
-SELF_EXCLUDE = {DENYLIST.name, ALLOWED_DOMAINS.name, "identity-denylist.example",
+SELF_EXCLUDE = {DENYLIST.name, ALLOWED_DOMAINS.name, ALLOWED_IDENTITIES.name,
+                "identity-denylist.example",
                 "test_check_identity_leak.py"}
 SKIP_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".svg", ".zip",
                  ".woff", ".woff2", ".ttf", ".ico", ".excalidraw"}
@@ -271,6 +283,19 @@ def _own_identities() -> set[str]:
     return out
 
 
+def load_allowed_identities() -> set[str]:
+    """Exact contributor identities allowed in commit headers (see
+    ALLOWED_IDENTITIES). A line that is not `Name <address>` is ignored."""
+    if not ALLOWED_IDENTITIES.is_file():
+        return set()
+    out = set()
+    for raw in ALLOWED_IDENTITIES.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and re.fullmatch(r"[^<>\n]+ <[^<>\s]+@[^<>\s]+>", line):
+            out.add(_ident_key(line))
+    return out
+
+
 def _ident_key(ident: str) -> str:
     name, _, email = ident.partition("<")
     return f"{name.strip()} <{email.lower()}"
@@ -367,7 +392,7 @@ def range_added_lines(rev_range: str,
     push publishes, intermediate commits included (a name committed and then
     removed is still in the pushed history)."""
     out: list[tuple[str, int, str]] = []
-    own = _own_identities()
+    own = _own_identities() | load_allowed_identities()
     # The ref names a push creates are published too: a branch or tag name,
     # including a lightweight tag's and a renamed push's `src:refs/tags/X`
     # (review round 6, 2026-10-04).

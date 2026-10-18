@@ -155,6 +155,8 @@ Templates/Scripts/last-classification-review.md
 # so committing the list itself would publish exactly what it protects.
 # Regenerate with: installers/lib/check_identity_leak.py --init
 installers/lib/identity-denylist.local
+# Contributors who agreed to be named in commit headers (exact identities).
+installers/lib/identity-allowed-identities.local
 
 # Claude Code session state and agent worktrees (full copies of the repo)
 .claude/
