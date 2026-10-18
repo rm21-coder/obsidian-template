@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Email Tasks LaunchAgent - OPT-IN
+
+  Runs Templates/Scripts/email_tasks.py on weekdays at 06:45: a confined
+  headless `claude -p` session reads the mail received since the last run
+  through the Microsoft 365 MCP connector (mail search and item read, nothing
+  else) and returns the requests waiting on you as JSON; the script appends
+  them as #task lines to Actions/Email Tasks.md. 06:45 is ahead of
+  com.morning-dashboard's 07:00 run, so the dashboard counts them.
+
+  A missed firing (machine asleep) runs once on wake. Nothing is lost by a
+  late or skipped run: each run reads from the last successful one, up to
+  max_lookback_hours back.
+
+  Requires (see docs/Email-Tasks.md):
+    - the Claude Code CLI installed, authenticated, with the Microsoft 365
+      connector connected (`claude mcp list`)
+    - Templates/Scripts/.config/email_tasks.json, written by installer
+      component 59-email-tasks
+
+  Replace YOUR_USERNAME before installing (the installer does this for you).
+
+  Logs: ~/Library/Logs/email-tasks.log (counts only, never mail content)
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.obsidian.email-tasks</string>
+
+    <!-- Stdlib-only, so the system interpreter is enough. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/email_tasks.py</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key><integer>1</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>2</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>3</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>4</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key><integer>5</integer>
+            <key>Hour</key><integer>6</integer>
+            <key>Minute</key><integer>45</integer>
+        </dict>
+    </array>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- The session is bounded in email_tasks.py (900 s per attempt,
+         EMAIL_TASKS_TIMEOUT); this is only launchd's SIGTERM-to-SIGKILL wait. -->
+    <key>ExitTimeOut</key>
+    <integer>900</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/email-tasks.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USERNAME/Library/Logs/email-tasks.log</string>
+</dict>
+</plist>

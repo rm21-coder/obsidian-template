@@ -1,0 +1,11 @@
+{
+  "display_name": "Your Name",
+  "email": "you@example.edu",
+  "other_addresses": [],
+  "note": "Actions/Email Tasks.md",
+  "team_ask_max_recipients": 10,
+  "max_lookback_hours": 72,
+  "high_priority_senders": [],
+  "title_priority": false,
+  "mcp_prefix": "mcp__claude_ai_Microsoft_365"
+}

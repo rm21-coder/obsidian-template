@@ -47,6 +47,7 @@ def _render(label: str, user: str = "tester") -> str:
     ("com.tag-clippings", "40-tagger"),
     ("com.obsidian.classify", "58-classification"),        # a loose match said 20-secrets
     ("com.obsidian.meeting-pull", "54-meeting-pull"),
+    ("com.obsidian.email-tasks", "59-email-tasks"),
     ("com.obsidian.security.integrity", "49-security-controls"),
     ("com.obsidian.claude-auth-check", ""),                 # installed by hand
 ])

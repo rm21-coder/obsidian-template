@@ -32,6 +32,7 @@ AI tools raise fair privacy questions. It is reasonable to ask where your notes 
 
 - **A morning dashboard.** Each weekday morning a single page opens in your browser showing your open to-dos, today's meetings, what you captured since midnight, and whether the background helpers are healthy. Every item links straight back to the note.
 - **Meeting notes written before you sit down (optional).** If your calendar can be connected, it creates the day's meeting notes early each weekday morning, with attendees already linked to their records.
+- **Requests from your inbox, as to-dos (optional).** Each weekday morning it finds the emails asking something of you personally (approvals, direct requests, small-team asks) and adds each as a to-do with a link back to the message. Approvals come first, and an approval that looks like phishing is flagged to verify.
 - **Open follow-ups in front of you.** During business hours it adds the still-open tasks for a person into that day's one-on-one meeting note, so the conversation starts from what is outstanding.
 - **Chat with your notes (optional).** On a sufficiently powerful computer you can ask questions of your notes in a private chat window that runs entirely on your own machine.
 

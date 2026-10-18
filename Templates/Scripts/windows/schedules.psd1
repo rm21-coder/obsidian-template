@@ -12,12 +12,13 @@
 # Enabled=$true/$false is each job's registered starting state. Jobs with no
 # unconfigured external dependency (mailbox, MCP calendar connector, ...) ship Enabled=$true -- they were validated end-to-end on a
 # clean Windows 11 install by running the script by hand
-# (.venv\Scripts\python.exe <script>) before flipping the flag. The two
+# (.venv\Scripts\python.exe <script>) before flipping the flag. The three
 # still shipping Enabled=$false each fail cleanly with a clear config error
 # rather than silently no-op, because they depend on a per-user resource this
 # template can't assume exists:
 #   meeting-pull        needs the Claude CLI + an MCP calendar connector
 #   source-mail-pull    needs a dedicated IMAP mailbox (see docs/Source-Mail-Transport.md)
+#   email-tasks         needs the Claude CLI + the Microsoft 365 connector
 # Set up the prerequisite, run the script by hand to confirm it works, then:
 #   Enable-ScheduledTask -TaskName <name> -TaskPath '\Obsidian'
 
@@ -56,6 +57,12 @@
         # settings already set -StartWhenAvailable, which covers a missed run
         # on a machine that was off; skip-if-fresh keeps that catch-up cheap.
         @{ Name='meeting-pull';         Script='meeting_pull.py';       Args=@('--skip-if-fresh'); Trigger=@{ Type='Weekly'; At='05:00'; DaysOfWeek=@('Monday','Tuesday','Wednesday','Thursday','Friday') }; Enabled=$false }
+        # Weekday email requests -> #task lines in Actions\Email Tasks.md (see
+        # docs/Email-Tasks.md). Needs the CLI and .config\email_tasks.json;
+        # validate with `python email_tasks.py --dry-run` before enabling.
+        # 06:45, ahead of morning-dashboard. A missed run loses nothing: each
+        # run reads from the last successful one.
+        @{ Name='email-tasks';          Script='email_tasks.py';        Args=@();            Trigger=@{ Type='Weekly'; At='06:45'; DaysOfWeek=@('Monday','Tuesday','Wednesday','Thursday','Friday') }; Enabled=$false }
         @{ Name='group-photos';         Script='run_group_photos.py';   Args=@();            Trigger=@{ Type='Daily';  At='02:00' };        Enabled=$true }
         # Only where the optional local-LLM RAG layer is set up (rag_status.py:
         # OBSIDIAN_COLLECTION_ID configured). Elsewhere it would fail every

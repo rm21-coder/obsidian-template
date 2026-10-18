@@ -158,6 +158,7 @@ only when you accept their component.
 | `meeting_prep.py` | every 5 min / every 5 min | today's individual meeting notes | a follow-up callout in each | none |
 | `meeting_prepopulate.py` (opt-in on macOS) | watch on `~/MeetingIngest`, every 30 min, Sunday 21:00 / every 30 min | handoff files in `~/MeetingIngest` | meeting notes and People stubs | none |
 | `meeting_pull.py` (opt-in) | weekdays 05:00, 06:30, 08:00 with `--skip-if-fresh` / weekdays 05:00, registered disabled | the calendar, through an MCP connector | handoff files in `~/MeetingIngest` | Claude CLI and calendar connector |
+| `email_tasks.py` (opt-in) | weekdays 06:45 / weekdays 06:45, registered disabled | mail since the last run, through the MCP connector | `#task` lines in `Actions/Email Tasks.md` | Claude CLI and mail connector |
 | `claude_auth_check.py` (opt-in, macOS, installed by hand) | 21:00 Sunday to Friday | none | a state marker | one Claude CLI request |
 | group photos | daily 02:00 / daily 02:00 | `Groups/*.md`, `Z_attachments/` | photo embeds in rosters | none |
 | `obsidian-rag-sync.py` (optional) | daily 03:15 / daily 03:00, enabled only where RAG is set up | the vault | Open WebUI Knowledge collection; a health report in `Creations/` | localhost |
@@ -194,7 +195,7 @@ from `requirements.txt` by `installers/lib/lock_requirements.py`, never by
 hand.
 
 Many macOS jobs run on Apple's `/usr/bin/python3` instead, which is Python
-3.9: both security controls, the dashboard, the meeting pull, pre-population
+3.9: both security controls, the dashboard, the meeting pull, email tasks, pre-population
 and prep jobs, the auth check, vault lint, strip-ads and group photos. The
 security controls and the dashboard do this on purpose, so they keep working
 when the venv is broken, and an Apple-signed interpreter is not replaced by a
@@ -289,6 +290,11 @@ are text anyone can write, so the session is confined:
   `--output-format stream-json` exposes the session's tool list and calls.
 - `--no-session-persistence`, so no transcript of meeting bodies is kept.
 
+The optional email-tasks job (`email_tasks.py`) reuses this machinery with
+the connector's mail search and item read as its two tools and a `requests`
+schema; `email_task_transform.py` is its only writer. See
+[`Email-Tasks.md`](Email-Tasks.md).
+
 The script, not the session, writes the calendar JSON and runs the
 deterministic transform. It refuses a session that lacked or never called the
 calendar search, so a connector that failed to register reads as a failure
@@ -368,7 +374,7 @@ Obsidian itself, the vault skeleton and venv, secrets, plugins from their
 pins, one component per job, script permissions, an offer to record the
 security baselines, and a final verification table. `--only`, `--skip`,
 `--without-llm`, `--dry-run` and `--list` select what runs. The meeting
-pre-population, meeting pull and dashboard-button components ship off.
+pre-population, meeting pull, email tasks and dashboard-button components ship off.
 
 An **install profile** (`--profile`) pre-answers the prompts a stranger's
 clone cannot: the gateway URL and key name, which opt-in components to turn
@@ -506,6 +512,7 @@ the RAG stack instead; see
   [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md)
 - [`Local LLM with Obsidian Vault RAG.md`](Local%20LLM%20with%20Obsidian%20Vault%20RAG.md)
 - [`Dashboard-Actions.md`](Dashboard-Actions.md)
+- [`Email-Tasks.md`](Email-Tasks.md)
 - [`Data-Classification.md`](Data-Classification.md)
 - [`Security-Harness.md`](Security-Harness.md)
 - [`Vault-Lint.md`](Vault-Lint.md)

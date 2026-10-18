@@ -37,6 +37,7 @@
 #   56-script-permissions    tighten mode bits on Templates/Scripts
 #   57-dashboard-actions     URL-scheme handler for the dashboard's buttons (opt-in)
 #   58-classification        nightly data-classification assistant + export gate
+#   59-email-tasks           weekday email requests -> #task lines (opt-in)
 #   88-security-baselines    offer to record both security baselines, last
 #   90-verify                post-install smoke tests, prints status table
 #

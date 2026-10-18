@@ -74,7 +74,7 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
 
 ## Repository layout
 
-- `install.sh` / `uninstall.sh` + `installers/` — the macOS installer. 30
+- `install.sh` / `uninstall.sh` + `installers/` — the macOS installer. 31
   numbered, idempotent components (`installers/components/NN-*.sh`) run in
   order; shared helpers in `installers/lib/`.
 - `Templates/Scripts/*.py` — the automation logic (mostly cross-platform).

@@ -120,6 +120,7 @@ LABELS=(
     com.obsidian.group-photos
     com.meeting-prepopulate
     com.obsidian.meeting-pull
+    com.obsidian.email-tasks
     com.obsidian.vault-lint
     com.obsidian.source-mail-pull
     com.obsidian.podcast-watch
@@ -136,7 +137,7 @@ LOGS=(
     tag-clippings voice-cleanup strip-ads meeting-prep
     obsidian-security obsidian-rag-sync group-photos meeting-prepopulate
     obsidian-template-install vault-lint
-    source-mail-pull podcast-watch morning-dashboard meeting-pull
+    source-mail-pull podcast-watch morning-dashboard meeting-pull email-tasks
     handoff-blob-pull dashboard-actions obsidian-classify claude-auth-check
 )
 

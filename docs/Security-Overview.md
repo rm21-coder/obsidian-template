@@ -111,7 +111,7 @@ and `strip_ads` neutralizes it seconds to minutes afterwards (see
 | Plugin integrity check | Changed plugin code or manifest, a newly enabled plugin, a changed code-running setting, a hand-edited allowlist | Scheduled daily, and on change to the plugins folder (macOS) | [Security-Harness.md](Security-Harness.md) |
 | Workflow integrity monitor | Changed scripts, scheduler entries, venv, templates, job settings, Claude CLI config, secrets file and bytecode; bulk note deletion | Scheduled daily, and on change to scripts or LaunchAgents (macOS) | [Security-Harness.md](Security-Harness.md) |
 | Ingest guard | Outside text that would act as plugin code: in the shipped Tasks, Meta Bind, Metadata Menu and core Bases, and in Templater, Dataview and Excalidraw for a vault that installs them |  Every job that writes outside text into the vault | [Security-Harness.md](Security-Harness.md) |
-| Confined headless Claude sessions | A crafted invite or diff steering a model session to a shell, files or other connector tools | Every meeting pull; every drift review | [Meeting-Handoff-MCP-Producer.md](Meeting-Handoff-MCP-Producer.md), [Drift-Review.md](Drift-Review.md) |
+| Confined headless Claude sessions | A crafted invite or diff steering a model session to a shell, files or other connector tools | Every meeting pull and email-tasks run; every drift review | [Meeting-Handoff-MCP-Producer.md](Meeting-Handoff-MCP-Producer.md), [Email-Tasks.md](Email-Tasks.md), [Drift-Review.md](Drift-Review.md) |
 | Signed mail-drop transport | Forged, altered, retargeted or replayed capture drops; path traversal | Every mail pull (every 300 seconds on macOS) | [Source-Mail-Transport.md](Source-Mail-Transport.md) |
 | Platform keystore for secrets | API keys and app passwords sitting in a plaintext file | Install; every job that reads a secret | [Windows Setup.md](Windows%20Setup.md) |
 | Hash-locked dependencies, pinned models | A changed or tampered package or model file reaching the venv or a transcription backend | Install and update; every model load | [README.md](../README.md) |
@@ -198,7 +198,13 @@ rest of the connector, and `--no-session-persistence`. The session only
 returns events as JSON against a schema; `meeting_pull.py` builds the
 transform's input itself. The stated residual is that the event-read tool
 takes a resource URI, so an injected instruction could have it read another
-item the connector exposes into the vault.
+item the connector exposes into the vault. The optional **email tasks** job
+runs the same confinement with the connector's mail search and item read as
+its two tools; the session returns requests as JSON and
+`email_task_transform.py` writes each task line itself, stripping links, URI
+schemes, markup and Tasks markers from the model's text and accepting only the
+message's own `https` Outlook link. The same residual applies, bounded to 200
+characters of plain text per task.
 
 Document conversion refuses an archive whose declared member sizes would
 inflate past a limit before MarkItDown opens it.
@@ -401,7 +407,8 @@ a push.
   `strip_ads`, is not neutralized, and the guard's other limits are listed
   under [Outside text](#outside-text).
 - **Model sessions are confined, not trusted.** The meeting pull's event-read
-  tool can be steered to another item the connector exposes. Model output
+  tool and the email tasks' item-read tool can be steered to another item the
+  connector exposes, and a crafted email can plant a plausible task. Model output
   written to notes (tags, rationales, summaries) is sanitised but can still be
   wrong.
 - **The RAG stack is pinned, but not watched.** Open WebUI runs from a pinned
