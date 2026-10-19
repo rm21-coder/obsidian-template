@@ -30,7 +30,10 @@ KINDS = ("approval", "request", "team_ask")
 OUTLOOK_HOSTS = ("outlook.office.com", "outlook.office365.com", "outlook.live.com")
 MAX_TASK_CHARS = 200
 MAX_NAME_CHARS = 60
+MAX_SUBJECT_CHARS = 60
 MAX_REQUESTS = 100
+MAX_TASKS_PER_MESSAGE = 5
+MAX_FLAGGED = 25
 
 # Tasks plugin markers: priority, dates, recurrence. An email must not be able
 # to plant one, so every one is stripped from model text before the job adds
@@ -140,34 +143,71 @@ def priority(req: dict, config: dict, people: dict) -> str:
     return ""
 
 
+def _message_id(value):
+    if isinstance(value, str) and value.startswith("mail:///messages/") and len(value) <= 512:
+        return value
+    return None
+
+
 def validate(raw, handled: set, own: set) -> list:
     """The usable requests, in a fixed shape. Anything malformed, already
-    handled or sent by the user is dropped, never repaired into something."""
+    handled or sent by the user is dropped, never repaired into something.
+
+    One email can carry several asks, so a message may yield up to
+    MAX_TASKS_PER_MESSAGE tasks; the same task twice is one. `handled` holds
+    message ids from earlier runs: a message is handled as a whole, in the
+    run that first wrote its tasks."""
     items = raw.get("requests") if isinstance(raw, dict) else None
     if not isinstance(items, list):
         raise ValueError("the reply had no 'requests' list")
-    out, seen = [], set()
+    out, seen, per_message = [], set(), {}
     for item in items[:MAX_REQUESTS]:
         if not isinstance(item, dict):
             continue
-        mid = item.get("message_id")
-        if not isinstance(mid, str) or not mid.startswith("mail:///messages/") or len(mid) > 512:
-            continue
-        if mid in handled or mid in seen:
+        mid = _message_id(item.get("message_id"))
+        if not mid or mid in handled:
             continue
         kind = item.get("kind")
         sender = clean_address(item.get("sender_address"))
         task = clean_text(item.get("task"), MAX_TASK_CHARS)
         if kind not in KINDS or not sender or not task or sender in own:
             continue
-        seen.add(mid)
+        key = (mid, task.lower())
+        if key in seen or per_message.get(mid, 0) >= MAX_TASKS_PER_MESSAGE:
+            continue
+        seen.add(key)
+        per_message[mid] = per_message.get(mid, 0) + 1
         out.append({
             "message_id": mid, "kind": kind, "sender_address": sender,
             "sender_name": clean_text(item.get("sender_name"), MAX_NAME_CHARS) or sender,
             "task": task, "due": item.get("due"), "weblink": item.get("weblink"),
+            "subject": clean_text(item.get("subject"), MAX_SUBJECT_CHARS),
             "senior_title": item.get("senior_title") is True,
             "phishing_suspect": item.get("phishing_suspect") is True,
+            "needs_review": item.get("needs_review") is True,
         })
+    return out
+
+
+def validate_flagged(raw, handled: set, own: set) -> list:
+    """Emails the session reports as trying to instruct it. Only who sent it
+    and the message's own link are taken: the line that reports it is fixed
+    text, so a flagged email cannot write its own warning."""
+    items = raw.get("flagged") if isinstance(raw, dict) else None
+    if not isinstance(items, list):
+        return []
+    out, seen = [], set()
+    for item in items[:MAX_FLAGGED]:
+        if not isinstance(item, dict):
+            continue
+        mid = _message_id(item.get("message_id"))
+        sender = clean_address(item.get("sender_address"))
+        if not mid or mid in handled or mid in seen or not sender or sender in own:
+            continue
+        seen.add(mid)
+        out.append({"message_id": mid, "sender_address": sender,
+                    "sender_name": clean_text(item.get("sender_name"), MAX_NAME_CHARS) or sender,
+                    "weblink": item.get("weblink")})
     return out
 
 
@@ -181,7 +221,11 @@ def render(reqs: list, config: dict, people: dict, today: _dt.date) -> list:
             text = "Verify (possible phishing): " + text
         if r["kind"] == "team_ask":
             text += " (team ask)"
+        if r.get("needs_review"):
+            text += " (check)"
         line = "- [ ] %s, from %s" % (text, r["sender_name"])
+        if r.get("subject"):
+            line += ', "%s"' % r["subject"].replace('"', "'")
         link = outlook_link(r["weblink"])
         if link:
             line += " ([open in Outlook](%s))" % link
@@ -191,6 +235,20 @@ def render(reqs: list, config: dict, people: dict, today: _dt.date) -> list:
         due = clean_due(r["due"], today)
         if due:
             line += " \U0001f4c5 " + due
+        lines.append(line + " #task")
+    return lines
+
+
+def render_flagged(flagged: list) -> list:
+    """One fixed-text review line per email that tried to instruct the
+    session. Nothing was done with those instructions; the line says so."""
+    lines = []
+    for f in flagged:
+        line = ("- [ ] Review: an email from %s may contain instructions aimed at the "
+                "email assistant (treated as data, not acted on)" % f["sender_name"])
+        link = outlook_link(f["weblink"])
+        if link:
+            line += " ([open in Outlook](%s))" % link
         lines.append(line + " #task")
     return lines
 

@@ -69,11 +69,23 @@ REQUESTS_SCHEMA = json.dumps({
             "task": {"type": "string"},
             "due": {"type": "string"},
             "weblink": {"type": "string"},
+            "subject": {"type": "string"},
             "senior_title": {"type": "boolean"},
             "phishing_suspect": {"type": "boolean"},
+            "needs_review": {"type": "boolean"},
         },
         "required": ["message_id", "kind", "sender_address", "task"],
-    }}},
+    }},
+        "flagged": {"type": "array", "items": {
+            "type": "object",
+            "properties": {
+                "message_id": {"type": "string"},
+                "sender_address": {"type": "string"},
+                "sender_name": {"type": "string"},
+                "weblink": {"type": "string"},
+            },
+            "required": ["message_id", "sender_address"],
+        }}},
     "required": ["requests"],
 })
 
@@ -205,7 +217,16 @@ def window(state: dict, config: dict, now: _dt.datetime) -> tuple:
     return after.astimezone(_dt.timezone.utc).strftime(fmt), now.astimezone(_dt.timezone.utc).strftime(fmt)
 
 
-def render_prompt(template: str, config: dict, allowed: str, after: str, before: str) -> str:
+def priority_addresses(config: dict, vault: Path) -> list:
+    """Senders whose mail is always read in full: the configured high
+    senders and every People note with Email-Priority checked."""
+    addrs = {T.clean_address(a) for a in config.get("high_priority_senders") or []}
+    addrs |= {a for a, level in T.people_priorities(vault).items() if level == "high"}
+    return sorted(a for a in addrs if a)
+
+
+def render_prompt(template: str, config: dict, allowed: str, after: str, before: str,
+                  priority=()) -> str:
     search, read = allowed.split()
     values = {
         "SEARCH_TOOL": search, "READ_TOOL": read,
@@ -213,6 +234,7 @@ def render_prompt(template: str, config: dict, allowed: str, after: str, before:
         "USER_NAME": str(config["display_name"]),
         "USER_ADDRESSES": ", ".join(sorted(own_addresses(config))),
         "TEAM_MAX": str(int(config.get("team_ask_max_recipients") or 10)),
+        "PRIORITY_SENDERS": ", ".join(priority) or "(none)",
     }
     for key, value in values.items():
         template = template.replace("{{%s}}" % key, value)
@@ -248,12 +270,16 @@ def extract_requests(stdout: str, search_tool: str) -> dict:
 def write_tasks(raw: dict, config: dict, state: dict, vault: Path, today: _dt.date) -> int:
     """Validate, render and append; record what was handled. Returns the count."""
     handled = set(state["handled"])
-    reqs = T.validate(raw, handled, own_addresses(config))
-    lines = T.render(reqs, config, T.people_priorities(vault), today)
+    own = own_addresses(config)
+    reqs = T.validate(raw, handled, own)
+    flagged = T.validate_flagged(raw, handled, own)
+    lines = T.render(reqs, config, T.people_priorities(vault), today) + T.render_flagged(flagged)
     if lines:
         T.append_tasks(vault / str(config.get("note") or DEFAULT_NOTE), lines, today)
-    for r in reqs:
+    for r in reqs + flagged:
         state["handled"][r["message_id"]] = today.isoformat()
+    if flagged:
+        log("%d email(s) flagged as trying to instruct the session" % len(flagged))
     return len(lines)
 
 
@@ -287,7 +313,8 @@ def main(argv=None) -> int:
         return 0
 
     after, before = window(state, config, now)
-    prompt = render_prompt(prompt_path.read_text(encoding="utf-8"), config, allowed, after, before)
+    prompt = render_prompt(prompt_path.read_text(encoding="utf-8"), config, allowed, after, before,
+                           priority_addresses(config, vault))
     if args.dry_run:
         log("dry run - would invoke: claude -p --input-format stream-json --restricted "
             "--permission-mode dontAsk --allowedTools %r --disallowedTools <%d tools> "

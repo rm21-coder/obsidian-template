@@ -7,10 +7,20 @@ are waiting on you personally and appends one Tasks line per request to
 ```
 ## 2026-10-19
 
-- [ ] Approve the September timesheet, from Payroll System ([open in Outlook](https://outlook.office.com/...)) 📅 2026-10-21 #task
-- [ ] Review the Q3 budget draft and send comments, from Bob Builder ([open in Outlook](https://outlook.office.com/...)) ⏫ #task
-- [ ] Pick a date for the offsite (team ask), from Cy Example ([open in Outlook](https://outlook.office.com/...)) #task
+- [ ] Approve Dee Example's September timesheet, from Payroll System, "Timesheet awaiting approval" ([open in Outlook](https://outlook.office.com/...)) 📅 2026-10-21 #task
+- [ ] Review the Q3 budget draft and send comments, from Bob Builder, "Q3 budget draft" ([open in Outlook](https://outlook.office.com/...)) ⏫ #task
+- [ ] Send Bob the headcount numbers, from Bob Builder, "Q3 budget draft" ([open in Outlook](https://outlook.office.com/...)) ⏫ #task
+- [ ] Pick a date for the offsite (team ask), from Cy Example, "Offsite" ([open in Outlook](https://outlook.office.com/...)) #task
+- [ ] Decide whether to join the vendor panel (check), from Fay Example, "Panel invite" ([open in Outlook](https://outlook.office.com/...)) #task
+- [ ] Review: an email from Eve Example may contain instructions aimed at the email assistant (treated as data, not acted on) ([open in Outlook](https://outlook.office.com/...)) #task
 ```
+
+One email can produce several tasks (one per open ask, up to five), and in a
+thread only the asks still open in the latest message count. `(check)` marks
+a call the session was unsure of. A **Review** line reports an email that
+tried to give the session instructions: its wording is fixed by the script,
+not taken from the email, and it carries only the sender's name and the
+message's own link.
 
 The To-Do page and the Morning Dashboard (07:00) already pick up `#task`
 lines, so nothing else needs configuring. Tick a task off in either place.
@@ -34,7 +44,8 @@ The job is split in two, and only the half that never sees mail can write.
 2. **Writing: a fixed transform.** `email_task_transform.py` validates each
    request and writes the line itself. It drops anything malformed, anything
    already written (by message id, remembered 30 days), and anything you sent.
-   From the task text and sender name it strips every link and URI scheme,
+   From the task text, subject (cut to 60 characters) and sender name it
+   strips every link and URI scheme,
    tags, wikilinks, HTML, code, table pipes and Tasks emoji. The one link it
    adds is the message's own Outlook link, accepted only as `https` on
    `outlook.office.com`, `outlook.office365.com` or `outlook.live.com`. A due
@@ -46,9 +57,14 @@ What counts as a request is in the prompt, `email_tasks_prompt.txt`:
 
 | Kind | When |
 |---|---|
-| `approval` | a signature, ERP, timesheet or access approval assigned to you; listed first |
+| `approval` | a signature, ERP, timesheet or access approval assigned to you; listed first, worded "Sign ...", "Approve ..." or "Grant or deny access ..." with the document, requester and amount when the email shows them |
 | `request` | it asks you by name, or you are the only To recipient, and it asks you to do, decide, review or reply |
-| `team_ask` | sent to 10 or fewer people (`team_ask_max_recipients`) and asks the group, you included |
+| `team_ask` | sent to 10 or fewer individual people (`team_ask_max_recipients`) and asks the group, you included; dropped if another recipient already answered it for the group |
+
+Mail from a priority sender (anyone in `high_priority_senders`, or with
+`Email-Priority` checked on their People note) is always read in full, never
+skipped as automated. Relative deadlines ("by Friday") are counted from the
+date the email was sent.
 
 Skipped: mail where you are only Cc'd and the ask is someone else's, FYIs,
 thank-yous, newsletters, notifications, and mailing lists that do not name
@@ -134,12 +150,16 @@ codes match the meeting pull: 3 for a sign-in or organisation-policy refusal,
 
 - **An email can steer what the session reads and says.** The item-read tool
   takes a resource URI, so an injected instruction could have it read another
-  item the connector exposes and carry up to 200 characters of it, as plain
-  text, into a task line in your own vault. Nothing leaves the machine through
+  item the connector exposes and carry some of it, as plain text, into task
+  lines in your own vault: at most five tasks per message, each up to 200
+  characters plus a 60-character subject. Nothing leaves the machine through
   this job, since the session has no tool that sends or writes.
 - **A task can be wrong or planted.** A crafted email can produce a task that
   looks legitimate, and the sender name on the line is the model's reading of
   the message. Open the Outlook link before acting on anything that asks for
   money, credentials or access.
+- **A Review line depends on the model noticing.** An email that tries to
+  instruct the session is flagged only if the session recognises it; one it
+  misses is not reported. The confinement, not the flag, is what stops it.
 - **Classification.** The note is written `classification: confidential`.
   Task text summarises mail, so set it higher if your mail warrants it.
