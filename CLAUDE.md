@@ -33,9 +33,12 @@ macOS `launchd` or, on Windows, Task Scheduler.
 
 Zero personal data. Only structural templates and shareable scripts/docs are
 allowed. Never commit real notes, People, Meetings, Groups, API keys, or
-machine-specific paths with a real username. Secrets are read at runtime from
-`~/dev/secrets/.env` (macOS) / `%USERPROFILE%\dev\secrets\.env` (Windows) and
-are **gitignored** (`.env`). A `02-classification-audit` installer component
+machine-specific paths with a real username. Secrets live in the platform
+keystore (the macOS Keychain, a DPAPI file on Windows) and are read at runtime
+through `secret_store.py`; `~/dev/secrets/.env` (macOS) /
+`%USERPROFILE%\dev\secrets\.env` (Windows) holds non-secret configuration,
+and secrets only as a fallback when the keystore write fails. Both are
+outside the repo, and `.env` is **gitignored**. A `02-classification-audit` installer component
 exists to check the tree carries only public content — respect it.
 
 ## The content folders are empty on purpose — demo data is generated
@@ -117,7 +120,8 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
   `mlx-whisper` is Apple-Silicon-only and is guarded out elsewhere. Floors the
   lock implies: macOS 14+ on Apple Silicon (no Intel), Python 3.10-3.14
   (3.12-3.14 on Windows ARM64).
-- **Secrets/state:** secrets in `dev/secrets/.env`; runtime state under
+- **Secrets/state:** secrets in the platform keystore via `secret_store.py`
+  (configuration in `dev/secrets/.env`); runtime state under
   `~/.local/share/...` (macOS) / `%LOCALAPPDATA%\...` (Windows).
 
 ## Working agreements

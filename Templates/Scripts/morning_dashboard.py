@@ -456,6 +456,48 @@ def collect_classification_queue(now: _dt.datetime | None = None) -> dict | None
     return {"pending": int(raw), "generated": generated, "stale": stale}
 
 
+# The drift reviewer (installers/lib/drift_review.py) keeps its open findings
+# on a vault note as untagged checklist lines: a maintenance backlog, not the
+# owner's to-dos. It once tagged them #task, which put every finding in the
+# to-do card (35 of them by 2026-10-19); now the card shows one count.
+DRIFT_REVIEW_NOTE = Path("Actions/Drift Review.md")
+_DRIFT_OPEN_RE = re.compile(r"^- \[ \] (?:#task )?Drift ")
+_DRIFT_FAILED_RE = re.compile(r"^- \[ \] (?:#task )?Drift review FAILED ")
+
+
+def _drift_note_path() -> Path:
+    """The reviewer's configured note, else the default. Its config is where
+    drift_review.default_config_path() looks."""
+    if os.name == "nt":
+        cfg = Path(os.environ.get("APPDATA", HOME)) / "obsidian-drift-review" / "config.json"
+    else:
+        cfg = HOME / ".config" / "obsidian-drift-review" / "config.json"
+    try:
+        note = json.loads(cfg.read_text(encoding="utf-8-sig")).get("task_note")
+    except (OSError, ValueError, AttributeError):
+        note = None
+    if isinstance(note, str) and note.strip():
+        return Path(os.path.expandvars(note)).expanduser()
+    return VAULT / DRIFT_REVIEW_NOTE
+
+
+def collect_drift_backlog() -> dict | None:
+    """Open drift findings and failed reviews, counted from the reviewer's
+    note. None when there is no note (the reviewer is opt-in)."""
+    path = _drift_note_path()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    failed = sum(1 for l in lines if _DRIFT_FAILED_RE.match(l))
+    open_ = sum(1 for l in lines if _DRIFT_OPEN_RE.match(l)) - failed
+    try:
+        rel = path.resolve().relative_to(VAULT.resolve())
+    except ValueError:
+        rel = None
+    return {"open": open_, "failed": failed, "rel": rel}
+
+
 def collect_rag_sync_status() -> dict | None:
     """Read the newest Creations/RAG-Sync-*.md report and summarize its health.
 
@@ -2218,7 +2260,8 @@ def render(today: _dt.date,
            cc_usage: dict | None = None,
            show_actions: bool | None = None,
            classification: dict | None = None,
-           rag_enabled: bool | None = None) -> str:
+           rag_enabled: bool | None = None,
+           drift: dict | None = None) -> str:
     now = now_local()
     pretty_date = today.strftime("%A, %B %d, %Y")
     tz_label = now.strftime("%Z") or "ET"
@@ -2314,6 +2357,23 @@ def render(today: _dt.date,
                 f'  <p class="empty">List last refreshed {html.escape(when)}; '
                 'the classifier has not run since, so this count may be out '
                 'of date.</p>\n')
+        parts.append('</section>\n')
+
+    # ----- Drift review backlog (one line, only while something is open) -----
+    if drift and (drift["open"] > 0 or drift["failed"] > 0):
+        bits = []
+        if drift["open"]:
+            bits.append(f'{drift["open"]} open finding{"s" if drift["open"] != 1 else ""}')
+        if drift["failed"]:
+            bits.append(f'{drift["failed"]} failed review{"s" if drift["failed"] != 1 else ""}')
+        label = html.escape(", ".join(bits))
+        parts.append('<section class="card section-drift">\n')
+        parts.append('  <h2>Documentation drift</h2>\n')
+        if drift["rel"] is not None:
+            link = html.escape(obsidian_uri(drift["rel"]))
+            parts.append(f'  <div class="meta"><a href="{link}">{label}</a></div>\n')
+        else:
+            parts.append(f'  <div class="meta">{label}</div>\n')
         parts.append('</section>\n')
 
     # ----- Today's meetings card (under the to-dos) -----
@@ -2560,10 +2620,12 @@ def main() -> int:
     usage     = collect_llm_usage()
     cc_usage  = collect_claude_code_usage()
     classification = collect_classification_queue()
+    drift     = collect_drift_backlog()
 
     html_text = render(today, todos, meetings, new_today, rag, health,
                        gateway=gateway, usage=usage, cc_usage=cc_usage,
-                       classification=classification, rag_enabled=rag_enabled)
+                       classification=classification, rag_enabled=rag_enabled,
+                       drift=drift)
 
     dated_path  = DASHBOARDS_DIR / f"morning-{today.isoformat()}.html"
     stable_path = DASHBOARDS_DIR / "morning.html"
@@ -2603,6 +2665,8 @@ def main() -> int:
     if classification is not None:
         print(f"  classify:  {classification['pending']} pending review"
               + (" (list is stale)" if classification["stale"] else ""))
+    if drift is not None:
+        print(f"  drift:     {drift['open']} open, {drift['failed']} failed review(s)")
     if not rag_enabled:
         print("  rag sync:  not set up on this machine")
     elif rag is not None:

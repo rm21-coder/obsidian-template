@@ -33,7 +33,7 @@
 #   52-meeting-prepopulate   Meeting pre-population, producer-agnostic (opt-in)
 #   53-morning-dashboard     weekday morning HTML dashboard LaunchAgent
 #   54-meeting-pull          scheduled MCP calendar fetch producer (opt-in)
-#   55-vault-lint            nightly vault lint LaunchAgent
+#   55-vault-lint            weekly (Monday 07:00) vault lint LaunchAgent
 #   56-script-permissions    tighten mode bits on Templates/Scripts
 #   57-dashboard-actions     URL-scheme handler for the dashboard's buttons (opt-in)
 #   58-classification        nightly data-classification assistant + export gate

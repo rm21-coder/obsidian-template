@@ -97,8 +97,8 @@ When it finishes, three one-time manual steps:
 
 ### Install profiles
 
-Three components ship **off** — meeting pre-population (52), the meeting-pull
-producer (54), and the dashboard's action buttons (57) — and a few prompts
+Four components ship **off** — meeting pre-population (52), the meeting-pull
+producer (54), the dashboard's action buttons (57) and email tasks (59) — and a few prompts
 have no universal default. Not because they are unfinished, but because they
 depend on things an installer cannot provision: an AI gateway with a key
 issued to you, an MCP calendar connector your tenant has approved, the list

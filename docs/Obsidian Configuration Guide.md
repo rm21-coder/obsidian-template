@@ -253,7 +253,7 @@ Organization:
 Email-Personal:
 Email-Work:
 Email-Work-2:
-Email-Priority:
+Email-Priority: false
 Mobile Phone:
 preferred_name:
 aliases: []
@@ -282,7 +282,7 @@ The three email fields are what the meeting pipeline matches invite attendees on
 
 `Email-Priority` is a checkbox: check it for the people whose email requests should come first. It is set by hand and read by the optional email-tasks job ([`Email-Tasks.md`](Email-Tasks.md)), which marks a request from a checked person ⏫ by matching the sender against this note's three email fields. Empty and unchecked mean the same thing to the job, but Obsidian draws an empty checkbox so that it looks checked, which is why the template writes `false`. It is not an email address, so the meeting pipeline and the email backfill ignore it.
 
-People notes created before these two fields existed do not have them, since a template applies only to new notes. `Templates/Scripts/add_people_fields.py` adds both to every existing People note in template order (`Email-Priority` as `false`, so the box shows unchecked rather than in Obsidian's look-alike empty state) and changes nothing else; run it without arguments for a dry run, then quit Obsidian and run it with `--write`.
+People notes created before these two fields existed do not have them, since a template applies only to new notes. `Templates/Scripts/add_people_fields.py` adds both to every existing People note in template order (`Email-Priority` as `false`, so the box shows unchecked rather than in Obsidian's look-alike empty state). It also sets an `Email-Priority:` left empty by an earlier version of the script to `false`, leaves a checked box alone, and changes nothing else. Run it without arguments for a dry run, then quit Obsidian and run it with `--write`; it refuses to write while Obsidian is running, or when it cannot tell, unless you pass `--force`.
 
 The `## Photo` section is where a photo embed is placed (e.g., `![[Smith-John.png]]`). The `## Meetings` section embeds the Person view from Meetings.base, which dynamically shows all meetings where this person appears in the people property.
 

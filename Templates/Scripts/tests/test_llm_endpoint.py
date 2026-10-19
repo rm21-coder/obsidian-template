@@ -505,3 +505,18 @@ def test_a_gateway_without_a_model_list_still_gets_the_call(monkeypatch):
     llm_endpoint._translate_models(c)
     assert c.messages.create(model="claude-sonnet-5-5", max_tokens=1, messages=[]) == "reply"
     assert c.sent == ["claude-sonnet-5-5"]
+
+
+# -- restricted notes -------------------------------------------------------
+
+def test_restricted_notes_need_the_setting_and_a_gateway(monkeypatch, capsys):
+    monkeypatch.setattr(llm_endpoint, "_RESTRICTED_NOTE_SHOWN", False)
+    monkeypatch.delenv("LLM_ALLOW_RESTRICTED", raising=False)
+    assert llm_endpoint.restricted_allowed() is False
+    monkeypatch.setenv("LLM_ALLOW_RESTRICTED", "1")
+    assert llm_endpoint.restricted_allowed() is False      # no gateway
+    assert llm_endpoint.restricted_allowed() is False
+    err = capsys.readouterr().err
+    assert err.count("LLM_ALLOW_RESTRICTED is set but no gateway") == 1, "once per run"
+    monkeypatch.setenv("LLM_BASE_URL", "https://gateway.example.edu")
+    assert llm_endpoint.restricted_allowed() is True

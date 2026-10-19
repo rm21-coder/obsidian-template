@@ -93,6 +93,12 @@ class TestLinks:
         "https://outlook.office.com/x) [more](https://evil.example",
         "javascript:alert(1)",
         "https://outlook.office.com/a b",
+        "https://evil.example\\@outlook.office.com/x",          # F-20261019: browser opens evil.example
+        "https://evil.example%5C" + "@outlook.office.com/x",   # split: the identity gate reads it as an address
+        "https://evil.example%5c" + "@outlook.office.com/x",
+        "https://user" + "@outlook.office.com/x",
+        "https://outlook.office.com:8443/x",
+        "https://outlook.office.com\\.evil.example/x",
         "",
         None,
         42,

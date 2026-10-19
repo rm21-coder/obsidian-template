@@ -1102,3 +1102,71 @@ def test_ps_elapsed_time_is_parsed(monkeypatch, etime, hours):
     monkeypatch.setattr(md.subprocess, "run",
                         lambda *a, **k: subprocess.CompletedProcess(a[0], 0, (etime + "\n").encode(), b""))
     assert md._process_elapsed_hours(123) == pytest.approx(hours)
+
+
+# ---------------------------------------------------------------------------
+# Drift review backlog: one count, never the to-do list (2026-10-19)
+# ---------------------------------------------------------------------------
+
+DRIFT_NOTE = """---
+tags:
+  - drift-review
+---
+# Drift Review
+
+## 2026-10-17 a..b
+
+- [ ] #task Drift (medium): docs/A.md, line 1: old tagged line
+- [x] #task Drift (low): docs/B.md, line 2: done
+- [ ] Drift (high): docs/C.md, line 3: new untagged line
+- [ ] Drift review FAILED for c..d: session exited 1
+- [ ] something else
+"""
+
+
+def _drift_vault(tmp_path, monkeypatch):
+    vault = tmp_path / "vault"
+    (vault / "Actions").mkdir(parents=True)
+    (vault / "Actions" / "Drift Review.md").write_text(DRIFT_NOTE, encoding="utf-8")
+    monkeypatch.setattr(md, "VAULT", vault)
+    monkeypatch.setattr(md, "HOME", tmp_path / "home")
+    return vault
+
+
+def test_the_drift_backlog_is_counted_from_the_reviewers_note(tmp_path, monkeypatch):
+    _drift_vault(tmp_path, monkeypatch)
+    d = md.collect_drift_backlog()
+    assert (d["open"], d["failed"]) == (2, 1)
+    assert d["rel"] == Path("Actions/Drift Review.md")
+
+
+def test_the_drift_note_follows_the_reviewers_config(tmp_path, monkeypatch):
+    _drift_vault(tmp_path, monkeypatch)
+    elsewhere = tmp_path / "outside.md"
+    elsewhere.write_text("- [ ] Drift (medium): x\n", encoding="utf-8")
+    cfg = tmp_path / "home" / ".config" / "obsidian-drift-review" / "config.json"
+    if os.name == "nt":
+        monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+        cfg = tmp_path / "appdata" / "obsidian-drift-review" / "config.json"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('{"task_note": "%s"}' % str(elsewhere).replace("\\", "\\\\"), encoding="utf-8")
+    d = md.collect_drift_backlog()
+    assert (d["open"], d["failed"], d["rel"]) == (1, 0, None)
+
+
+def test_no_drift_note_means_no_card(tmp_path, monkeypatch):
+    monkeypatch.setattr(md, "VAULT", tmp_path / "empty")
+    monkeypatch.setattr(md, "HOME", tmp_path / "home")
+    assert md.collect_drift_backlog() is None
+
+
+def test_drift_findings_are_a_card_not_to_dos(tmp_path, monkeypatch):
+    _drift_vault(tmp_path, monkeypatch)
+    (tmp_path / "vault" / "Actions" / "Drift Review.md").write_text(
+        DRIFT_NOTE.replace("- [ ] #task Drift (medium)", "- [ ] Drift (medium)"), encoding="utf-8")
+    assert not [t for _, t in md.collect_todos() if "Drift" in t]
+    out = md.render(md._dt.date(2026, 10, 19), [], [], [], None, [], drift=md.collect_drift_backlog())
+    assert "Documentation drift" in out and "2 open findings, 1 failed review" in out
+    quiet = md.render(md._dt.date(2026, 10, 19), [], [], [], None, [],
+                      drift={"open": 0, "failed": 0, "rel": None})
+    assert "Documentation drift" not in quiet

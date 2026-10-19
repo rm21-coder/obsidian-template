@@ -18,9 +18,12 @@ What it does, for one commit range A..B:
      false), and security-relevant behaviour the documents don't reflect.
   3. Runs a second session that tries to disprove each finding, because a
      reviewer's confident false findings are as costly as missed ones.
-  4. Writes a report outside the repository, and puts every CONFIRMED or
-     PLAUSIBLE finding on a vault note as a `#task` line, which is what the
-     morning dashboard's to-do section lists. A run that fails says so on the
+  4. Writes a report outside the repository holding every finding, and puts
+     each CONFIRMED finding of medium or high severity on a vault note as a
+     checklist line. The lines carry no `#task` tag: they are a maintenance
+     backlog, not the owner's to-dos, so the morning dashboard shows one
+     count of them rather than listing each (2026-10-19). Low-severity and
+     unverified findings stay in the report. A run that fails says so on the
      same note: a reviewer that stops silently is the failure this replaces.
 
 The sessions get Read, Grep and Glob over the staged tree and nothing else:
@@ -509,9 +512,10 @@ tags:
 # Drift Review
 
 Open findings from the per-change drift reviewer (installers/lib/drift_review.py).
-Each push is reviewed for documents the change made false; CONFIRMED and
-PLAUSIBLE findings land here as tasks, so they show on the morning dashboard.
-Tick a task when it is fixed or judged not worth fixing. Full reports, with
+Each push is reviewed for documents the change made false. Confirmed
+findings of medium or high severity land here; low-severity and unverified
+ones are in the reports only. The morning dashboard shows how many are open.
+Tick a line when it is fixed or judged not worth fixing. Full reports, with
 the evidence and the verifier's reasons, are in the report folder.
 """
 
@@ -529,15 +533,19 @@ def append_tasks(note: Path, heading: str, lines: list[str]) -> None:
     os.replace(tmp, note)
 
 
+# Which findings reach the note. The rest are in the report.
+NOTE_VERDICTS = ("CONFIRMED",)
+NOTE_SEVERITIES = ("high", "medium")
+
+
 def task_lines(findings: list[dict], report: Path) -> list[str]:
     out = []
     order = {"high": 0, "medium": 1, "low": 2}
-    for f in sorted(findings, key=lambda f: (f["verdict"] != "CONFIRMED", order.get(f["severity"], 3))):
-        if f["verdict"] == "REJECTED":
+    for f in sorted(findings, key=lambda f: order.get(f["severity"], 3)):
+        if f["verdict"] not in NOTE_VERDICTS or f["severity"] not in NOTE_SEVERITIES:
             continue
-        tag = "" if f["verdict"] == "CONFIRMED" else ", unverified"
-        out.append("- [ ] #task Drift (%s%s): %s, %s: %s (report %s %s)"
-                   % (_task_text(f["severity"]), tag, _task_text(f["document"]),
+        out.append("- [ ] Drift (%s): %s, %s: %s (report %s %s)"
+                   % (_task_text(f["severity"]), _task_text(f["document"]),
                       _task_text(f["location"]), _task_text(f["claim"]),
                       _task_text(report.name), _task_text(f["id"])))
     return out
@@ -619,7 +627,7 @@ def review(spec: str, cfg: dict, state: Path, dry_run: bool = False) -> int:
         write_report(report, meta, findings, str(found.get("summary", "")).strip())
 
     counts = {v: sum(f["verdict"] == v for f in findings) for v in ("CONFIRMED", "PLAUSIBLE", "REJECTED")}
-    tasks = task_lines(findings, report)          # the one place REJECTED is dropped
+    tasks = task_lines(findings, report)          # the one place findings are filtered
     if tasks and cfg["task_note"]:
         append_tasks(cfg["task_note"], "%s %s" % (meta["date"][:10], short), tasks)
     log(state, "%s: %d confirmed, %d plausible, %d rejected -> %s"
@@ -641,7 +649,7 @@ def review_or_report_failure(spec: str, cfg: dict, state: Path) -> int:
     print("drift review %s FAILED: %s" % (spec, msg), file=sys.stderr)
     if cfg.get("task_note"):
         append_tasks(cfg["task_note"], "%s %s" % (_dt.date.today().isoformat(), spec), [
-            "- [ ] #task Drift review FAILED for %s: %s. Re-run: python3 "
+            "- [ ] Drift review FAILED for %s: %s. Re-run: python3 "
             "installers/lib/drift_review.py --range %s"
             % (_task_text(spec), _task_text(msg), _task_text(spec))])
     return 1

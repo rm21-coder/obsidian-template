@@ -1,7 +1,8 @@
 # Data Classification — assistant and export gate
 
 Two scripts, one property. `classify_notes.py` proposes a data-classification
-tier for every note; `disclosure_check.py` refuses to export content above the
+tier for every note outside its skip list (listed under
+[Usage](#usage)); `disclosure_check.py` refuses to export content above the
 tier its audience is cleared for. Neither is useful without the other: a label
 nothing enforces is decoration, and a gate with nothing to read is a no-op.
 
@@ -39,7 +40,9 @@ matching, so a policy note quoting a placeholder credential does not classify
 itself. Run this layer alone with `--detectors-only`: no model calls, no API
 key needed.
 
-**L1 — model adjudication.** Everything else goes to a Haiku-class model with
+**L1 — model adjudication.** Everything else goes to a Haiku-class model,
+except a note already classified `restricted`: nothing ranks above it, so it
+is never sent, even with `--force`. The model gets
 the four tier definitions and, centrally, the **topic-versus-instance** rule. A
 vault like this discusses regulation, security, governance and personnel policy
 constantly as subject matter; that is ordinary professional content. A note is
@@ -269,7 +272,11 @@ open in the editor; override with `CLASSIFY_RECENT_EDIT_GUARD_SECONDS`.
 
 `Meetings/_Runs` (retained only for installs predating its removal) and other
 generated-log subtrees are skipped, matching
-`vault_lint.py`'s treatment of them as logs rather than notes.
+`vault_lint.py`'s treatment of them as logs rather than notes. So are the
+top-level `Templates`, `docs`, `installers`, `Z_attachments`, `Z_archive`,
+`Z_dashboards`, `Excalidraw`, `.obsidian` and `.trash` folders, and the root
+`README.md`, `CLAUDE.md` and `ONBOARDING.md` (the template's own
+documentation). Notes there get neither a proposal nor detector scanning.
 
 ## The export gate
 

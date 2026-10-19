@@ -499,12 +499,13 @@ function Get-OllamaListenAddresses {
 # would make it. Returns $true when either is the case.
 function Test-OllamaExposure {
     $exposed = @(Get-OllamaListenAddresses | Where-Object { $_ -notin @('127.0.0.1', '::1') })
-    $wide = @(foreach ($scope in 'User', 'Machine') {
+    $wideScopes = @(foreach ($scope in 'User', 'Machine') {
         $v = [Environment]::GetEnvironmentVariable('OLLAMA_HOST', $scope)
         if ($v -and $v -notmatch '^(https?://)?(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/?$') {
-            "$v ($scope)"
+            [pscustomobject]@{ Value = $v; Scope = $scope }
         }
     })
+    $wide = @($wideScopes | ForEach-Object { "$($_.Value) ($($_.Scope))" })
     if ($exposed.Count -eq 0 -and $wide.Count -eq 0) { return $false }
     if ($exposed.Count) {
         Write-Warning ("  Port 11434 (Ollama) is listening beyond this machine ({0})." -f ($exposed -join ', '))
@@ -512,7 +513,14 @@ function Test-OllamaExposure {
     if ($wide.Count) { Write-Warning ("  OLLAMA_HOST is set to {0}." -f ($wide -join ', ')) }
     Write-Warning '  Ollama''s API has no authentication: anyone on your network could run, pull'
     Write-Warning '  and delete models. Remove the variable and restart Ollama:'
-    Write-Warning "    [Environment]::SetEnvironmentVariable('OLLAMA_HOST', `$null, 'User')"
+    # One command per scope it was found in: a Machine-scope variable needs an
+    # elevated prompt, and the User-scope command alone leaves it in place.
+    $scopes = @($wideScopes | ForEach-Object { $_.Scope })
+    if ($scopes.Count -eq 0) { $scopes = @('User') }
+    foreach ($scope in $scopes) {
+        $how = if ($scope -eq 'Machine') { ' (from an administrator PowerShell)' } else { '' }
+        Write-Warning ("    [Environment]::SetEnvironmentVariable('OLLAMA_HOST', `$null, '{0}'){1}" -f $scope, $how)
+    }
     return $true
 }
 

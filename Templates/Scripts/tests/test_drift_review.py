@@ -200,10 +200,11 @@ def test_verified_findings_reach_the_note_and_rejected_ones_do_not(dr, repo, tmp
     assert "## CONFIRMED (1)" in text and "## REJECTED (1)" in text and "## PLAUSIBLE (1)" in text
     note = cfg["task_note"].read_text()
     assert note.startswith("---\nclassification: internal-use-only\n")
-    tasks = [l for l in note.splitlines() if l.startswith("- [ ] #task")]
-    assert len(tasks) == 2
+    tasks = [l for l in note.splitlines() if l.startswith("- [ ] Drift")]
+    assert len(tasks) == 1, "only the confirmed finding reaches the note"
     assert "Drift (medium): " in tasks[0] and "every 30 minutes" in tasks[0]
-    assert "unverified" in tasks[1] and "daily" in tasks[1]
+    assert "#task" not in note, "a backlog, not the owner's to-dos (2026-10-19)"
+    assert "daily" not in note and "daily" in text, "unverified stays in the report"
     assert "eleven plugins" not in note
 
 
@@ -224,7 +225,7 @@ def test_a_failed_session_is_written_on_the_note(dr, repo, tmp_path, cli, monkey
     spec = "%s..%s" % (old[:7], new[:7])
     assert dr.review_or_report_failure(spec, cfg, tmp_path / "state") == 1
     note = cfg["task_note"].read_text()
-    assert "- [ ] #task Drift review FAILED for %s: session exited 1 without a JSON reply" % spec in note
+    assert "- [ ] Drift review FAILED for %s: session exited 1 without a JSON reply" % spec in note
     assert "FAILED" in (tmp_path / "state" / "drift_review.log").read_text()
 
 
@@ -270,3 +271,13 @@ def test_duplicate_ids_are_made_unique_so_verdicts_cannot_cross(dr):
     found = dr._clean_findings({"findings": [_finding(2), _finding(2), _finding(9)]})
     ids = [f["id"] for f in found]
     assert len(set(ids)) == 3, ids
+
+
+def test_only_confirmed_medium_and_high_reach_the_note(dr, tmp_path):
+    def f(i, severity, verdict):
+        return dict(_finding(i, "claim %d" % i), severity=severity, verdict=verdict)
+    lines = dr.task_lines([f(1, "low", "CONFIRMED"), f(2, "high", "PLAUSIBLE"),
+                           f(3, "medium", "CONFIRMED"), f(4, "high", "CONFIRMED"),
+                           f(5, "high", "REJECTED")], tmp_path / "r.md")
+    assert [l.split(": ", 1)[0] for l in lines] == ["- [ ] Drift (high)", "- [ ] Drift (medium)"]
+    assert all("#task" not in l for l in lines)

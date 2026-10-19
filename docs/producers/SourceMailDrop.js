@@ -40,7 +40,7 @@ async function ensureSetup() {
   if (!Keychain.contains(KEYCHAIN_TOKEN_KEY)) {
     const a = new Alert()
     a.title = "Source Mail Drop — one-time setup"
-    a.message = "Paste your SOURCE_MAIL_TOKEN (the same value in ~/dev/secrets/.env on your Mac). Stored only in this device's Scriptable Keychain."
+    a.message = "Paste your SOURCE_MAIL_TOKEN (the same value your Mac or PC keeps in its keystore; show it there with: python Templates/Scripts/secret_store.py get SOURCE_MAIL_TOKEN). Stored only in this device's Scriptable Keychain."
     a.addTextField("SOURCE_MAIL_TOKEN")
     a.addAction("Save")
     await a.presentAlert()

@@ -3,10 +3,11 @@
 .DESCRIPTION
   Windows counterpart to install.sh. Sets up the vault, venv, plugins, and
   registers the scheduled tasks, honouring the per-job Enabled flag in
-  schedules.psd1: 12 of the 14 jobs ship ENABLED and start running on their
-  triggers as soon as this finishes; the other 2 are registered DISABLED
-  because each needs a per-user resource this template can't assume exists
-  (a dedicated mailbox, an MCP calendar connector).
+  schedules.psd1: 12 of the 16 jobs ship ENABLED and start running on their
+  triggers as soon as this finishes; the other 4 are registered DISABLED:
+  three because each needs a per-user resource this template can't assume
+  exists (a dedicated mailbox, an MCP calendar connector, the Microsoft 365
+  mail connector), and classify, whose first full pass is run by hand.
   Idempotent -- safe to re-run.
 
   Run it (one command, from the repo root):

@@ -378,6 +378,8 @@ then
 | `meeting-prep` | `meeting_prep.py` | every 5 min | enabled | Inserts/refreshes open follow-up task callouts into today's individual meeting notes already in the vault. Gated to weekday business hours; a no-op the rest of the time. |
 | `meeting-prepopulate` | `meeting_prepopulate.py` | every 30 min | enabled | Reads a schedule-handoff JSON from a local drop folder via a pluggable source (`drop` or `mcp`) — see [`HANDOFF-ARCHITECTURE.md`](HANDOFF-ARCHITECTURE.md). The producer is the `meeting-pull` task below; until it (or another producer) writes a handoff, the consumer runs cleanly and reports "no handoffs to process". |
 | `meeting-pull` | `meeting_pull.py` | weekdays 5:00 AM | **disabled** | Producer side of meeting pre-population: shells out to the Claude CLI over an MCP calendar connector. Exercised end-to-end on macOS only — needs the Claude CLI on `PATH` and a registered MCP calendar connector before it can even reach its own config; validate with `python meeting_pull.py --dry-run` first. |
+| `email-tasks` | `email_tasks.py` | weekdays 6:45 AM | **disabled** | Email requests waiting on you become `#task` lines in `Actions\Email Tasks.md`. Needs the Claude CLI with the Microsoft 365 connector and `.config\email_tasks.json`; validate with `python email_tasks.py --dry-run`, then one live run, before enabling. See [`Email-Tasks.md`](Email-Tasks.md). |
+| `classify` | `classify_notes.py` | daily 5:00 AM | **disabled** | Data-classification assistant. Its first pass reads every note: run it once by hand with Obsidian closed, then enable. See [Classification on Windows](#classification-on-windows) and [`Data-Classification.md`](Data-Classification.md). |
 | `group-photos` | `run_group_photos.py` | daily 2:00 AM | enabled | Runs `Z_attachments/insert_group_placeholders.py` then `refresh_groups.py` in sequence, mirroring the macOS `insert && refresh` pipeline. |
 | `rag-sync` | `obsidian-rag-sync.py` | daily 3:00 AM | when RAG is set up | Pushes the vault into Open WebUI's Knowledge collection. Enabled exactly when the optional local RAG layer is set up — `OBSIDIAN_COLLECTION_ID` filled in (`rag_status.py`) — and disabled otherwise, because without Open WebUI it fails every night. `install.ps1` and `update.ps1` re-check on each run, so filling in the collection ID and updating turns it on. |
 | `security-plugin-check` | `plugin_integrity_check.py` | daily 6:30 AM | enabled | Community-plugin code integrity, the enabled-plugin list and the settings that let a plugin run JavaScript from notes; HMAC-signed baseline (DPAPI-backed key on Windows). `install.ps1` offers to record the baseline as its last step; until one exists the check protects nothing. |
@@ -439,8 +441,9 @@ Ollama stays on `127.0.0.1:11434`: Docker Desktop routes the container's
 API has no authentication, so anyone on your network could run, pull and delete
 models. Before 2026-10-16 `setup-rag.ps1` suggested it when the container could
 not reach Ollama; if you followed that advice, remove the variable
-(`[Environment]::SetEnvironmentVariable('OLLAMA_HOST', $null, 'User')`) and
-restart Ollama.
+(`[Environment]::SetEnvironmentVariable('OLLAMA_HOST', $null, 'User')`, or
+with `'Machine'` from an administrator PowerShell if it was set machine-wide;
+the warning names each scope it found) and restart Ollama.
 
 One-time manual setup at `http://localhost:3000` (an interactive admin
 signup can't be scripted):

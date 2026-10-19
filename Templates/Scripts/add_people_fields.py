@@ -76,16 +76,21 @@ def add_fields(text: str):
     return "---" + nl + nl.join(lines) + text[end:], added
 
 
-def obsidian_running() -> bool:
+def obsidian_running():
+    """True, False, or None when the check itself could not run (no pgrep or
+    tasklist, or it failed): the caller then refuses, as if it were running."""
     try:
         if platform.system() == "Windows":
-            out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Obsidian.exe", "/NH"],
-                                 capture_output=True, text=True, timeout=10).stdout
-            return "obsidian.exe" in out.lower()
-        return subprocess.run(["pgrep", "-x", "Obsidian"], capture_output=True,
-                              timeout=10).returncode == 0
+            done = subprocess.run(["tasklist", "/FI", "IMAGENAME eq Obsidian.exe", "/NH"],
+                                  capture_output=True, text=True, timeout=10)
+            if done.returncode != 0:
+                return None
+            return "obsidian.exe" in done.stdout.lower()
+        rc = subprocess.run(["pgrep", "-x", "Obsidian"], capture_output=True,
+                            timeout=10).returncode
+        return {0: True, 1: False}.get(rc)     # pgrep: 0 found, 1 none, else error
     except (OSError, subprocess.SubprocessError):
-        return False
+        return None
 
 
 def main(argv=None) -> int:
@@ -99,10 +104,16 @@ def main(argv=None) -> int:
     if not people.is_dir():
         print("no People folder under %s" % vault)
         return 1
-    if args.write and not args.force and obsidian_running():
-        print("Obsidian is running: quit it first (it rewrites notes changed under it), "
-              "or pass --force")
-        return 1
+    if args.write and not args.force:
+        running = obsidian_running()
+        if running is None:
+            print("Could not tell whether Obsidian is running. Quit it, then re-run with "
+                  "--write --force")
+            return 1
+        if running:
+            print("Obsidian is running: quit it first (it rewrites notes changed under it), "
+                  "or pass --force")
+            return 1
 
     counts = {"Email-Work-2": 0, "Email-Priority": 0}
     changed = current = 0

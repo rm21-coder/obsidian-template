@@ -55,16 +55,20 @@ python3 installers/lib/drift_review.py --range <old>..<new> --dry-run
 
 ## What you see
 
-- **Findings:** each CONFIRMED or PLAUSIBLE finding becomes a `#task` line
-  under a dated heading in the task note, naming the document, the location
-  and the wrong text. PLAUSIBLE ones are marked "unverified". Tick a task
-  when it is fixed, or when you judge it not worth fixing.
+- **Findings:** each CONFIRMED finding of medium or high severity becomes a
+  checklist line under a dated heading in the task note, naming the
+  document, the location and the wrong text. Low-severity and PLAUSIBLE
+  findings are in the report only. The lines carry no `#task` tag, so they
+  stay out of your to-do list: the morning dashboard shows a single
+  "Documentation drift" count linking to the note instead. Tick a line when
+  it is fixed, or when you judge it not worth fixing.
 - **Reports:** one Markdown file per review in `report_dir`, with the
   evidence, the proposed correction, the verifier's reason, and the REJECTED
   findings too, so you can audit the verifier.
 - **Failures:** a review that could not run (CLI missing, not signed in,
-  timed out) writes a "Drift review FAILED" task with the reason and the
-  command to re-run it. A clean review writes a report and no task.
+  timed out) writes a "Drift review FAILED" line with the reason and the
+  command to re-run it, counted separately on the dashboard. A clean review
+  writes a report and no line.
 - **Logs:** `~/.local/share/obsidian-drift-review/` (Windows:
   `%LOCALAPPDATA%\obsidian-drift-review\`).
 

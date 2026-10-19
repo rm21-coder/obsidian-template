@@ -71,13 +71,27 @@ def clean_address(value) -> str:
 
 def outlook_link(value) -> str:
     """The message's own Outlook link, or nothing. Only https on Microsoft's
-    Outlook hosts; anything else would be a link an email chose."""
-    if not isinstance(value, str) or len(value) > 2048 or any(c in value for c in " \t\r\n<>()[]"):
+    Outlook hosts; anything else would be a link an email chose.
+
+    Python's parser and a browser must agree on the host. A backslash is a
+    path separator to a browser but not to urlsplit, so
+    `https://evil.example\\@outlook.office.com/` was accepted here and opened
+    evil.example (F-20261019). So no backslash, no `@`, no userinfo or port,
+    and the link written is rebuilt from the parts that were checked."""
+    if not isinstance(value, str) or len(value) > 2048:
+        return ""
+    if any(c in value for c in " \t\r\n<>()[]\\@") or "%5c" in value.lower():
         return ""
     parts = urlsplit(value)
-    if parts.scheme != "https" or (parts.hostname or "").lower() not in OUTLOOK_HOSTS:
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or host not in OUTLOOK_HOSTS or parts.netloc.lower() != host:
         return ""
-    return value
+    rebuilt = "https://%s%s" % (host, parts.path or "/")
+    if parts.query:
+        rebuilt += "?" + parts.query
+    if parts.fragment:
+        rebuilt += "#" + parts.fragment
+    return rebuilt
 
 
 def clean_due(value, today: _dt.date) -> str:

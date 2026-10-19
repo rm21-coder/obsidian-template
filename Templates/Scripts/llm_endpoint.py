@@ -114,6 +114,9 @@ def key_name() -> str:
     return (os.environ.get("LLM_API_KEY_NAME") or "").strip() or DEFAULT_KEY_NAME
 
 
+_RESTRICTED_NOTE_SHOWN = False
+
+
 def restricted_allowed() -> bool:
     """Whether a note classified `restricted` (or whose tier cannot be read)
     may be sent to the model endpoint. By default it may not: restricted is the
@@ -126,9 +129,13 @@ def restricted_allowed() -> bool:
             "1", "true", "yes"):
         return False
     if base_url() is None:
-        print("note: LLM_ALLOW_RESTRICTED is set but no gateway (LLM_BASE_URL) "
-              "is configured; restricted notes are still withheld from "
-              f"{STOCK_HOST}.", file=sys.stderr)
+        # Once per run: the taggers ask per note (drift review, 2026-10-17).
+        global _RESTRICTED_NOTE_SHOWN
+        if not _RESTRICTED_NOTE_SHOWN:
+            _RESTRICTED_NOTE_SHOWN = True
+            print("note: LLM_ALLOW_RESTRICTED is set but no gateway (LLM_BASE_URL) "
+                  "is configured; restricted notes are still withheld from "
+                  f"{STOCK_HOST}.", file=sys.stderr)
         return False
     return True
 

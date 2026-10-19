@@ -77,6 +77,11 @@ def test_dry_run_writes_nothing_and_write_is_refused_while_obsidian_runs(
     assert "Obsidian is running" in capsys.readouterr().out
     assert note.read_text(encoding="utf-8") == OLD
 
+    monkeypatch.setattr(apf, "obsidian_running", lambda: None)
+    assert apf.main(["--vault", str(tmp_path), "--write"]) == 1
+    assert "Could not tell whether Obsidian is running" in capsys.readouterr().out
+    assert note.read_text(encoding="utf-8") == OLD
+
     monkeypatch.setattr(apf, "obsidian_running", lambda: False)
     assert apf.main(["--vault", str(tmp_path), "--write"]) == 0
     assert "Email-Priority:" in note.read_text(encoding="utf-8")

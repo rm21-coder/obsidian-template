@@ -68,7 +68,7 @@ docker run -d \
 
 Notes:
 
-- `-p 127.0.0.1:3000:8080` binds to localhost only. Do not drop the `127.0.0.1:` prefix — without it, Docker exposes the port on every interface. A container keeps the binding it was created with, so the installers check an existing one (`docker port open-webui 8080`) rather than trust it, and recreate it on the same volume if it is published anywhere else. On Windows, `update.ps1` makes the same check; a container `setup-rag.ps1` created before 2026-10-11 was published on every interface.
+- `-p 127.0.0.1:3000:8080` binds to localhost only. Do not drop the `127.0.0.1:` prefix — without it, Docker exposes the port on every interface. A container keeps the binding it was created with, so the installers check an existing one (`docker port open-webui 8080`) rather than trust it, and recreate it on the same volume if it is published anywhere else. That repair recreates it **from the pinned image**, so it also moves the container to the pin (see the warning below about containers on `:main`). On Windows, `update.ps1` makes the same check; a container `setup-rag.ps1` created before 2026-10-11 was published on every interface.
 - The first time you visit `http://localhost:3000` you'll be prompted to create an admin account. Create the admin first, then go to **Admin Panel → Settings → General** and set `Enable New Sign Ups` to OFF and `Default User Role` to `pending`. Do **not** set `ENABLE_SIGNUP=false` as a startup environment variable — it blocks all signups including the very first admin signup.
 - Keep Open WebUI **localhost-only**. There is no supported remote-access path for the vault-RAG UI: do not open port 3000 to the LAN, and do not expose it over a mesh VPN such as Tailscale — the supply-chain surface of a third-party mesh isn't worth it for a personal index. To use the UI from another device, drive the host over its built-in **Screen Sharing** rather than exposing the port.
 
@@ -76,19 +76,21 @@ Notes:
 
 To move to the pinned image (your account and knowledge live on the volume and are kept):
 
+> **A container created from `:main` is usually newer than the pin, so moving to the pin is a downgrade** of a database that newer release may already have migrated. Back up the volume first, with the container stopped (`docker stop open-webui`, then `docker cp open-webui:/app/backend/data <backup folder>`), and keep the backup until the first sync after the move succeeds. If the pin is far behind your container, wait for a re-pin instead.
+
 ```bash
 docker pull "$(python3 installers/lib/rag_pins.py image)"
 docker rm -f open-webui
 ./install.sh --only 50-llm-rag      # recreates it from the pin
 ```
 
-If the page then hangs on load, the browser is still running the previous version's cached interface and asking for files the new one does not have (the container log shows `GET /_app/immutable/... 404`). A hard reload (Cmd+Shift+R) fixes it; failing that, clear the site's stored data for `127.0.0.1:3000`. Chats, accounts and the knowledge collection live on the server, not in the browser.
+If the page then hangs on load, the browser is still running the previous version's cached interface and asking for files the new one does not have (the container log shows `GET /_app/immutable/... 404`). A hard reload (Cmd+Shift+R) fixes it; failing that, clear the site's stored data for the address you open it at (`127.0.0.1:3000` or `localhost:3000`; the browser keeps them separately). Chats, accounts and the knowledge collection live on the server, not in the browser.
 
 Moving the pin itself is a maintainer step, like re-pinning a plugin: read the release notes, then `python3 installers/lib/rag_pins.py repin --webui vX.Y.Z` and commit the diff. Open WebUI ships security fixes often, so re-pin it on a schedule rather than leaving it to age; prefer a release that has been out for a couple of weeks.
 
 ## Models
 
-The bootstrap script pulls `llama3.1:8b-instruct-q8_0`, plus `qwen2.5:14b-instruct-q6_K` and `llama3.3:70b-instruct-q5_K_M` unless run with `--minimal` (the installer runs it `--minimal`, so only the 8B). Ollama cannot pull by digest, so after the pulls it checks each model against its manifest digest in `installers/rag-pins.json`, and `update.sh` repeats the check; a model that changed under its tag is reported, never deleted. Run the check yourself with `python3 installers/lib/rag_pins.py verify-models`. Gemma 4, Nemotron and the embedding model below are pulled by hand with `ollama pull`. Each base model gets wrapped as a "Custom Model" in **Open WebUI → Workspace → Models** with the vault Knowledge collection pre-attached and a tailored system prompt — those wrappers appear in the model picker as **`<model> + Vault`**:
+The bootstrap script pulls `llama3.1:8b-instruct-q8_0`, plus `qwen2.5:14b-instruct-q6_K` and `llama3.3:70b-instruct-q5_K_M` unless run with `--minimal` (the installer runs it `--minimal`, so only the 8B). Ollama cannot pull by digest, so after the pulls it checks each model against its manifest digest in `installers/rag-pins.json`, and `update.sh` repeats the check when an `open-webui` container exists (`update.ps1` checks only the image); a model that changed under its tag is reported, never deleted. Run the check yourself with `python3 installers/lib/rag_pins.py verify-models`. Gemma 4, Nemotron and the embedding model below are pulled by hand with `ollama pull`. Each base model gets wrapped as a "Custom Model" in **Open WebUI → Workspace → Models** with the vault Knowledge collection pre-attached and a tailored system prompt — those wrappers appear in the model picker as **`<model> + Vault`**:
 
 | Custom model | Base model tag | Loaded size | Speed | Use it for |
 |---|---|---|---|---|

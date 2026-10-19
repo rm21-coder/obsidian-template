@@ -203,8 +203,9 @@ runs the same confinement with the connector's mail search and item read as
 its two tools; the session returns requests as JSON and
 `email_task_transform.py` writes each task line itself, stripping links, URI
 schemes, markup and Tasks markers from the model's text and accepting only the
-message's own `https` Outlook link. The same residual applies, bounded to 200
-characters of plain text per task.
+message's own `https` Outlook link, rebuilt from the host it checked. The same
+residual applies, bounded to plain text in at most five task lines per
+message, each up to 200 characters of task text plus a 60-character subject.
 
 Document conversion refuses an archive whose declared member sizes would
 inflate past a limit before MarkItDown opens it.
@@ -396,10 +397,11 @@ a push.
 - **No real-time egress filtering.** Nothing here blocks outbound
   connections. Jobs send note text to the configured model endpoint (the
   tagger sends bodies from `Clippings/`, `Creations/` and `Meetings/`; the
-  classifier sends bodies to judge them). The only tier rule on those calls is
-  that a `restricted` note, or one whose tier cannot be read, is withheld:
-  always by the classifier, and by the taggers unless `LLM_ALLOW_RESTRICTED=1`
-  is set on an institutional gateway. Everything below restricted goes, and
+  classifier sends bodies to judge them). The only tier rules on those calls:
+  the classifier never sends a note already `restricted` (a note whose tier
+  cannot be read is sent, so it can be re-judged), and the taggers withhold
+  both restricted notes and notes whose tier cannot be read unless
+  `LLM_ALLOW_RESTRICTED=1` is set on an institutional gateway. Everything below restricted goes, and
   dictation and captions carry no tier at all. An outbound firewall is the
   operator's choice.
 - **The ingest guard covers writers, not the app.** It protects text the
@@ -415,7 +417,9 @@ a push.
   release by digest and each Ollama model is checked against its pinned
   manifest digest after a pull (`installers/rag-pins.json`). An existing
   container on another image, or a model that changed under its tag, is
-  reported, not replaced; models a user pulls by hand are not pinned; and
+  reported, not replaced; models a user pulls by hand are not pinned, apart
+  from the embedding model (`nomic-embed-text`) and the setup scripts' own
+  models, which are checked when installed; and
   neither the image nor the model files are covered by the integrity monitor
   between updates. Ollama's own API has no authentication; it is
   bound to loopback, and on Windows setup and every update warn if it listens

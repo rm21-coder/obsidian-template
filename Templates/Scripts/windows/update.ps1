@@ -1,10 +1,12 @@
 <#
 .SYNOPSIS  Bring an existing Windows install up to date in one command.
 .DESCRIPTION
-  Three main steps, always in this order. Between 2 and 3 it also removes any
-  plugin the template has retired; after 3 it reinstalls plugins that are off
-  their pins, re-applies the QuickAdd patch, keeps Ollama and Open WebUI on
-  loopback, and reports both security controls without adopting a baseline:
+  Three main steps, always in this order. Between 2 and 3 it also reinstalls
+  plugins that are off their pins, re-applies the QuickAdd patch and the
+  timestamp ignores, and removes any plugin the template has retired; after 3
+  it refreshes the dashboard buttons' handler if one is registered, keeps
+  Ollama and Open WebUI on loopback, and reports the integrity monitor's
+  status without adopting a baseline:
 
     1. git pull --ff-only     the new code
     2. requirements           the same pip step install.ps1 runs

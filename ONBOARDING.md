@@ -99,9 +99,10 @@ The Windows installer does **not** prompt for the gateway key. It prints a
 `secret_store.py set <KEY_NAME>` command at the end — run that once. The key
 goes into a DPAPI-encrypted file readable only by your Windows account.
 
-Windows also ships two scheduled jobs disabled on purpose, `meeting-pull` and
-`source-mail-pull`, because each needs something per-user first. Enable one
-deliberately after you have validated it:
+Windows also ships four scheduled jobs disabled on purpose: `meeting-pull`,
+`source-mail-pull` and `email-tasks`, because each needs something per-user
+first, and `classify`, because its first pass must be run by hand with
+Obsidian closed. Enable one deliberately after you have validated it:
 
 ```powershell
 Enable-ScheduledTask -TaskName meeting-pull -TaskPath '\Obsidian\'
@@ -193,7 +194,10 @@ machine already has:
 4. It reinstalls the plugins from their pins when the pins moved or an installed
    plugin is not its pinned copy. A plugin you updated yourself inside Obsidian
    is put back to the reviewed version.
-5. It reports the two security controls, without adopting a baseline.
+5. Where an Open WebUI container exists, it reports the container's binding,
+   whether it runs the pinned image, and whether the pinned Ollama models
+   still match. It reports only; it replaces nothing.
+6. It reports the two security controls, without adopting a baseline.
 
 A job that is new upstream, or that you declined, is listed with the
 `./install.sh --only <component>` command that adds it. `./update.sh --dry-run`

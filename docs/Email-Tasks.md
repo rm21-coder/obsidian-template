@@ -127,7 +127,7 @@ without a session.
 | `other_addresses` | `[]` | further addresses that are you |
 | `note` | `Actions/Email Tasks.md` | where tasks are appended |
 | `team_ask_max_recipients` | `10` | the largest recipient list a team ask can have |
-| `max_lookback_hours` | `72` (at most 96) | how far back a run reads after a gap |
+| `max_lookback_hours` | `72` as written by the installer and the example (96 when the key is absent; at most 96) | how far back a run reads after a gap |
 | `high_priority_senders` | `[]` | addresses whose requests are always ⏫ |
 | `title_priority` | `false` | 🔼 for senders with a senior title |
 | `mcp_prefix`, `search_tool`, `read_tool` | Microsoft 365 names | only for a differently-named connector; a name the job is denied is refused |
