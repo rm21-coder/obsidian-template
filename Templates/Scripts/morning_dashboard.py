@@ -124,6 +124,35 @@ def vault_rel(p: Path) -> Path:
     return p.relative_to(VAULT)
 
 
+# A Markdown link inside a task, `[label](url)`. The email-tasks job writes
+# each task with `([open in Outlook](https://outlook.office365.com/...))`,
+# and shown raw that URL is hundreds of characters with no break points: it
+# widened the to-do card until the page scrolled sideways (2026-10-19).
+_MD_LINK_RE = re.compile(r"\[([^\[\]]*)\]\(((?:[^\s()]|\([^\s()]*\))+)\)")
+_EMPTY_PARENS_RE = re.compile(r"\(\s*\)")
+try:
+    from email_task_transform import outlook_link as _outlook_link
+except Exception:                               # noqa: BLE001 - display only; no link then
+    _outlook_link = None
+
+
+def task_display(text: str) -> tuple[str, str | None]:
+    """(text to show, Outlook link or None). Markdown links are reduced to
+    nothing: the line itself already links to its note, so a link inside it
+    could only be shown as text. An Outlook message link, which the
+    email-tasks job writes and which is the one worth opening from here, is
+    returned separately, and only after the same check that job applies to
+    it, so a task cannot put an arbitrary link on the dashboard."""
+    link = None
+    for m in _MD_LINK_RE.finditer(text):
+        checked = _outlook_link(m.group(2)) if _outlook_link else ""
+        if checked and link is None:
+            link = checked
+    shown = _MD_LINK_RE.sub("", text)
+    shown = _EMPTY_PARENS_RE.sub("", shown)
+    return re.sub(r"\s{2,}", " ", shown).strip(), link
+
+
 def strip_task_metadata(text: str) -> str:
     """Clean a task line for display: drop the `#task` tag (the Obsidian
     Tasks plugin marker) and collapse the resulting whitespace. Other
@@ -2064,6 +2093,7 @@ ul.items li {
   position: relative;
   font-size: 14px;
   break-inside: avoid;
+  overflow-wrap: anywhere;
 }
 ul.items li::before {
   content: "";
@@ -2076,6 +2106,7 @@ ul.items li::before {
 }
 ul.items li a { color: var(--fg); text-decoration: none; }
 ul.items li a:hover { color: var(--todo); }
+ul.items li a.ext { color: var(--muted, #8a8f98); font-size: 12px; margin-left: 6px; white-space: nowrap; }
 
 /* Meetings sub-section. */
 .section-meetings { --section-accent: var(--meet); }
@@ -2333,8 +2364,11 @@ def render(today: _dt.date,
         parts.append('  <ul class="items">\n')
         for src, text in todos:
             uri = html.escape(obsidian_uri(src))
+            shown, outlook = task_display(text)
+            extra = (f' <a class="ext" href="{html.escape(outlook)}">Outlook ↗</a>'
+                     if outlook else '')
             parts.append(
-                f'    <li><a href="{uri}">{html.escape(text)}</a></li>\n'
+                f'    <li><a href="{uri}">{html.escape(shown)}</a>{extra}</li>\n'
             )
         parts.append('  </ul>\n')
     parts.append('</section>\n')

@@ -1170,3 +1170,32 @@ def test_drift_findings_are_a_card_not_to_dos(tmp_path, monkeypatch):
     quiet = md.render(md._dt.date(2026, 10, 19), [], [], [], None, [],
                       drift={"open": 0, "failed": 0, "rel": None})
     assert "Documentation drift" not in quiet
+
+
+# ---------------------------------------------------------------------------
+# Email-task links: a short Outlook link, never the raw URL (2026-10-19)
+# ---------------------------------------------------------------------------
+
+OUTLOOK = "https://outlook.office365.com/owa/?ItemID=AAMk" + "x" * 200 + "&exvsurl=1&viewmodel=ReadMessageItem"
+
+
+def test_an_outlook_task_shows_short_text_and_a_separate_link():
+    shown, link = md.task_display(
+        'Review the draft, from Bob, "Q3" ([open in Outlook](%s)) ⏫ 📅 2026-10-21' % OUTLOOK)
+    assert shown == 'Review the draft, from Bob, "Q3" ⏫ 📅 2026-10-21'
+    assert link == OUTLOOK
+
+
+def test_a_non_outlook_link_is_dropped_not_linked():
+    for url in ("https://evil.example/x", "javascript:alert(1)",
+                "https://evil.example\\" + "@outlook.office.com/x"):
+        shown, link = md.task_display("Do it ([open](%s))" % url)
+        assert (shown, link) == ("Do it", None)
+
+
+def test_the_rendered_to_do_carries_the_short_link():
+    out = md.render(md._dt.date(2026, 10, 19),
+                    [(Path("Actions/Email Tasks.md"), "Do it ([open in Outlook](%s))" % OUTLOOK)],
+                    [], [], None, [])
+    assert ">Do it</a>" in out and 'class="ext"' in out and "Outlook ↗" in out
+    assert "[open in Outlook]" not in out
