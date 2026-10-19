@@ -359,6 +359,14 @@ date. `suppressions.py` fails the run on a passed date, a missing field, or a
 count that no longer matches the code, so an accepted risk is re-argued rather
 than renewed by habit.
 
+A count is judged only on a semgrep scan that finished. Semgrep's taint
+engine abandons a function past a wall-clock limit, reporting it only as a
+warning and returning fewer findings, and the limit trips more often under
+load. `semgrep_complete.py` rescans every file with such a timeout or an error
+serially (`-j 1`), merges the results, and fails the pass as incomplete if
+anything still did not finish, so a dropped finding neither passes as clean
+nor reads as a short count.
+
 After a passing push, `drift_review.py` starts in the background if it is
 configured. A confined Claude session reads the pushed change in a private
 `git archive` tree with `--restricted`, `--tools Read,Grep,Glob`,

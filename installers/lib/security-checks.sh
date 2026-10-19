@@ -291,14 +291,35 @@ if want sast; then
         # secrets that are HARDCODED; nothing in them traces a secret VALUE
         # flowing into a print or a logger, which is precisely the question a
         # 2026-08 external review asked and this suite could not answer.
-        semgrep --config p/security-audit --config p/secrets \
-                --config p/command-injection \
-                --config installers/lib/semgrep-rules/ \
-                --json -o "$OUT/semgrep.json" \
-                --metrics=off --quiet . >"$OUT/semgrep.log" 2>&1
+        sg=(--config p/security-audit --config p/secrets
+            --config p/command-injection
+            --config installers/lib/semgrep-rules/
+            --metrics=off --quiet)
+        semgrep "${sg[@]}" --json -o "$OUT/semgrep-parallel.json" . >"$OUT/semgrep.log" 2>&1
+        # Taint analysis gives up on a function past a wall-clock limit and says
+        # so only as a warning, returning fewer findings (2026-10-19: 1 of 3
+        # counted findings, straight after a pytest run). Rescan every file
+        # that timed out or errored serially, where it finishes; anything still
+        # unfinished FAILS as incomplete. See semgrep_complete.py.
+        retry=()
+        while IFS= read -r p; do [[ -n "$p" ]] && retry+=("$p"); done \
+            < <("$PY" installers/lib/semgrep_complete.py retry-paths "$OUT/semgrep-parallel.json" 2>/dev/null)
+        if [[ ${#retry[@]} -gt 0 ]]; then
+            _say "  semgrep: ${#retry[@]} file(s) timed out or errored in the parallel scan; rescanning them with -j 1."
+            semgrep "${sg[@]}" -j 1 --json -o "$OUT/semgrep-serial.json" "${retry[@]}" >>"$OUT/semgrep.log" 2>&1
+        fi
+        complete=1
+        "$PY" installers/lib/semgrep_complete.py merge "$OUT/semgrep-parallel.json" \
+                "$OUT/semgrep-serial.json" "$OUT/semgrep.json" 2>"$OUT/semgrep-incomplete.txt" || complete=0
         n="$("$PY" installers/lib/suppressions.py apply semgrep "$OUT/semgrep.json" \
                 2>"$OUT/semgrep-live.txt" || echo '?')"
-        if [[ "$n" == "0" ]]; then
+        if [[ "$complete" != 1 ]]; then
+            # Never judge a count on an analysis that did not finish: a short
+            # count would blame the code, and a dropped finding would pass.
+            record sast FAIL "semgrep: analysis incomplete - findings not judged; see semgrep-incomplete.txt"
+            _say "  FAIL: semgrep - the analysis did not finish, so its findings cannot be trusted either way."
+            sed 's/^/    /' "$OUT/semgrep-incomplete.txt" | head -20 | while IFS= read -r l; do _say "$l"; done
+        elif [[ "$n" == "0" ]]; then
             record sast PASS "semgrep clean (after suppressions)"
             _say "  PASS: semgrep - no unsuppressed findings."
         else
