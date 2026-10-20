@@ -31,8 +31,8 @@
 # no urllib call left to suppress.
 bandit   installers/lib/pin_plugins.py   B310   count=1   # GitHub API; URL from the tracked pin manifest, maintainer-run only. re-check 2026-11-25
 semgrep  installers/lib/pin_plugins.py   dynamic-urllib-use-detected   count=1   # as above. re-check 2026-11-25
-bandit   installers/lib/rag_pins.py   B310   count=2   # Ollama /api/tags on loopback only, and the two pinned registries (ghcr.io, registry.ollama.ai) for maintainer re-pins; both refused otherwise in code. re-check 2027-01-16
-semgrep  installers/lib/rag_pins.py   dynamic-urllib-use-detected   count=2   # as above. re-check 2027-01-16
+bandit   installers/lib/rag_pins.py   B310   count=4   # Ollama /api/tags on loopback only, and the two pinned registries (ghcr.io, registry.ollama.ai) for maintainer re-pins; both refused otherwise in code. 2026-10-20 (5268557): +2 for Open WebUI's /api/config and sign-in check, held to loopback by _loopback_url (tested). re-check 2027-01-16
+semgrep  installers/lib/rag_pins.py   dynamic-urllib-use-detected   count=4   # as above. re-check 2027-01-16
 
 # --- subprocess with config-derived argv (semgrep) --------------------------
 # Both are list-form subprocess.run with no shell=True, so there is no

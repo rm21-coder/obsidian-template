@@ -25,6 +25,17 @@ Usage:
         # compare installed models with their pins (default: every pinned
         # model that is installed); exit 1 if any changed under its tag
     rag_pins.py repin [--webui TAG] [--model NAME:TAG ...]   (maintainer, network)
+    docker inspect open-webui | rag_pins.py check-container
+        # report a container started without the hardening env (exit 1)
+    rag_pins.py webui-state [--url URL] [--wait SECONDS]
+        # NO-ADMIN / SIGNUP-OPEN / AUTH-OFF / OK from Open WebUI's /api/config
+    printf '%s\n%s\n' EMAIL PASSWORD | rag_pins.py webui-signin [--wait SECONDS]
+        # exit 0 when that admin can sign in (confirms headless creation)
+
+The Open WebUI checks (finding 5268557 / N1): the UI is bound to 127.0.0.1,
+but a page in the operator's browser reaches loopback too. With CORS left at
+its `*` default and WEBUI_AUTH off, or signup open on a fresh volume, that
+page gets admin over the indexed vault. These report; they never recreate.
 
 Stdlib only, Python 3.9-compatible.
 """
@@ -34,6 +45,7 @@ import argparse
 import hashlib
 import json
 import sys
+import time
 import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -92,6 +104,102 @@ def compare(pins: dict, installed: dict, wanted: list) -> list:
     return rows
 
 
+# The hardening the installers start Open WebUI with (finding 5268557). The
+# container's environment is what `docker inspect` shows, so a container that
+# was created by hand, or before this change, is judged on what it really has.
+WEBUI_ORIGINS = "http://localhost:3000;http://127.0.0.1:3000"
+WEBUI_URL = "http://127.0.0.1:3000"
+_FALSE = ("false", "0", "no", "off", "")
+
+
+def container_env(inspect) -> dict:
+    """{NAME: value} from `docker inspect <container>` JSON (a list of one
+    object, or the object itself)."""
+    if isinstance(inspect, list):
+        inspect = inspect[0] if inspect else {}
+    env = ((inspect or {}).get("Config") or {}).get("Env") or []
+    out = {}
+    for item in env:
+        name, sep, value = str(item).partition("=")
+        if sep:
+            out[name] = value
+    return out
+
+
+def container_findings(inspect) -> list:
+    """What an existing open-webui container lacks, one line per problem.
+    Empty means it runs with auth on and CORS held to named origins."""
+    env = container_env(inspect)
+    found = []
+    auth = env.get("WEBUI_AUTH")
+    if auth is not None and auth.strip().lower() in _FALSE:
+        found.append(f"WEBUI_AUTH={auth}: no login, so any page that reaches "
+                     "127.0.0.1:3000 from your browser is admin")
+    cors = env.get("CORS_ALLOW_ORIGIN")
+    if cors is None:
+        found.append("CORS_ALLOW_ORIGIN is unset, so Open WebUI allows every origin (*)")
+    elif not cors.strip() or "*" in [o.strip() for o in cors.split(";")]:
+        found.append(f"CORS_ALLOW_ORIGIN={cors} allows every origin")
+    return found
+
+
+def webui_state(config) -> str:
+    """Classify Open WebUI's unauthenticated /api/config. ASSUMPTION (not
+    verified against v0.11.4 source here): `onboarding` is present only while
+    no user exists, and `features.auth` / `features.enable_signup` mirror
+    WEBUI_AUTH / ENABLE_SIGNUP. Anything else reads UNKNOWN, never OK."""
+    if not isinstance(config, dict):
+        return "UNKNOWN"
+    features = config.get("features")
+    if not isinstance(features, dict):
+        return "UNKNOWN"
+    if features.get("auth") is False:
+        return "AUTH-OFF"
+    if config.get("onboarding"):
+        return "NO-ADMIN"
+    if features.get("enable_signup") is True:
+        return "SIGNUP-OPEN"
+    if features.get("enable_signup") is False:
+        return "OK"
+    return "UNKNOWN"
+
+
+def _loopback_url(url: str) -> str:
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or parts.hostname not in LOOPBACK:
+        raise ValueError(f"refusing a non-loopback Open WebUI URL: {url}")
+    return url.rstrip("/")
+
+
+def fetch_webui_config(url: str = WEBUI_URL, wait: float = 0, timeout: float = 5) -> dict:
+    """GET /api/config, retrying for up to `wait` seconds (a first start
+    migrates the database and takes about a minute). Loopback only."""
+    base = _loopback_url(url)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            with urllib.request.urlopen(f"{base}/api/config", timeout=timeout) as r:
+                return json.loads(r.read().decode("utf-8"))
+        except (OSError, ValueError):
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(2)
+
+
+def webui_signin_ok(email: str, password: str, url: str = WEBUI_URL, timeout: float = 10) -> bool:
+    """True when that account signs in. The password travels in a POST body
+    to loopback only, never on a command line."""
+    base = _loopback_url(url)
+    body = json.dumps({"email": email, "password": password}).encode("utf-8")
+    req = urllib.request.Request(f"{base}/api/v1/auths/signin", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status == 200 and bool(json.loads(r.read().decode("utf-8")).get("token"))
+    except (OSError, ValueError):
+        return False
+
+
 def _get(url: str, headers: dict, timeout: float = 30) -> tuple[bytes, dict]:
     """GET from one of the two registries, and nowhere else."""
     if not url.startswith((GHCR + "/", OLLAMA_REGISTRY + "/")):
@@ -129,7 +237,42 @@ def main(argv: list) -> int:
     r = sub.add_parser("repin")
     r.add_argument("--webui", metavar="TAG")
     r.add_argument("--model", action="append", default=[], metavar="NAME:TAG")
+    sub.add_parser("check-container")
+    for name in ("webui-state", "webui-signin"):
+        w = sub.add_parser(name)
+        w.add_argument("--url", default=WEBUI_URL)
+        w.add_argument("--wait", type=float, default=0)
     args = ap.parse_args(argv)
+
+    if args.cmd == "check-container":
+        try:
+            inspect = json.loads(sys.stdin.read() or "null")
+        except ValueError as exc:
+            print(f"unreadable docker inspect output: {exc}", file=sys.stderr)
+            return 2
+        if not inspect:
+            print("no open-webui container to check", file=sys.stderr)
+            return 2
+        found = container_findings(inspect)
+        for line in found:
+            print(line)
+        return 1 if found else 0
+    if args.cmd in ("webui-state", "webui-signin"):
+        # Read the credentials before any wait: they arrive on a pipe.
+        creds = ()
+        if args.cmd == "webui-signin":
+            creds = (sys.stdin.readline().strip(), sys.stdin.readline().rstrip("\n"))
+        try:
+            config = fetch_webui_config(args.url, args.wait)
+        except (OSError, ValueError) as exc:
+            print(f"open webui not reachable at {args.url}: {exc}", file=sys.stderr)
+            return 2
+        if args.cmd == "webui-signin":
+            return 0 if webui_signin_ok(creds[0], creds[1], args.url) else 1
+        state = webui_state(config)
+        print(state)
+        return 0 if state == "OK" else 1
+
     pins = load()
 
     if args.cmd == "image":

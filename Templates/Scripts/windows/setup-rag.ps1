@@ -16,11 +16,14 @@
        start). If the engine isn't running yet, this script installs Docker and
        stops with instructions; re-run it once Docker Desktop is up.
     4. Run the official Open WebUI container on http://localhost:3000, pointed at
-       the host's Ollama via host.docker.internal:11434.
+       the host's Ollama via host.docker.internal:11434, with login required,
+       CORS limited to the loopback origins and signup closed. On a fresh
+       volume the admin is created headlessly (admin@example.com unless
+       OPEN_WEBUI_ADMIN_EMAIL says otherwise; a random password in DPAPI as
+       OPEN_WEBUI_ADMIN_PASSWORD), so no web page can race the first signup.
 
-  One-time MANUAL setup in Open WebUI afterward (interactive admin signup -- can't
-  be scripted):
-    a. Open http://localhost:3000, create the local admin account.
+  One-time MANUAL setup in Open WebUI afterward:
+    a. Open http://localhost:3000 and sign in as that admin.
     b. Create a Knowledge collection named "Obsidian".
     c. Enable API keys under Admin Panel -> Settings -> Authentication ("Enable
        API Key", Open WebUI 0.11 -- hidden until enabled), then
@@ -159,6 +162,7 @@ if ($ResetWebUI) {
     Invoke-Native -Warn -ErrorMessage 'docker volume rm failed' { docker volume rm open-webui 1>$null }
 }
 
+$fresh = $null
 $existing = (docker ps -a --filter 'name=^open-webui$' --format '{{.Names}}' 2>$null)
 if ($existing -eq 'open-webui') {
     if (Repair-OpenWebUIBinding) {
@@ -167,21 +171,31 @@ if ($existing -eq 'open-webui') {
         Write-Host '  open-webui container present and bound to 127.0.0.1; started (if it was stopped)'
     }
     if (Test-OpenWebUIImagePin) { Write-Host '  open-webui runs the pinned image' }
-} else {
-    Write-Host '  pulling and starting the official open-webui image...'
+} elseif (Test-OpenWebUIVolume) {
+    # A volume without a container: the account is on it, so no new password.
+    Write-Host '  starting open-webui on the existing volume...'
     Start-OpenWebUIContainer
     Write-Host '  open-webui started; web UI at http://localhost:3000 (this machine only)'
+} else {
+    Write-Host '  pulling and starting the official open-webui image on a fresh volume...'
+    $fresh = Start-OpenWebUIFresh
+    Write-Host '  open-webui started; web UI at http://localhost:3000 (this machine only)'
 }
+# Login and CORS (finding 5268557 / N1): report, never replace.
+if (Test-OpenWebUIHardening) { Write-Host '  open-webui requires login and limits CORS to the loopback origins' }
 
 # Check whether this landed on a fresh volume or an existing admin account --
 # don't make the user discover this the hard way via a plain "Sign in" screen.
 Write-Host '  waiting for Open WebUI to respond...'
-$cfg = $null
 # A first start migrates the database and takes about a minute.
-for ($i = 0; $i -lt 120 -and -not $cfg; $i++) {
-    Start-Sleep -Milliseconds 750
-    try { $cfg = Invoke-RestMethod -Uri 'http://localhost:3000/api/config' -TimeoutSec 2 -ErrorAction Stop }
-    catch { }
+$cfg = Get-OpenWebUIConfig -WaitSeconds 90
+$webuiState = Get-OpenWebUIState $cfg
+switch ($webuiState) {
+    'OK'          { Write-Host '  open-webui signup is closed' }
+    'NO-ADMIN'    { Write-Warning '  open-webui has NO admin yet and signup decides who gets it; create it now at http://localhost:3000' }
+    'SIGNUP-OPEN' { Write-Warning '  open-webui signup is OPEN: Admin Panel -> Settings -> General -> "Enable New Sign Ups" off' }
+    'AUTH-OFF'    { Write-Warning '  open-webui reports login disabled (WEBUI_AUTH off)' }
+    default       { Write-Warning '  could not read open-webui''s signup state' }
 }
 
 # Already fully configured? Check .env rather than guessing from Open WebUI's
@@ -201,11 +215,13 @@ if ($alreadyConfigured) {
     Write-Host 'still disabled:'
     Write-Host "  Enable-ScheduledTask -TaskName rag-sync -TaskPath '\Obsidian\'"
 } else {
-    Write-Host 'RAG stack ready. One-time MANUAL setup (Open WebUI needs an interactive'
-    Write-Host 'admin signup, which can''t be scripted):'
+    Write-Host 'RAG stack ready. One-time MANUAL setup in Open WebUI:'
     if (-not $cfg) {
         Write-Warning '  could not reach http://localhost:3000 yet -- give it a few more seconds and check manually.'
-    } elseif ($cfg.features.enable_signup) {
+    } elseif ($fresh -eq 'headless') {
+        Write-Host ("  Fresh volume: the admin was created for you. Sign in as {0}; copy the password with:" -f $script:OpenWebUIAdminEmail)
+        Write-Host ("    & '{0}' '{1}' get OPEN_WEBUI_ADMIN_PASSWORD | Set-Clipboard" -f (Get-VenvPython), (Join-Path (Get-ScriptsDir) 'secret_store.py'))
+    } elseif ($webuiState -eq 'NO-ADMIN' -or $fresh -eq 'signup-open') {
         Write-Host '  Fresh volume detected -- go to http://localhost:3000 and create the admin account.'
     } else {
         Write-Warning '  An admin account already exists in the "open-webui" Docker volume, but .env'
@@ -216,7 +232,8 @@ if ($alreadyConfigured) {
         Write-Warning '  -RemoveRAG), force a clean slate instead:'
         Write-Warning '      .\Templates\Scripts\windows\setup-rag.ps1 -SkipModel -ResetWebUI'
     }
-    Write-Host '  1. Open http://localhost:3000; create the local admin account (first user = admin).'
+    Write-Host '  1. Open http://localhost:3000; sign in as the admin (created for you on a fresh'
+    Write-Host '     volume; only if signup was left open, create it by hand -- first user = admin).'
     Write-Host '  2. Workspace -> Knowledge -> "+"/Create Knowledge Base -> name it "Obsidian"'
     Write-Host '     -> hit Save. Open it; the UUID in the URL'
     Write-Host '     (.../workspace/knowledge/<uuid>) is your OBSIDIAN_COLLECTION_ID.'

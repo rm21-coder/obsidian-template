@@ -439,17 +439,167 @@ try {
     $script:OpenWebUIImage = '{0}:{1}@{2}' -f $script:RagPins.open_webui.image, $script:RagPins.open_webui.tag, $script:RagPins.open_webui.digest
 } catch { }
 
+# Loopback is not private from the browser (finding 5268557 / N1): any page
+# the user opens can send requests to 127.0.0.1:3000, and DNS rebinding gets
+# past a same-origin check. So the container runs with login required
+# (WEBUI_AUTH), CORS held to the two loopback origins instead of the `*`
+# default, and signup closed. Auth is the control that matters; CORS narrows
+# what a cross-origin page can read. ENABLE_SIGNUP is a persistent setting:
+# it seeds the database on first start, and the Admin Panel value wins after.
+# Mirrors installers/components/50-llm-rag.sh.
+$script:OpenWebUIAdminEmail = if ($env:OPEN_WEBUI_ADMIN_EMAIL) { $env:OPEN_WEBUI_ADMIN_EMAIL } else { 'admin@example.com' }
+$script:OpenWebUIUrl = 'http://127.0.0.1:3000'
+
+# -EnvFile carries the headless admin's credentials on a fresh volume only, so
+# the password never appears on a command line. -AllowSignup is the fallback
+# for a release that ignores the headless variables.
 function Start-OpenWebUIContainer {
+    param([string]$EnvFile = '', [switch]$AllowSignup)
     if (-not $script:OpenWebUIImage) { throw 'installers\rag-pins.json is missing or unreadable; the Open WebUI image cannot be pinned' }
+    $signup = if ($AllowSignup) { 'True' } else { 'False' }
+    $envFileArgs = @()
+    if ($EnvFile) { $envFileArgs = @('--env-file', $EnvFile) }
     Invoke-Native -ErrorMessage 'docker run failed' {
         docker run -d --restart=always `
             -p 127.0.0.1:3000:8080 `
             -v open-webui:/app/backend/data `
             --add-host=host.docker.internal:host-gateway `
             -e 'OLLAMA_BASE_URL=http://host.docker.internal:11434' `
+            -e 'WEBUI_AUTH=True' `
+            -e 'CORS_ALLOW_ORIGIN=http://localhost:3000;http://127.0.0.1:3000' `
+            -e "ENABLE_SIGNUP=$signup" `
+            @envFileArgs `
             --name open-webui `
             $script:OpenWebUIImage
     }
+}
+
+# Whether the 'open-webui' Docker volume exists (it holds the accounts).
+function Test-OpenWebUIVolume {
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { docker volume inspect open-webui *> $null } finally { $ErrorActionPreference = $prevEAP }
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Open WebUI's unauthenticated /api/config, retried for up to $WaitSeconds (a
+# first start migrates the database and takes about a minute). $null if not
+# reachable.
+function Get-OpenWebUIConfig([int]$WaitSeconds = 0) {
+    $deadline = (Get-Date).AddSeconds($WaitSeconds)
+    while ($true) {
+        try { return Invoke-RestMethod -Uri ($script:OpenWebUIUrl + '/api/config') -TimeoutSec 5 -ErrorAction Stop }
+        catch { if ((Get-Date) -ge $deadline) { return $null } }
+        Start-Sleep -Seconds 2
+    }
+}
+
+# NO-ADMIN / SIGNUP-OPEN / AUTH-OFF / OK / UNKNOWN, as rag_pins.webui_state.
+# ASSUMPTION (not verified against the pinned release's source): `onboarding`
+# is present only while no user exists.
+function Get-OpenWebUIState($Config) {
+    if (-not $Config -or -not $Config.features) { return 'UNKNOWN' }
+    if ($Config.features.auth -eq $false) { return 'AUTH-OFF' }
+    if ($Config.onboarding) { return 'NO-ADMIN' }
+    if ($Config.features.enable_signup -eq $true) { return 'SIGNUP-OPEN' }
+    if ($Config.features.enable_signup -eq $false) { return 'OK' }
+    return 'UNKNOWN'
+}
+
+# Whether that account signs in. The password travels in a POST body to
+# loopback only.
+function Test-OpenWebUISignin([string]$Email, [string]$Password) {
+    $body = @{ email = $Email; password = $Password } | ConvertTo-Json
+    try {
+        $r = Invoke-RestMethod -Method Post -Uri ($script:OpenWebUIUrl + '/api/v1/auths/signin') `
+            -ContentType 'application/json' -Body $body -TimeoutSec 10 -ErrorAction Stop
+        return [bool]$r.token
+    } catch { return $false }
+}
+
+# First start on a fresh volume: create the admin from WEBUI_ADMIN_EMAIL /
+# WEBUI_ADMIN_PASSWORD / WEBUI_ADMIN_NAME (Open WebUI's headless first-admin
+# variables), with signup closed from the first second. The password is
+# random, goes to DPAPI through secret_store.py (stdin, never argv), and
+# reaches Docker in an env-file under the per-user %TEMP%, deleted straight
+# after `docker run`. A sign-in proves the account exists, then the container
+# is recreated without the env-file so the password does not stay in
+# `docker inspect`. Returns 'headless' or 'signup-open'.
+function Start-OpenWebUIFresh {
+    $email = $script:OpenWebUIAdminEmail
+    $bytes = New-Object byte[] 24
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+    $pw = [Convert]::ToBase64String($bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=')
+    $stored = $false
+    try {
+        $py = Get-VenvPython
+        $store = Join-Path (Get-ScriptsDir) 'secret_store.py'
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { $pw | & $py $store set OPEN_WEBUI_ADMIN_PASSWORD *> $null } finally { $ErrorActionPreference = $prevEAP }
+        $stored = ($LASTEXITCODE -eq 0)
+    } catch { $stored = $false }
+    if ($stored) {
+        $envFile = Join-Path $env:TEMP ('open-webui-admin-' + [guid]::NewGuid().ToString('N') + '.env')
+        $content = "WEBUI_ADMIN_EMAIL=$email`nWEBUI_ADMIN_PASSWORD=$pw`nWEBUI_ADMIN_NAME=Admin`n"
+        try {
+            [IO.File]::WriteAllText($envFile, $content, (New-Object Text.UTF8Encoding($false)))
+            Start-OpenWebUIContainer -EnvFile $envFile
+        } finally { Remove-Item -LiteralPath $envFile -Force -ErrorAction SilentlyContinue }
+        Write-Host '  waiting for Open WebUI''s first start (database migration, about a minute)...'
+        $null = Get-OpenWebUIConfig -WaitSeconds 240
+        $ok = Test-OpenWebUISignin $email $pw
+        $pw = $null
+        Invoke-Native -ErrorMessage 'docker rm failed' { docker rm -f open-webui 1>$null }
+        if ($ok) {
+            Start-OpenWebUIContainer
+            Write-Host "  admin created: $email; password in DPAPI (OPEN_WEBUI_ADMIN_PASSWORD)"
+            return 'headless'
+        }
+    } else {
+        Write-Warning '  the keystore (secret_store.py) is unavailable, so the admin cannot be created headlessly'
+    }
+    # Fallback: open signup for the one hand-made admin. Loud, because until
+    # that account exists the first page to reach port 3000 can take it.
+    Start-OpenWebUIContainer -AllowSignup
+    Write-Warning '  open-webui could not create its admin headlessly, so SIGNUP IS OPEN.'
+    Write-Warning '  Create the admin at http://localhost:3000 NOW, before opening other pages,'
+    Write-Warning '  then close signup (the volume keeps the account):'
+    Write-Warning '    docker rm -f open-webui; then re-run setup-rag.ps1 -SkipModel'
+    Write-Warning '  and in Admin Panel -> Settings -> General, turn "Enable New Sign Ups" off.'
+    return 'signup-open'
+}
+
+# Report (never replace) when the open-webui container lacks the hardening
+# env: WEBUI_AUTH off, or CORS_ALLOW_ORIGIN unset or `*`. Same rules as
+# rag_pins.container_findings. Returns $true when it has both.
+function Test-OpenWebUIHardening {
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $raw = "$(docker inspect open-webui --format '{{json .Config.Env}}' 2>$null)" } finally { $ErrorActionPreference = $prevEAP }
+    $vars = @{}
+    try { foreach ($item in @($raw | ConvertFrom-Json)) {
+        $i = "$item".IndexOf('=')
+        if ($i -gt 0) { $vars["$item".Substring(0, $i)] = "$item".Substring($i + 1) }
+    } } catch { Write-Warning '  could not read the open-webui container environment'; return $false }
+    $found = @()
+    if ($vars.ContainsKey('WEBUI_AUTH') -and $vars['WEBUI_AUTH'].Trim().ToLower() -in @('false', '0', 'no', 'off', '')) {
+        $found += ('WEBUI_AUTH={0}: no login, so any page that reaches 127.0.0.1:3000 from your browser is admin' -f $vars['WEBUI_AUTH'])
+    }
+    if (-not $vars.ContainsKey('CORS_ALLOW_ORIGIN')) {
+        $found += 'CORS_ALLOW_ORIGIN is unset, so Open WebUI allows every origin (*)'
+    } elseif (-not $vars['CORS_ALLOW_ORIGIN'].Trim() -or (@($vars['CORS_ALLOW_ORIGIN'].Split(';') | ForEach-Object { $_.Trim() }) -contains '*')) {
+        $found += ('CORS_ALLOW_ORIGIN={0} allows every origin' -f $vars['CORS_ALLOW_ORIGIN'])
+    }
+    if ($found.Count -eq 0) { return $true }
+    foreach ($f in $found) { Write-Warning "  open-webui: $f" }
+    Write-Warning '  Recreate it with the hardened settings, on the same volume (account and knowledge kept):'
+    Write-Warning '    docker rm -f open-webui; then re-run setup-rag.ps1 -SkipModel'
+    if ($vars.ContainsKey('WEBUI_AUTH') -and $found[0] -like 'WEBUI_AUTH=*') {
+        Write-Warning '  With auth off, Open WebUI signs everyone in as one built-in admin; once auth is'
+        Write-Warning '  back on, give that account (Admin Panel -> Users) a strong password at once.'
+    }
+    return $false
 }
 
 # The host addresses open-webui's port 8080 is published on ("0.0.0.0:3000",

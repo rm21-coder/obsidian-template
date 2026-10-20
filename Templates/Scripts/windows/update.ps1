@@ -162,6 +162,7 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
         if (Repair-OpenWebUIBinding) { Write-Host '  Recreated, bound to 127.0.0.1:3000.' }
         else { Write-Host '  Bound to 127.0.0.1 only.' }
         if (Test-OpenWebUIImagePin) { Write-Host '  On the pinned image.' }
+        if (Test-OpenWebUIHardening) { Write-Host '  Login required; CORS limited to the loopback origins.' }
     }
 }
 

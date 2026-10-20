@@ -75,7 +75,7 @@ interactively; add the switch for a non-interactive install):
 
 - **`-WithRAG`** — installs the fully-local RAG stack: Ollama, the
   `llama3.1:8b` model, and Open WebUI in Docker. See
-  [Local LLM RAG](#local-llm-rag) below for the one-time manual signup this
+  [Local LLM RAG](#local-llm-rag) below for the one-time manual setup this
   still needs afterward.
 
 The iPhone/iPad pipelines (voice-note cleanup,
@@ -445,10 +445,22 @@ not reach Ollama; if you followed that advice, remove the variable
 with `'Machine'` from an administrator PowerShell if it was set machine-wide;
 the warning names each scope it found) and restart Ollama.
 
-One-time manual setup at `http://localhost:3000` (an interactive admin
-signup can't be scripted):
+Open WebUI runs with login required, CORS limited to the two loopback
+origins and signup closed: a web page in your browser can reach
+`127.0.0.1:3000` too. On a fresh volume `setup-rag.ps1` creates the admin
+for you (`admin@example.com` unless `OPEN_WEBUI_ADMIN_EMAIL` is set; a random
+password in DPAPI as `OPEN_WEBUI_ADMIN_PASSWORD`, which the script tells you
+how to copy), so no page can race the first signup. If that fails it reopens
+signup and warns: create the admin at once, then `docker rm -f open-webui`
+and re-run `setup-rag.ps1 -SkipModel`. `setup-rag.ps1` and `update.ps1`
+report a container started with `WEBUI_AUTH` off or without the CORS limit;
+recreate it the same way (the volume keeps your account). See
+[Local LLM with Obsidian Vault RAG](Local%20LLM%20with%20Obsidian%20Vault%20RAG.md#open-webui).
 
-1. Create the local admin account (first user to sign up becomes admin).
+One-time manual setup at `http://localhost:3000`:
+
+1. Sign in as the admin (created for you on a fresh volume; only if signup
+   was left open, create it by hand -- the first user becomes admin).
 2. **Workspace → Knowledge → "+" / Create Knowledge Base** → name it
    `Obsidian` → **hit Save**. Open it — the UUID in the URL
    (`.../workspace/knowledge/<uuid>`) is your `OBSIDIAN_COLLECTION_ID`.
@@ -738,7 +750,9 @@ x64 box that can offload to a discrete GPU.
 - **`setup-rag.ps1` warns it couldn't reach Open WebUI right after a fresh
   image pull** — the container needs a few extra seconds to boot the first
   time. Not a failure; wait a moment and open http://localhost:3000 by hand.
-- **Open WebUI shows a plain "Sign in" screen you don't recognize** — that
+- **Open WebUI shows a plain "Sign in" screen you don't recognize** — on a
+  fresh volume that is expected: sign in as the admin `setup-rag.ps1` created
+  (it printed the account and how to copy its password). Otherwise the
   container's Docker volume already has an admin account from an earlier
   run (volumes outlive `uninstall.ps1` unless you pass `-RemoveRAG`). Run
   `setup-rag.ps1 -SkipModel -ResetWebUI` for a guaranteed-clean signup.

@@ -7,16 +7,19 @@
 # local Ollama on port 11434. Finally wires the obsidian-rag-sync.py
 # LaunchAgent to push the vault into a Knowledge collection nightly.
 #
-# After this component finishes, the user must (one-time, manual):
-#   1. Open Open WebUI in a browser at http://localhost:3000
-#   2. Create an admin account
-#   3. Create a Knowledge collection named "Obsidian"
-#   4. Generate an API key in user settings
-#   5. Re-run: install.sh --only 20-secrets
+# On a fresh volume the admin account is created headlessly (a random
+# password, stored in the Keychain as open_webui_admin_password), so there is
+# no first-signup race for a web page to win. After this component finishes,
+# the user must (one-time, manual):
+#   1. Sign in to Open WebUI at http://localhost:3000 as that admin
+#   2. Create a Knowledge collection named "Obsidian"
+#   3. Generate an API key in user settings
+#   4. Re-run: install.sh --only 20-secrets
 #      to populate OPEN_WEBUI_API_KEY and OBSIDIAN_COLLECTION_ID
 
 set -euo pipefail
 source "$REPO_ROOT/installers/lib/plist.sh"
+source "$REPO_ROOT/installers/lib/secrets.sh"
 
 VAULT="$HOME/Obsidian"
 
@@ -51,14 +54,108 @@ info "Open WebUI container..."
 # resolves the digest, so a re-pushed tag or a swapped image is refused.
 OPEN_WEBUI_IMAGE="$(python3 "$REPO_ROOT/installers/lib/rag_pins.py" image)"
 OPEN_WEBUI_DIGEST="$(python3 "$REPO_ROOT/installers/lib/rag_pins.py" image-digest)"
+RAG_PINS=(python3 "$REPO_ROOT/installers/lib/rag_pins.py")
+# Loopback is not private from the browser (finding 5268557 / N1): any page
+# the operator opens can send requests to 127.0.0.1:3000, and DNS rebinding
+# gets past a same-origin check. So the container runs with login required
+# (WEBUI_AUTH), CORS held to the two loopback origins instead of the `*`
+# default, and signup closed. Auth is the control that matters; CORS narrows
+# what a cross-origin page can read. ENABLE_SIGNUP is a persistent setting:
+# it seeds the database on first start, and the Admin Panel value wins after.
+OPEN_WEBUI_ADMIN_EMAIL="${OPEN_WEBUI_ADMIN_EMAIL:-admin@example.com}"
+OPEN_WEBUI_SIGNUP="${OPEN_WEBUI_SIGNUP:-False}"
+# start_open_webui [env-file]: the env-file carries the headless admin's
+# credentials on a fresh volume only, so the password is never in argv.
 start_open_webui() {
+    local env_file_args=()
+    [[ -n "${1:-}" ]] && env_file_args=(--env-file "$1")
     docker run -d --restart=always \
         -p 127.0.0.1:3000:8080 \
         -v open-webui:/app/backend/data \
         --add-host=host.docker.internal:host-gateway \
         -e 'OLLAMA_BASE_URL=http://host.docker.internal:11434' \
+        -e 'WEBUI_AUTH=True' \
+        -e 'CORS_ALLOW_ORIGIN=http://localhost:3000;http://127.0.0.1:3000' \
+        -e "ENABLE_SIGNUP=$OPEN_WEBUI_SIGNUP" \
+        ${env_file_args[@]+"${env_file_args[@]}"} \
         --name open-webui \
         "$OPEN_WEBUI_IMAGE"
+}
+# First start on a fresh volume: create the admin from WEBUI_ADMIN_EMAIL /
+# WEBUI_ADMIN_PASSWORD / WEBUI_ADMIN_NAME (Open WebUI's headless first-admin
+# variables), with signup closed from the first second. The password is
+# random, goes to the Keychain through secret_store.py (stdin, never argv),
+# and reaches Docker in a 0600 env-file deleted straight after `docker run`.
+# A sign-in then proves the account exists, and the container is recreated
+# without the env-file so the password does not stay in `docker inspect`.
+# If the release ignores those variables, signup is reopened for a hand-made
+# admin, and the operator is told how to close it again.
+start_open_webui_fresh() {
+    local admin_pw env_file
+    admin_pw="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+    if ! _secret_store_set OPEN_WEBUI_ADMIN_PASSWORD "$admin_pw"; then
+        admin_pw=""
+        warn "  the Keychain is unavailable, so the admin cannot be created headlessly"
+    fi
+    if [[ -n "$admin_pw" ]]; then
+        env_file="$(umask 077 && mktemp "${TMPDIR:-/tmp}/open-webui-admin.XXXXXX")"
+        chmod 600 "$env_file"
+        # shellcheck disable=SC2064  # expand now: the path is local
+        trap "rm -f '$env_file'" EXIT
+        printf 'WEBUI_ADMIN_EMAIL=%s\nWEBUI_ADMIN_PASSWORD=%s\nWEBUI_ADMIN_NAME=Admin\n' \
+            "$OPEN_WEBUI_ADMIN_EMAIL" "$admin_pw" > "$env_file"
+        start_open_webui "$env_file"
+        rm -f "$env_file"
+        info "  waiting for Open WebUI's first start (database migration, about a minute)..."
+        if printf '%s\n%s\n' "$OPEN_WEBUI_ADMIN_EMAIL" "$admin_pw" \
+                | "${RAG_PINS[@]}" webui-signin --wait 240; then
+            admin_pw=""
+            docker rm -f open-webui >/dev/null
+            start_open_webui
+            ok "  admin created: $OPEN_WEBUI_ADMIN_EMAIL; password in the Keychain (open_webui_admin_password)"
+            info "    read it with: python3 Templates/Scripts/secret_store.py get OPEN_WEBUI_ADMIN_PASSWORD | pbcopy"
+            return 0
+        fi
+        admin_pw=""
+        docker rm -f open-webui >/dev/null
+    fi
+    # Fallback: open signup for the one hand-made admin. Loud, because until
+    # that account exists the first page to reach port 3000 can take it.
+    OPEN_WEBUI_SIGNUP=True
+    start_open_webui
+    OPEN_WEBUI_SIGNUP=False
+    err "  open-webui could not create its admin headlessly, so SIGNUP IS OPEN."
+    err "  Create the admin at http://localhost:3000 NOW, before opening other pages,"
+    err "  then close signup (the volume keeps the account):"
+    err "    docker rm -f open-webui && ./install.sh --only 50-llm-rag"
+    err "  and in Admin Panel -> Settings -> General, turn 'Enable New Sign Ups' off."
+    info "  (open_webui_admin_password in the Keychain is kept, in case the account was"
+    info "   created but answered late; it does not apply to an admin you make by hand.)"
+}
+# Report, do not replace: an existing container keeps the environment it was
+# created with, and the volume holds the account. 5268557 / N1.
+report_open_webui_hardening() {
+    local findings state
+    findings="$(docker inspect open-webui 2>/dev/null | "${RAG_PINS[@]}" check-container || true)"
+    if [[ -n "$findings" ]]; then
+        while IFS= read -r line; do warn "  open-webui: $line"; done <<< "$findings"
+        warn "  recreate it with the hardened settings, on the same volume (account and knowledge kept):"
+        warn "    docker rm -f open-webui && ./install.sh --only 50-llm-rag"
+        if [[ "$findings" == *WEBUI_AUTH=* ]]; then
+            warn "  With auth off, Open WebUI signs everyone in as one built-in admin; once auth is"
+            warn "  back on, give that account (Admin Panel -> Users) a strong password at once."
+        fi
+    else
+        ok "  open-webui requires login and limits CORS to the loopback origins"
+    fi
+    state="$("${RAG_PINS[@]}" webui-state --wait 120 2>/dev/null || true)"
+    case "$state" in
+        OK) ok "  open-webui signup is closed" ;;
+        NO-ADMIN) err "  open-webui has NO admin yet and signup decides who gets it; create it now at http://localhost:3000" ;;
+        SIGNUP-OPEN) warn "  open-webui signup is OPEN: Admin Panel -> Settings -> General -> 'Enable New Sign Ups' off" ;;
+        AUTH-OFF) warn "  open-webui reports login disabled (WEBUI_AUTH off)" ;;
+        *) warn "  could not read open-webui's signup state (not reachable yet?); re-run this component to check" ;;
+    esac
 }
 # An existing container keeps the image it was created from. Report, do not
 # replace: moving Open WebUI to another release migrates its database, which
@@ -89,10 +186,19 @@ if docker ps -a --format '{{.Names}}' | grep -q '^open-webui$'; then
         ok "  open-webui container running, bound to 127.0.0.1"
     fi
     report_open_webui_pin
-else
-    info "  pulling and starting open-webui..."
+    report_open_webui_hardening
+elif docker volume inspect open-webui >/dev/null 2>&1; then
+    # A volume without a container (removed to re-pin or harden): the account
+    # is on the volume, so start it plainly, with no new admin password.
+    info "  starting open-webui on the existing volume..."
     start_open_webui
     ok "  open-webui container started; web UI at http://localhost:3000"
+    report_open_webui_hardening
+else
+    info "  pulling and starting open-webui on a fresh volume..."
+    start_open_webui_fresh
+    ok "  open-webui container started; web UI at http://localhost:3000"
+    report_open_webui_hardening
 fi
 
 # ---- 4. RAG sync LaunchAgent ----------------------------------------------
@@ -100,7 +206,7 @@ info "Installing LaunchAgent com.obsidian-rag-sync..."
 install_plist_and_load Templates/Scripts/com.obsidian-rag-sync.plist com.obsidian-rag-sync
 
 ok "llm-rag component complete"
-info "  Next (one-time manual): open http://localhost:3000, create admin,"
+info "  Next (one-time manual): sign in at http://localhost:3000 as $OPEN_WEBUI_ADMIN_EMAIL,"
 info "  create 'Obsidian' Knowledge collection, generate API key, then run:"
 info "    ./install.sh --only 20-secrets --force"
 info "  to populate OPEN_WEBUI_API_KEY and OBSIDIAN_COLLECTION_ID in ~/dev/secrets/.env"

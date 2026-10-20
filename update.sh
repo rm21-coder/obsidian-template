@@ -261,6 +261,13 @@ main() {
                 warn "  move with: docker pull <that image> && docker rm -f open-webui && ./install.sh --only 50-llm-rag"
             fi
         fi
+        # Login and CORS (finding 5268557 / N1): a browser page reaches loopback.
+        rag_findings="$("$RAG_DOCKER" inspect open-webui 2>/dev/null \
+            | python3 "$REPO_ROOT/installers/lib/rag_pins.py" check-container 2>/dev/null || true)"
+        if [[ -n "$rag_findings" ]]; then
+            while IFS= read -r line; do warn "  open-webui: $line"; done <<< "$rag_findings"
+            warn "  fix with: docker rm -f open-webui && ./install.sh --only 50-llm-rag (volume kept)"
+        fi
         if has_cmd ollama; then
             python3 "$REPO_ROOT/installers/lib/rag_pins.py" verify-models 2>/dev/null \
                 || warn "  a pinned Ollama model differs from its pin (see above), or Ollama is not running"

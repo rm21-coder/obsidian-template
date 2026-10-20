@@ -433,3 +433,41 @@ def test_an_update_reports_an_open_webui_container_off_its_pin(
     assert "== local RAG stack ==" in out, out
     assert "open-webui is not on the pinned image" in out
     assert "MUTATED" not in out
+
+
+def test_an_update_reports_an_open_webui_container_without_login_or_cors(
+        scratch, tmp_path, allow_subprocess):
+    """5268557 / N1: a container started with WEBUI_AUTH=false and no
+    CORS_ALLOW_ORIGIN is named, with the command that recreates it; nothing
+    is replaced."""
+    home, vault, la, env = scratch
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    (stubs / "launchctl").write_text("#!/bin/sh\nexit 0\n")
+    (stubs / "launchctl").chmod(0o755)
+    docker = stubs / "fake-docker"
+    docker.write_text(
+        '#!/bin/sh\n'
+        'case "$1" in\n'
+        '  ps) echo open-webui ;;\n'
+        '  port) echo 127.0.0.1:3000 ;;\n'
+        '  inspect) if [ "$3" = "--format" ]; then echo sha256:imageid; else\n'
+        '    echo \'[{"Config":{"Env":["OLLAMA_BASE_URL=http://host.docker.internal:11434","WEBUI_AUTH=false"]}}]\'; fi ;;\n'
+        '  image) echo "ghcr.io/open-webui/open-webui@sha256:' + "0" * 64 + '" ;;\n'
+        '  rm|run|pull) echo "MUTATED $*" ; exit 1 ;;\n'
+        'esac\n')
+    docker.chmod(0o755)
+    venv_py = vault / "Templates" / "Scripts" / ".venv" / "bin" / "python3"
+    venv_py.unlink()
+    venv_py.write_text('#!/bin/sh\nif [ "$1" = "-c" ]; then echo "arm64 13 gil"; exit 0; fi\n')
+    venv_py.chmod(0o755)
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=vault,
+                          capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--after-pull", "--from", head],
+                       capture_output=True, text=True,
+                       env={**env, "PATH": f"{stubs}:{env['PATH']}", "OBSIDIAN_DOCKER": str(docker)})
+    out = r.stdout + r.stderr
+    assert "open-webui: WEBUI_AUTH=false: no login" in out, out
+    assert "open-webui: CORS_ALLOW_ORIGIN is unset" in out
+    assert "fix with: docker rm -f open-webui && ./install.sh --only 50-llm-rag" in out
+    assert "MUTATED" not in out
