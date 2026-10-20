@@ -317,7 +317,7 @@ What leaves the machine, and where it goes:
 | Note text a detector cannot decide, never a note already restricted | `classify_notes.py` | model endpoint |
 | Dictation text, YouTube captions | `voice_cleanup.py`, `youtube_summarize.py` | model endpoint |
 | Calendar events | connector, read inside a Claude Code session | Anthropic; the transform runs locally |
-| Phone captures | signed, not encrypted, plain-text email | your mail provider, then IMAP to the machine |
+| Phone captures | signed, not encrypted, plain-text email | your mail provider, then IMAPS (certificate-verified TLS 1.2+) to the machine |
 | Podcast audio | fetched from the episode's host | transcribed locally |
 | Vault notes for chat | `obsidian-rag-sync.py` | Open WebUI and Ollama on localhost |
 | The vault folder, if you use Obsidian Sync | Obsidian's own sync | Obsidian's servers, end-to-end encrypted |
@@ -329,8 +329,10 @@ Everything else stays local. The usage log, logs, job state and security
 baselines sit outside the vault, so they never sync or appear in search.
 Fetches of untrusted URLs go through `url_safety.py`, which refuses loopback,
 link-local and private addresses and re-checks every redirect. Outside text
-passes through `templater_guard.neutralize()` before it is written into a
-note, so it cannot trigger plugin code.
+passes through `output_sanitizer` (remote images, HTML, non-web schemes,
+Mermaid) where the writer can carry them, and `templater_guard.neutralize()`,
+before it is written into a note, so it cannot load anything or trigger plugin
+code when the note opens.
 
 ## Configuration, secrets and state
 
@@ -458,8 +460,8 @@ push. See [`Drift-Review.md`](Drift-Review.md).
    `/usr/bin/python3`, keep it standard-library only and 3.9-compatible.
    Build model clients with `llm_endpoint.client()` and record usage with
    `usage_log.record()`. Fetch untrusted URLs through `url_safety.py`, pass
-   outside text through `templater_guard.neutralize()` before it reaches a
-   note, and take a `script_lock` if runs can overlap.
+   outside text through `output_sanitizer.sanitize_report()` and then
+   `templater_guard.neutralize()` before it reaches a note, and take a `script_lock` if runs can overlap.
 2. Add `Templates/Scripts/com.<name>.plist` with `YOUR_USERNAME` paths and a
    log under `~/Library/Logs/`.
 3. Add an entry to `windows/schedules.psd1`, with `TimeLimitMinutes` if it can

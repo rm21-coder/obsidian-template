@@ -160,6 +160,13 @@ what it loads.
 
 ### Outside text
 
+`output_sanitizer.sanitize_report()` runs first wherever outside text could
+load or act when a note opens: the weekly and monthly reports, drift-review
+task lines, converted documents, and the unmatched-meeting digest. It inserts
+a zero-width space into every remote-image opener, HTML tag opener, non-http(s)
+link scheme (entity and escape spellings included) and Mermaid block,
+everywhere including code. It parses no markdown.
+
 `templater_guard.neutralize()` is applied by every script that writes text
 from outside the vault into a note: meeting pre-population, clipping cleanup,
 document conversion, transcripts, YouTube summaries, and the report lines of
@@ -196,7 +203,9 @@ directory), `--permission-mode dontAsk`, `--allowedTools` naming exactly the
 two calendar tools, `--disallowedTools` removing every other built-in and the
 rest of the connector, and `--no-session-persistence`. The session only
 returns events as JSON against a schema; `meeting_pull.py` builds the
-transform's input itself. The stated residual is that the event-read tool
+transform's input itself, and checks each emitted event's id and
+cancellation flag against the calendar tools' own results: an event the tools
+did not return, or a repeated id, is dropped and reported. The stated residual is that the event-read tool
 takes a resource URI, so an injected instruction could have it read another
 item the connector exposes into the vault. The optional **email tasks** job
 runs the same confinement with the connector's mail search and item read as
@@ -239,6 +248,12 @@ that script compiles to. A drop in the vault's Markdown count of
 `max(50, 5%)` raises `BULK_DELETE`. A scope that cannot be scanned reports
 `SCAN_FAILED`, and `--update` then refuses rather than adopt an empty state.
 The integrity baseline itself is not signed; only file mode protects it.
+
+Both controls run from a copy installed in `~/.local/share/obsidian-security/bin`
+(Windows: `%LOCALAPPDATA%\obsidian-security\bin`) under `/usr/bin/python3 -I`
+(Windows: the base Python with `-I -S`), so nothing planted in the folder they
+watch runs inside them. The monitor reports `INSTALLED_COPY_MISMATCH` when a
+vault copy differs from the installed one.
 
 Both controls exit `2` until a baseline exists, so an unbaselined install
 shows as inactive rather than clean. The installer offers to record the
@@ -287,7 +302,12 @@ Open WebUI, which can hold the entire vault as a collection, is published as
 `127.0.0.1:3000:8080`; the macOS and Windows installers and `update.ps1`
 check an existing container's binding with `docker port` and recreate it on
 the same volume if it is published anywhere else, and the `dast` pass fails if
-it is not loopback-only.
+it is not loopback-only. Loopback is not a boundary against the operator's own
+browser: a web page can reach `127.0.0.1:3000`, by CORS or DNS rebinding. So
+the installers start Open WebUI with sign-in on (`WEBUI_AUTH`), CORS limited
+to the loopback origins, signup closed and the admin created headlessly, and
+the installers and updaters report an existing container that runs with
+sign-in off or a wildcard origin.
 
 The dashboard's `obsidian-dashboard://run/<action>` scheme can be fired by any
 web page, so its handlers accept exactly three actions (pull meetings, refresh
@@ -323,7 +343,13 @@ gates read the tier through one reader, `classification_tier.py`, where the
 most restrictive of repeated values wins.
 
 The RAG sync excludes `restricted` notes from the local index, deindexes a
-note later elevated to it, and excludes unknown tier values.
+note later elevated to it, and excludes unknown tier values and any note over
+the shared 1 MiB note read cap (`classification_tier.MAX_NOTE_BYTES`), which
+the classifier, taggers, strip-ads and dashboard also apply. The classifier
+reads a note's current tier with the same strict reader, refuses a note whose
+frontmatter PyYAML cannot parse or whose tier line is unreadable (nothing is
+sent, no baseline is written), and re-reads every write before it lands so a
+splice can never lower a tier.
 
 ### The public repository
 
@@ -452,8 +478,8 @@ vault note and reports outside the repository.
 Adopting a baseline is a deliberate act in a terminal, plugin check first:
 
 ```bash
-/usr/bin/python3 ~/Obsidian/Templates/Scripts/plugin_integrity_check.py --update
-/usr/bin/python3 ~/Obsidian/Templates/Scripts/integrity_monitor.py      --update
+/usr/bin/python3 -I ~/.local/share/obsidian-security/bin/plugin_integrity_check.py --update
+/usr/bin/python3 -I ~/.local/share/obsidian-security/bin/integrity_monitor.py      --update
 ```
 
 The question before adopting is whether you made the change. If you did,

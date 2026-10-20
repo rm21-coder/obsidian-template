@@ -73,11 +73,11 @@ cd ~/Obsidian && ./install.sh
 When it finishes, three one-time manual steps:
 
 1. **Launch Obsidian** (Spotlight: ⌘-Space → "Obsidian"), open `~/Obsidian` as a vault, click **Trust author and enable plugins**, then quit and reopen so hotkeys bind correctly.
-2. **Open WebUI setup at <http://localhost:3000>** — create an admin account, create a Knowledge collection named `Obsidian`, generate an API key in Settings → Account → API Keys, copy the collection UUID from the URL, then re-run `./install.sh --only 20-secrets --force` to store both: the API key goes into the Keychain, the collection ID into `~/dev/secrets/.env`.
+2. **Open WebUI setup at <http://localhost:3000>** — sign in as the admin the installer created (`admin@example.com`; copy the password with `python3 Templates/Scripts/secret_store.py get OPEN_WEBUI_ADMIN_PASSWORD | pbcopy`), create a Knowledge collection named `Obsidian`, generate an API key in Settings → Account → API Keys, copy the collection UUID from the URL, then re-run `./install.sh --only 20-secrets --force` to store both: the API key goes into the Keychain, the collection ID into `~/dev/secrets/.env`.
 3. **Establish the security baselines** (what each control does and how to respond to alerts: [`docs/Security-Harness.md`](docs/Security-Harness.md)):
    ```bash
-   /usr/bin/python3 ~/Obsidian/Templates/Scripts/plugin_integrity_check.py --update
-   /usr/bin/python3 ~/Obsidian/Templates/Scripts/integrity_monitor.py --update
+   /usr/bin/python3 -I ~/.local/share/obsidian-security/bin/plugin_integrity_check.py --update
+   /usr/bin/python3 -I ~/.local/share/obsidian-security/bin/integrity_monitor.py --update
    ```
 
 ### Common flags
