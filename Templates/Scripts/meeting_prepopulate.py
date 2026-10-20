@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import logging
 import logging.handlers
@@ -1672,6 +1673,11 @@ def harvest_learning(seen_state: dict, learned: dict, dry_run: bool,
     for entry in seen_state.values():
         if not entry.get('low_confidence'):
             continue
+        # The pipeline's own cancellation moves the note away; that is not
+        # the user deleting it, and must not suppress the subject for good
+        # (finding 5268417). A suppressed entry has already been learned.
+        if entry.get('status') in ('cancelled', 'suppressed'):
+            continue
         key = entry.get('block_key')
         if not key:
             continue
@@ -1900,12 +1906,14 @@ def _reschedule_banner(old_slot: str, new_slot: str, now_iso: str) -> str:
             f'{RESCHEDULE_FENCE_END}\n')
 
 
-def _inject_banner(body: str, banner: str) -> str:
-    """Replace an existing reschedule fence in body, else prepend a fresh one."""
-    if RESCHEDULE_FENCE_START in body and RESCHEDULE_FENCE_END in body:
+def _inject_banner(body: str, banner: str,
+                   start: str = RESCHEDULE_FENCE_START,
+                   end: str = RESCHEDULE_FENCE_END) -> str:
+    """Replace an existing fence (reschedule by default) in body, else
+    prepend a fresh one."""
+    if start in body and end in body:
         pat = re.compile(
-            re.escape(RESCHEDULE_FENCE_START) + r'.*?' +
-            re.escape(RESCHEDULE_FENCE_END) + r'\n?', re.DOTALL)
+            re.escape(start) + r'.*?' + re.escape(end) + r'\n?', re.DOTALL)
         return pat.sub(banner, body, count=1)
     stripped = body.lstrip('\n')
     lead = body[:len(body) - len(stripped)]
@@ -1976,12 +1984,18 @@ def apply_reschedule(prev: dict, start: dt.datetime, now_iso: str,
     new_path = meeting_filename(start, MEETINGS_DIR)
     new_slot = new_path.name[:-3]
 
+    untouched = _note_untouched(prev, text)
     fm, body = _split_frontmatter(text)
     if fm:
         fm = _fm_set_or_add(fm, 'updated', now_iso[:16])
         fm = _fm_set_or_add(fm, 'rescheduled_from', old_slot)
     body = _inject_banner(body, _reschedule_banner(old_slot, new_slot, now_iso))
     moved = fm + body
+    # The moved note is still the pipeline's own text only if the old one was.
+    if untouched:
+        prev['body_sha256'] = _body_digest(moved)
+    else:
+        prev.pop('body_sha256', None)
 
     log.info('  RESCHEDULED %s -> %s', old_slot, new_slot)
     changes.append(f'RESCHEDULED `{old_slot}` -> `{new_slot}`')
@@ -1993,28 +2007,148 @@ def apply_reschedule(prev: dict, start: dt.datetime, now_iso: str,
     return new_path
 
 
+def _body_digest(text: str) -> str:
+    """SHA-256 of a note's body, frontmatter excluded: Obsidian rewrites the
+    frontmatter of a note changed outside it, so only the body says whether
+    the user wrote anything."""
+    body = _split_frontmatter(text.replace('\r\n', '\n'))[1]
+    return hashlib.sha256(body.strip().encode('utf-8')).hexdigest()
+
+
+def _note_untouched(prev: dict, text: str) -> bool:
+    """True if the note's body is still exactly what this pipeline wrote.
+
+    Seen-state records the body digest of every write. An entry from before
+    that has none; render_meeting_file() always writes an empty body, so for
+    those an empty body is the pipeline's and anything else is the user's.
+    """
+    recorded = prev.get('body_sha256')
+    if recorded:
+        return _body_digest(text) == recorded
+    return not _split_frontmatter(text.replace('\r\n', '\n'))[1].strip()
+
+
+CANCEL_FENCE_START = '<!-- prepop:cancelled:start -->'
+CANCEL_FENCE_END = '<!-- prepop:cancelled:end -->'
+_CANCEL_TEXT = {
+    'cancelled': 'The organizer cancelled this meeting.',
+    'declined': 'You declined this meeting.',
+}
+
+
+def _cancel_banner(reason: str, now_iso: str) -> str:
+    # Fixed text only: nothing from the invite reaches the banner.
+    what = _CANCEL_TEXT.get(reason, _CANCEL_TEXT['cancelled'])
+    return (f'{CANCEL_FENCE_START}\n'
+            f'> [!warning] {reason.capitalize()}\n'
+            f'> {what} Kept because this note has your edits '
+            f'(noted {now_iso[:10]}); delete it yourself if you no longer '
+            f'need it.\n'
+            f'{CANCEL_FENCE_END}\n')
+
+
+def _vault_trash() -> Path:
+    """Obsidian's own trash folder: `.trash` beside Meetings/ (the vault root)."""
+    return MEETINGS_DIR.parent / '.trash'
+
+
+def _move_to_trash(p: Path) -> Path | None:
+    """Move `p` into the vault's .trash/, never overwriting a file already
+    there. Returns the new path, or None if the trash is unusable."""
+    trash = _vault_trash()
+    if trash.is_symlink() or (trash.exists() and not trash.is_dir()):
+        log.warning('  refusing %s as the trash folder: not a real directory', trash)
+        return None
+    trash.mkdir(parents=True, exist_ok=True)
+    dest = trash / p.name
+    n = 1
+    while dest.exists() or dest.is_symlink():
+        dest = trash / f'{p.stem} {n}{p.suffix}'
+        n += 1
+    shutil.move(str(p), str(dest))
+    return dest
+
+
 def delete_cancelled(prev: dict, reason: str, dry_run: bool,
-                     changes: list[str]) -> None:
-    """Delete an owned meeting note that has been cancelled/declined, plus any
-    redirect stub left over from a prior reschedule."""
+                     changes: list[str], now_iso: str | None = None) -> str:
+    """Retire an owned meeting note that has been cancelled/declined, plus any
+    redirect stub left over from a prior reschedule. Returns what was done:
+    'trashed', 'kept', or 'missing'.
+
+    Nothing is unlinked (finding 5277583): an organizer's cancellation is not
+    the user's decision, and Obsidian's File Recovery does not see external
+    deletes. A note whose body is still the pipeline's own goes to the vault
+    .trash/; one the user wrote in stays where it is, marked with a
+    `status:` line and a banner.
+    """
+    now_iso = now_iso or dt.datetime.now().astimezone().isoformat(timespec='seconds')
     fname = prev.get('filename') or ''
     p = _owned_note_path(fname)
-    if p:
-        log.info('  CANCELLED (%s) -> DELETE %s', reason, p.name)
-        changes.append(f'CANCELLED ({reason}) -> deleted `{p.name}`')
-        if not dry_run and p.exists():
-            p.unlink()
+    action = 'missing'
+    if p and p.exists():
+        try:
+            text = p.read_text(encoding='utf-8')
+        except OSError:
+            text = None
+        action = 'kept'
+        if text is not None and _note_untouched(prev, text):
+            if dry_run or _move_to_trash(p) is not None:
+                log.info('  CANCELLED (%s) -> TRASH %s', reason, p.name)
+                changes.append(f'CANCELLED ({reason}) -> moved `{p.name}` to .trash')
+                action = 'trashed'
+        if action == 'kept' and text is None:
+            log.warning('  CANCELLED (%s): %s unreadable, left alone', reason, p.name)
+        elif action == 'kept':
+            log.info('  CANCELLED (%s) -> KEEP %s (has user edits)', reason, p.name)
+            changes.append(f'CANCELLED ({reason}) -> kept `{p.name}` (has your edits)')
+            fm, body = _split_frontmatter(text)
+            if fm:
+                fm = _fm_set_or_add(fm, 'status', reason)
+                fm = _fm_set_or_add(fm, 'updated', now_iso[:16])
+            body = _inject_banner(body, _cancel_banner(reason, now_iso),
+                                  CANCEL_FENCE_START, CANCEL_FENCE_END)
+            if not dry_run:
+                p.write_text(fm + body, encoding='utf-8')
     orig = prev.get('rescheduled_from')
     if orig:
         stub = _owned_note_path(orig)
         if stub and stub.exists():
             try:
                 if 'type: redirect' in stub.read_text(encoding='utf-8'):
-                    log.info('  CANCELLED -> remove redirect stub %s.md', orig)
+                    log.info('  CANCELLED -> trash redirect stub %s.md', orig)
                     if not dry_run:
-                        stub.unlink()
+                        _move_to_trash(stub)
             except OSError:
                 pass
+    return action
+
+
+def restore_uncancelled(prev: dict, now_iso: str, dry_run: bool,
+                        changes: list[str]) -> bool:
+    """A meeting cancelled earlier is live again. If its note was kept (it
+    had the user's edits), take the banner and `status:` back out and resume
+    tracking it; returns False when there is no kept note to restore."""
+    if prev.get('cancel_action') != 'kept':
+        return False
+    p = _owned_note_path(prev.get('filename') or '')
+    if not p or not p.exists():
+        return False
+    try:
+        text = p.read_text(encoding='utf-8')
+    except OSError:
+        return False
+    fm, body = _split_frontmatter(text)
+    if fm:
+        fm = re.sub(r'(?m)^status: (?:cancelled|declined)\n', '', fm, count=1)
+        fm = _fm_set_or_add(fm, 'updated', now_iso[:16])
+    pat = re.compile(re.escape(CANCEL_FENCE_START) + r'.*?' +
+                     re.escape(CANCEL_FENCE_END) + r'\n?\n?', re.DOTALL)
+    body = pat.sub('', body, count=1)
+    log.info('  UN-CANCELLED -> restore %s', p.name)
+    changes.append(f'UN-CANCELLED -> restored `{p.name}`')
+    if not dry_run:
+        p.write_text(fm + body, encoding='utf-8')
+    return True
 
 
 def _is_cancelled(m: dict) -> tuple[bool, str]:
@@ -2121,15 +2255,23 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
             if prev and prev.get('status') == 'cancelled':
                 if cancelled:
                     continue                 # still cancelled, nothing to do
+                if restore_uncancelled(prev, now_iso, dry_run, changes):
+                    prev['status'] = 'active'
+                    prev.pop('cancel_action', None)
+                    prev['updated'] = now_iso
+                    counters['uncancelled-restored'] += 1
+                    continue
                 prev = None                  # un-cancelled -> recreate fresh
 
             # --- Owned, live note: handle cancellation / reschedule ---
             if prev:
                 if cancelled:
-                    delete_cancelled(prev, cancel_reason, dry_run, changes)
+                    action = delete_cancelled(prev, cancel_reason, dry_run,
+                                              changes, now_iso)
                     prev['status'] = 'cancelled'
+                    prev['cancel_action'] = action
                     prev['updated'] = now_iso
-                    counters[f'cancelled-{cancel_reason}-deleted'] += 1
+                    counters[f'cancelled-{cancel_reason}-{action}'] += 1
                     continue
 
                 try:
@@ -2237,9 +2379,10 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                      f', group=[[{group_stem}]]' if group_stem else '',
                      n_others,
                      ', NEEDS-ATTENDEES' if needs_attendees else '')
+            written = templater_guard.neutralize(content)
             if not dry_run:
                 MEETINGS_DIR.mkdir(parents=True, exist_ok=True)
-                path.write_text(templater_guard.neutralize(content), encoding='utf-8')
+                path.write_text(written, encoding='utf-8')
             counters['meeting-file-written'] += 1
 
             if uid:
@@ -2257,6 +2400,9 @@ def process_handoff(record: 'hs.HandoffRecord', source: 'hs.HandoffSource',
                     'low_confidence': needs_attendees,
                     'block_key': bkey,
                     'subject': m.get('subject') or '',
+                    # What a cancellation compares against to tell the
+                    # pipeline's text from the user's (finding 5277583).
+                    'body_sha256': _body_digest(written),
                 }
         except Exception as e:  # noqa: BLE001
             msg = f'Error processing meeting uid={(m.get("uid") or "")[:24]}: {e}'

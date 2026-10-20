@@ -245,7 +245,7 @@ def extract_requests(stdout: str, search_tool: str) -> dict:
     """The reply object, after the same checks meeting_pull.extract_events
     makes: the session had the search tool and completed a call to it, so an
     empty list means no requests, not a connector that never loaded."""
-    envelope, init, calls = mp._read_session(stdout)
+    envelope, init, calls, _facts = mp._read_session(stdout)
     if init is None:
         raise mp.ProducerOutputError("the CLI did not report its session")
     if envelope.get("is_error"):

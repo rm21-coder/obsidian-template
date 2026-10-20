@@ -254,7 +254,7 @@ every attendee email you want resolved to a rich People note.
 
   | the user does this | the pipeline learns |
   |---|---|
-  | deletes the generated note | suppress that subject from now on |
+  | deletes the generated note | suppress that subject from now on (a note the pipeline itself retired on a cancellation does not count) |
   | fills in `people:` | every later occurrence inherits those people |
 
   Rules are keyed on a normalized subject (`block_key()`), not the `uid`,
@@ -272,7 +272,16 @@ every attendee email you want resolved to a rich People note.
   a note for the meeting the user was sitting in.
 - **Reschedule / cancel.** Re-emitting the same `uid` at a new time moves the
   note (leaving a redirect stub so old wikilinks resolve) and drops a banner. A
-  cancelled or declined meeting removes the generated note.
+  cancelled or declined meeting never deletes anything. If the note's body is
+  still exactly what the pipeline wrote (seen-state records a SHA-256 of the
+  body at every write; frontmatter is excluded because Obsidian rewrites it),
+  the note and any redirect stub move to the vault's `.trash/` folder, where
+  Obsidian's own trash keeps them, with a ` 1`, ` 2`… suffix rather than
+  overwriting. If you wrote anything in it, the note stays where it is with
+  `status: cancelled` (or `declined`) in its frontmatter and a fixed-text
+  banner; if the meeting is later un-cancelled, the banner and status are
+  taken back out. Before 2026-10-20 the note was unlinked outright, prep
+  included (finding 5277583).
 - **Idempotence.** Every write is fenced with HTML comments and keyed by `uid`,
   so re-running over the same week does not duplicate content or clobber your
   hand-written notes.

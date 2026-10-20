@@ -157,11 +157,14 @@ def test_cancel_cannot_delete_outside_the_owned_note_shape(
     assert (meetings / "victim.md").exists(), "a non-pipeline note was deleted"
 
 
-def test_cancel_still_deletes_a_pipeline_owned_note(meetings: Path) -> None:
+def test_cancel_still_retires_a_pipeline_owned_note(meetings: Path) -> None:
+    # Retired to the vault trash, not unlinked (finding 5277583).
     owned = meetings / "2026-09-25 0900-2.md"
     owned.write_text("---\nclassification: confidential\n---\n")
-    mp.delete_cancelled({"filename": owned.name}, "cancelled", dry_run=False, changes=[])
+    assert mp.delete_cancelled({"filename": owned.name}, "cancelled",
+                               dry_run=False, changes=[]) == "trashed"
     assert not owned.exists()
+    assert (meetings.parent / ".trash" / owned.name).exists()
 
 
 def test_reschedule_cannot_overwrite_outside_meetings(meetings: Path, tmp_path: Path) -> None:

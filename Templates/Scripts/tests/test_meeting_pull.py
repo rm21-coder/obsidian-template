@@ -446,12 +446,29 @@ SEARCH = "mcp__claude_ai_Microsoft_365__outlook_calendar_search"
 READ = "mcp__claude_ai_Microsoft_365__read_resource"
 
 
+def _tool_events(events):
+    """What the calendar tools returned for `events`, as MCP text blocks: the
+    search's summary list, then read_resource's full object per event (the
+    shape the model is asked to copy). verify_events() checks emitted ids
+    against these (finding 5278615)."""
+    summary = [{"id": e.get("id"), "subject": e.get("subject"),
+                "start": e.get("start"), "isCancelled": e.get("isCancelled")}
+               for e in events]
+    return {SEARCH: [{"type": "text", "text": json.dumps({"events": summary})}],
+            READ: [{"type": "text", "text": json.dumps(e)} for e in events]}
+
+
 def _stream(events, *, tools=(SEARCH, READ), calls=(SEARCH, READ), servers=None,
-            body="agenda", errored=()) -> str:
+            body=None, errored=(), returned=None) -> str:
     """What `claude -p --output-format stream-json --verbose` prints: init,
-    the turns (tool calls and their results), then the result envelope."""
+    the turns (tool calls and their results), then the result envelope.
+
+    The tools return `returned` (default: `events`), so a test can make the
+    model emit something the calendar never said; `body` replaces every
+    tool result with that one string."""
     if servers is None:
         servers = [{"name": "claude.ai Microsoft 365", "status": "connected"}] if tools else []
+    results = _tool_events(events if returned is None else returned)
     lines = [{"type": "system", "subtype": "init",
               "tools": ["StructuredOutput", *tools], "mcp_servers": servers}]
     for n, name in enumerate(calls):
@@ -459,7 +476,8 @@ def _stream(events, *, tools=(SEARCH, READ), calls=(SEARCH, READ), servers=None,
             {"type": "tool_use", "id": "tu%d" % n, "name": name, "input": {}}]}})
         lines.append({"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": "tu%d" % n,
-             "is_error": name in errored, "content": body}]}})
+             "is_error": name in errored,
+             "content": body if body is not None else results.get(name, "")}]}})
     lines.append({"type": "assistant", "message": {"content": [
         {"type": "tool_use", "name": "StructuredOutput", "input": {"events": events}}]}})
     lines.append({"type": "result", "subtype": "success", "is_error": False,
@@ -673,3 +691,76 @@ def test_a_child_holding_the_pipes_cannot_outlast_the_kill(tmp_path: Path,
     with pytest.raises(sp.TimeoutExpired):
         mp.run_session([str(script)], "P", 0, 1, str(tmp_path))
     assert t.monotonic() - start < 15
+
+
+class TestEmittedEventsAreCheckedAgainstTheTools:
+    """Finding 5278615: ids and isCancelled came from the model's structured
+    output alone, so an injected invite body could aim a cancellation (which
+    retires a note) at another meeting's id."""
+
+    def test_an_id_the_tools_never_returned_is_dropped(self, capsys) -> None:
+        forged = dict(EVENT, id="victim-id", isCancelled=True)
+        rejected = []
+        out = mp.extract_events(_stream([EVENT, forged], returned=[EVENT]), SEARCH, rejected)
+        assert out == [EVENT]
+        assert rejected == ["'victim-id' (id not returned by the calendar tools)"]
+        assert ("WARNING: dropped event 'victim-id': its id is not in any calendar "
+                "tool result (possible prompt injection)") in capsys.readouterr().out
+
+    def test_the_tools_cancellation_flag_wins_over_the_models(self) -> None:
+        lie = dict(EVENT, isCancelled=True)
+        out = mp.extract_events(_stream([lie], returned=[EVENT]), SEARCH)
+        assert out[0]["isCancelled"] is False
+        assert out[0]["subject"] == EVENT["subject"]
+
+    def test_a_real_cancellation_still_comes_through(self) -> None:
+        cancelled = dict(EVENT, isCancelled=True)
+        assert mp.extract_events(_stream([cancelled]), SEARCH)[0]["isCancelled"] is True
+
+    def test_tools_that_disagree_resolve_to_not_cancelled(self) -> None:
+        facts = {}
+        mp._event_facts([{"type": "text", "text": json.dumps(dict(EVENT, isCancelled=True))}], facts)
+        mp._event_facts([{"type": "text", "text": json.dumps(EVENT)}], facts)
+        assert facts == {"e1": False}
+
+    def test_a_duplicate_id_is_dropped(self, capsys) -> None:
+        twin = dict(EVENT, subject="Budget review (copy)", isCancelled=True)
+        rejected = []
+        out = mp.extract_events(_stream([EVENT, twin], returned=[EVENT]), SEARCH, rejected)
+        assert out == [EVENT]
+        assert rejected == ["'e1' (duplicate id)"]
+        assert "WARNING: dropped event 'e1': the session emitted its id twice" in capsys.readouterr().out
+
+    def test_json_inside_an_invite_body_does_not_vouch_for_an_id(self) -> None:
+        body = json.dumps({"id": "victim-id", "subject": "x", "isCancelled": True})
+        carrier = dict(EVENT, bodyPreview=body)
+        forged = dict(EVENT, id="victim-id", isCancelled=True)
+        rejected = []
+        out = mp.extract_events(_stream([carrier, forged], returned=[carrier]), SEARCH, rejected)
+        assert [e["id"] for e in out] == ["e1"]
+        assert rejected == ["'victim-id' (id not returned by the calendar tools)"]
+
+    def test_tool_results_with_no_readable_ids_fail_loudly(self) -> None:
+        with pytest.raises(mp.ProducerOutputError,
+                           match=r"emitted 1 event\(s\) but no calendar tool result "
+                                 r"carried a readable event id"):
+            mp.extract_events(_stream([EVENT], body="plain text, not JSON"), SEARCH)
+
+    def test_an_mcp_resource_wrapper_is_read(self) -> None:
+        wrapped = [{"type": "text", "text": json.dumps(
+            {"contents": [{"uri": "x://e1", "text": json.dumps(EVENT)}]})}]
+        facts = {}
+        mp._event_facts(wrapped, facts)
+        assert facts == {"e1": False}
+
+    def test_the_drop_reaches_the_handoff_notes(self, tmp_path: Path,
+                                                monkeypatch: pytest.MonkeyPatch,
+                                                allow_subprocess) -> None:
+        fake, run, drop, _ = TestEndToEnd.env.__wrapped__(self, tmp_path, monkeypatch)
+        forged = dict(EVENT, id="victim-id", isCancelled=True)
+        assert run(fake(_stream([EVENT, forged], returned=[EVENT]))) == 0
+        payload = json.loads(next(drop.glob("schedule-handoff-*.v1.json")).read_text())
+        assert [m["uid"] for m in payload["meetings"]] == ["e1"]
+        texts = [n["text"] for n in payload["notes"] if n["level"] == "warning"]
+        assert any("dropped 1 event(s) the calendar tools did not return (possible "
+                   "prompt injection): 'victim-id'" in t for t in texts), texts

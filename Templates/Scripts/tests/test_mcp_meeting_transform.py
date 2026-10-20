@@ -110,3 +110,28 @@ def test_well_formed_day_is_unchanged():
     assert [c["email"] for c in payload["contacts"]] == [
         "ada@example.edu", "bob@example.edu"]
     assert [n["level"] for n in payload["notes"]] == ["info"]
+
+
+def test_a_repeated_uid_is_skipped(capsys):
+    """Finding 5278615: the consumer retires or moves a note by uid, so a
+    second event carrying a uid already in the handoff (an injected copy
+    flagged cancelled) must not reach it."""
+    twin = _bad(id="good-1", isCancelled=True)
+    payload = mt.build_handoff([copy.deepcopy(GOOD), twin], USER, WEEK, DOMAINS)
+
+    (meeting,) = payload["meetings"]
+    assert meeting["is_cancelled"] is False
+    assert _warning(payload) == ("Skipped 1 event(s) repeating a uid already in "
+                                 "this handoff: 'good-1'.")
+    assert "WARNING: skipped duplicate event 'good-1'" in capsys.readouterr().err
+    assert "eve@example.edu" not in {c["email"] for c in payload["contacts"]}
+
+
+def test_producer_rejections_become_a_warning_note():
+    payload = mt.build_handoff([copy.deepcopy(GOOD)], USER, WEEK, DOMAINS,
+                               rejected=["'victim-id' (id not returned by the calendar tools)"])
+
+    assert _warning(payload) == (
+        "The producer dropped 1 event(s) the calendar tools did not return "
+        "(possible prompt injection): 'victim-id' (id not returned by the "
+        "calendar tools).")

@@ -340,13 +340,16 @@ def _build_meeting(ev: dict, user_email: str, tenant_domains: frozenset,
 
 def build_handoff(events: list[dict], user: dict, week: dict,
                   tenant_domains: frozenset,
-                  excluded_attendees: frozenset = frozenset()) -> dict:
+                  excluded_attendees: frozenset = frozenset(),
+                  rejected: list[str] | None = None) -> dict:
     user_email = lc(user.get("email"))
     seen: dict[str, dict] = {}
     meetings = []
     excluded_mailboxes: dict[str, bool] = {}
     excluded_admins: dict[str, bool] = {}
     skipped: list[str] = []
+    uids: set = set()
+    duplicates: list[str] = []
 
     for i, ev in enumerate(events):
         # One malformed event (an injected invite can steer the session into
@@ -366,6 +369,16 @@ def build_handoff(events: list[dict], user: dict, week: dict,
                   f"({reason})", file=sys.stderr)
             skipped.append(f"{label} ({reason})")
             continue
+        # A second event with a uid already kept is dropped (finding 5278615):
+        # the consumer acts on a note by uid, so two events must not both
+        # steer one note.
+        if meeting["uid"] is not None and meeting["uid"] in uids:
+            label = repr(str(meeting["uid"])[:40])
+            print(f"[mcp-transform] WARNING: skipped duplicate event {label}",
+                  file=sys.stderr)
+            duplicates.append(label)
+            continue
+        uids.add(meeting["uid"])
         meetings.append(meeting)
         seen.update(new_contacts)
         excluded_mailboxes.update(mailboxes)
@@ -377,6 +390,15 @@ def build_handoff(events: list[dict], user: dict, week: dict,
         notes.append({"level": "warning",
                       "text": f"Skipped {len(skipped)} malformed event(s); the rest "
                               f"of the day was transformed: {'; '.join(skipped)}."})
+    if duplicates:
+        notes.append({"level": "warning",
+                      "text": f"Skipped {len(duplicates)} event(s) repeating a uid "
+                              f"already in this handoff: {'; '.join(duplicates)}."})
+    if rejected:
+        notes.append({"level": "warning",
+                      "text": f"The producer dropped {len(rejected)} event(s) the "
+                              f"calendar tools did not return (possible prompt "
+                              f"injection): {'; '.join(str(r)[:80] for r in rejected)}."})
     if excluded_mailboxes:
         names = ", ".join(sorted(excluded_mailboxes))
         notes.append({"level": "info",
@@ -446,8 +468,10 @@ def main() -> int:
     excluded_attendees = frozenset(
         e.strip().lower() for e in args.exclude_attendees.split(",") if e.strip())
 
+    rejected = raw.get("rejected")
     payload = build_handoff(raw["events"], raw["user"], raw["week"], tenant_domains,
-                            excluded_attendees=excluded_attendees)
+                            excluded_attendees=excluded_attendees,
+                            rejected=rejected if isinstance(rejected, list) else None)
 
     run_date = args.run_date or datetime.now().strftime("%Y-%m-%d")
     out_dir = args.out_dir.expanduser()

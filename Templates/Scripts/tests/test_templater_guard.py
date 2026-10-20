@@ -110,7 +110,12 @@ def test_every_writer_of_outside_text_applies_the_guard(script: str) -> None:
 def test_meeting_prepopulate_guards_every_new_note_it_writes() -> None:
     """New meeting notes, People stubs and series roots: three writes."""
     src = (SCRIPTS / "meeting_prepopulate.py").read_text(encoding="utf-8")
-    assert src.count("path.write_text(templater_guard.neutralize(content), encoding='utf-8')") == 3
+    direct = src.count("path.write_text(templater_guard.neutralize(content), encoding='utf-8')")
+    # The meeting-note write neutralizes first so the body hash (5277583)
+    # is taken over exactly what lands on disk.
+    hashed = src.count("written = templater_guard.neutralize(content)")
+    assert hashed == 1 and "path.write_text(written, encoding='utf-8')" in src
+    assert direct + hashed == 3
 
 
 # ---- plugin code triggers (2026-10-03) -------------------------------------

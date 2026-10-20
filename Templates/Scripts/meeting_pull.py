@@ -615,13 +615,62 @@ def search_tool_name(config):
     return allowed_tools(config).split()[0]
 
 
+_FACTS_MAX_DEPTH = 8
+
+
+def _event_facts(node, facts, depth=0):
+    """Record into `facts` (event id -> isCancelled bool, or None) every
+    event object found in one tool result.
+
+    Finding 5278615: the ids and flags the model emits must be checked
+    against what the calendar tools returned. An event object is a dict with
+    a string `id` and a `subject` or `start`. JSON carried in a string is
+    parsed only under a `text` key (MCP content blocks, resource contents),
+    never inside an event's own fields, so an invite body that is itself JSON
+    cannot vouch for an id.
+    """
+    if depth > _FACTS_MAX_DEPTH:
+        return
+    if isinstance(node, str):
+        if node.lstrip()[:1] in ("{", "["):
+            try:
+                node = json.loads(node, strict=False)
+            except ValueError:
+                return
+            _event_facts(node, facts, depth + 1)
+        return
+    if isinstance(node, list):
+        for item in node:
+            _event_facts(item, facts, depth + 1)
+        return
+    if not isinstance(node, dict):
+        return
+    ev_id = node.get("id")
+    if isinstance(ev_id, str) and ev_id and ("subject" in node or "start" in node):
+        flag = node.get("isCancelled")
+        if isinstance(flag, bool):
+            # Two results that disagree resolve to not-cancelled: a
+            # cancellation is the action that moves the note away.
+            prior = facts.get(ev_id)
+            facts[ev_id] = flag if prior is None else (prior and flag)
+        else:
+            facts.setdefault(ev_id, None)
+    for key, value in node.items():
+        if isinstance(value, (dict, list)):
+            _event_facts(value, facts, depth + 1)
+        elif key == "text" and isinstance(value, str):
+            _event_facts(value, facts, depth + 1)
+
+
 def _read_session(stdout):
-    """(envelope, init, calls) from the CLI's stdout.
+    """(envelope, init, calls, facts) from the CLI's stdout.
 
     stream-json prints one message per line: `init` (the tools and MCP
     servers the session actually has), then the turns, then the result
-    envelope. init and calls are None for a single `--output-format json`
-    envelope, which carries neither.
+    envelope. init, calls and facts are None for a single
+    `--output-format json` envelope, which carries none of them. facts maps
+    each event id the tools returned to its isCancelled flag (see
+    _event_facts).
     """
     try:
         # strict=False: event bodies carry tabs and other control characters,
@@ -631,10 +680,10 @@ def _read_session(stdout):
     except ValueError:
         whole = None
     if isinstance(whole, dict) and whole.get("type") not in ("system", "assistant", "user"):
-        return whole, None, None           # one --output-format json envelope
+        return whole, None, None, None     # one --output-format json envelope
     if whole is not None and not isinstance(whole, dict):
         raise ProducerOutputError("CLI output was not a JSON object")
-    envelope, init, calls = None, None, {}
+    envelope, init, calls, facts = None, None, {}, {}
     pending = {}           # tool_use id -> tool name, until its result arrives
     # split("\n"), not splitlines(): that also splits on U+2028, U+0085 and
     # other separators the CLI writes unescaped inside a meeting body, which
@@ -664,12 +713,13 @@ def _read_session(stdout):
                     name = pending.pop(block.get("tool_use_id"), None)
                     if name and not block.get("is_error"):
                         calls[name] = calls.get(name, 0) + 1
+                        _event_facts(block.get("content"), facts)
         elif kind == "result":
             envelope = msg
     if envelope is None:
         raise ProducerOutputError("CLI output was not the JSON envelope or message "
                                   "stream --output-format promises")
-    return envelope, init, calls
+    return envelope, init, calls, facts
 
 
 def _servers(init):
@@ -686,7 +736,37 @@ def _connected(init):
         isinstance(s, dict) and s.get("status") == "connected" for s in servers)
 
 
-def extract_events(stdout, search_tool=None):
+def verify_events(events, facts, rejected):
+    """The emitted events the calendar tools vouch for (finding 5278615).
+
+    An event whose id no tool result carried is dropped, as is a second
+    event with an id already kept: either is what an injected invite body
+    steering the session would produce, and an id is what the consumer
+    deletes or moves a note by. isCancelled is taken from the tool result
+    when the tool reported it. Each drop is appended to `rejected` as a
+    short label (the id, never the body).
+    """
+    kept, ids = [], set()
+    for i, ev in enumerate(events):
+        ev_id = ev.get("id")
+        label = repr(str(ev_id)[:40]) if ev_id is not None else "#%d" % i
+        if not isinstance(ev_id, str) or ev_id not in facts:
+            log("WARNING: dropped event %s: its id is not in any calendar tool "
+                "result (possible prompt injection)" % label)
+            rejected.append("%s (id not returned by the calendar tools)" % label)
+            continue
+        if ev_id in ids:
+            log("WARNING: dropped event %s: the session emitted its id twice" % label)
+            rejected.append("%s (duplicate id)" % label)
+            continue
+        ids.add(ev_id)
+        if facts[ev_id] is not None and ev.get("isCancelled") != facts[ev_id]:
+            ev = dict(ev, isCancelled=facts[ev_id])
+        kept.append(ev)
+    return kept
+
+
+def extract_events(stdout, search_tool=None, rejected=None):
     """Return the events list from `claude -p --output-format stream-json`
     stdout (a single `json` envelope is accepted too).
 
@@ -702,7 +782,7 @@ def extract_events(stdout, search_tool=None):
     Monday with eleven meetings. The tool list and the calls are facts the
     CLI reports; the model's own account of what it did is not used.
     """
-    envelope, init, calls = _read_session(stdout)
+    envelope, init, calls, facts = _read_session(stdout)
     if search_tool and init is None:
         # Requested stream-json and got a bare envelope: the checks below
         # would have nothing to check, which is how the failure passed.
@@ -749,6 +829,16 @@ def extract_events(stdout, search_tool=None):
     events = obj.get("events")
     if not isinstance(events, list) or not all(isinstance(e, dict) for e in events):
         raise ProducerOutputError("the reply had no 'events' list of objects")
+    if search_tool and facts is not None:
+        if events and not facts:
+            # Fail loudly rather than drop the day: a connector whose output
+            # shape changed would otherwise look like an empty calendar.
+            raise ProducerOutputError(
+                "the session emitted %d event(s) but no calendar tool result "
+                "carried a readable event id, so none can be verified "
+                "(finding 5278615; has the connector's output shape changed?)"
+                % len(events))
+        events = verify_events(events, facts, rejected if rejected is not None else [])
     return events
 
 
@@ -764,7 +854,7 @@ def failure_text(stdout, stderr):
     stdout, stderr = text(stdout), text(stderr)
     parts = [stderr]
     try:
-        envelope, _init, _calls = _read_session(stdout)
+        envelope, _init, _calls, _facts = _read_session(stdout)
         result = envelope.get("result")
         if isinstance(result, str) and not result.lstrip().startswith(("{", "[")):
             parts.append(result)
@@ -775,13 +865,16 @@ def failure_text(stdout, stderr):
     return "\n".join(p for p in parts if p.strip())
 
 
-def build_calendar(config, events):
-    """The transform's input: user and week from config, events from the model."""
+def build_calendar(config, events, rejected=()):
+    """The transform's input: user and week from config, events from the
+    model, and the labels of events verify_events() dropped (the transform
+    files them as a handoff warning note)."""
     _after, _before, week_start, week_end = window_bounds(config)
     return {
         "user": {k: config[k] for k in ("display_name", "email", "tenant", "timezone")},
         "week": {"start": week_start, "end": week_end},
         "events": events,
+        "rejected": list(rejected),
     }
 
 
@@ -999,8 +1092,10 @@ def main():
             # The session returned; now this script does what the session used
             # to do with Bash and Write. Its reply is NOT echoed to the log:
             # it contains every meeting body.
+            rejected = []
             try:
-                events = extract_events(completed.stdout or "", search_tool_name(config))
+                events = extract_events(completed.stdout or "", search_tool_name(config),
+                                        rejected)
             except ProducerOutputError as exc:
                 log("the session returned no usable calendar: %s" % exc)
                 if attempt < attempts:
@@ -1008,7 +1103,7 @@ def main():
                     time.sleep(args.retry_delay)
                 continue
             log("session returned %d event(s); running the transform" % len(events))
-            rc, out = run_transform(build_calendar(config, events), out_dir,
+            rc, out = run_transform(build_calendar(config, events, rejected), out_dir,
                                     tenant_domains(config, config_path))
             if out.strip():
                 print(out.rstrip(), flush=True)

@@ -282,6 +282,24 @@ would land in your own vault, not leave the machine, and the classification
 and export controls still apply — a far smaller problem than the shell the
 session used to have, but not zero.
 
+The events themselves are the model's output, so they are checked against
+what the calendar tools actually returned before the transform sees them
+(finding 5278615). `meeting_pull.py` reads every successful tool result in
+the session's stream and collects the event objects in it (a dict with a
+string `id` and a `subject` or `start`; JSON inside a string is parsed only
+under a `text` key, so an invite body that is itself JSON vouches for
+nothing). An emitted event whose `id` no tool returned is dropped, as is a
+second event repeating an `id`, and `isCancelled` is taken from the tool
+result, not the model, whenever the tool reported it (two results that
+disagree count as not cancelled). Each drop is logged as `WARNING: dropped
+event '<id>'…` and filed in the handoff's `notes[]` as a warning, which the
+consumer logs. The transform also skips a repeated `uid` on its own. If the
+session emitted events but no tool result carried a readable id at all, the
+pull fails with "no calendar tool result carried a readable event id" rather
+than writing a day it cannot verify: that is what a change in the
+connector's output shape looks like, and it needs `_event_facts()` adjusting,
+not a retry.
+
 Until 2026-09-25 the session was granted `Bash` and `Write` so it could save the
 file and run the transform itself. That made a crafted invite a
 prompt-injection path to a shell running as you, at 05:00, unattended.
