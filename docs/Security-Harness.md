@@ -170,6 +170,53 @@ Both are wired as LaunchAgents (`com.obsidian.security.plugin-check`,
 via `/usr/bin/python3` so they keep working even if the per-vault virtualenv is
 broken.
 
+### The controls run an installed copy, isolated
+
+The agents do not run the scripts in `Templates/Scripts/`. They run a copy of
+`integrity_monitor.py`, `plugin_integrity_check.py` and `security_common.py`
+installed in `~/.local/share/obsidian-security/bin/` (a `0700` folder, files
+`0600`, outside the vault and every sync), as
+`/usr/bin/python3 -I <that folder>/integrity_monitor.py`. Run from the vault,
+the integrity monitor imported whatever was planted in the folder it watches:
+a `json.py` beside the scripts shadowed the standard library inside the
+control, and the folder's own `WatchPaths` started that run within 30 seconds
+of the plant (finding 5278112). `-I` keeps the script's folder, the current
+directory, `PYTHON*` variables and the user site off `sys.path`; each control
+then appends its own folder, after the standard library, to find
+`security_common`. (Apple's Python 3.9 has no `-P`, and `-I` alone would lose
+that import.)
+
+The copy lives in a `bin/` folder inside the state directory: that directory is
+already owner-only, outside the vault and outside iCloud/OneDrive, and removed
+by the uninstaller, while the subfolder keeps code away from the `*.json` trust
+anchors the `state_dir` scope reads.
+
+Component `49-security-controls` installs the copy and `./update.sh` refreshes
+it before reloading any agent; by hand:
+
+```bash
+/usr/bin/python3 -I ~/Obsidian/Templates/Scripts/security_common.py install-controls ~/Obsidian/Templates/Scripts
+```
+
+That copies each file, checks the copy against what was read, and fails
+otherwise. The vault copies stay, and are still hashed as scripts. Run as the
+installed copy, the integrity monitor also reports `INSTALLED_COPY_MISMATCH`
+for each one that differs from its installed twin, so an edit to a vault copy
+shows up even though no job runs it, and so does a copy left stale by a
+deploy that skipped the step above.
+
+On Windows the copy is `%LOCALAPPDATA%\obsidian-security\bin\`, and also holds
+`run_logged.py`, `job_boot.py`, `script_lock.py` and
+`windows\Send-Notification.ps1`, since every task starts through the runner.
+The two tasks run the base interpreter the venv was built from (its
+`pyvenv.cfg` `home`), never the venv inside the vault, with `-I -S`;
+`Register-Tasks.ps1` installs the copy before registering them.
+
+This raises the bar, not a boundary: code already running as you can still
+write to `bin/`. What it removes is the cheap path, a file dropped into the
+watched folder by anything that can write the vault (a plugin, a sync peer),
+running inside the check meant to report it.
+
 ### What the integrity monitor covers
 
 Each scope is hashed and compared with the baseline:
@@ -205,9 +252,11 @@ Each scope is hashed and compared with the baseline:
 
 **Bytecode** needs no baseline. Every cached `.pyc` of the scripts that an
 interpreter would load instead of the source must be exactly what that source
-compiles to. That includes Apple's `/usr/bin/python3`, which runs the security
-controls and keeps its cache in `~/Library/Caches/com.apple.python`; every
-`.pyc` there is checked, the standard library's included. A stale
+compiles to. That includes Apple's `/usr/bin/python3`, which runs most jobs
+and keeps its cache in `~/Library/Caches/com.apple.python`; every
+`.pyc` there is checked, the standard library's included. (Under `-I` that
+interpreter does not use the prefix, so the controls themselves do not load
+from it; the monitor checks the tree by its default path anyway.) A stale
 `.pyc` doesn't count, since Python recompiles it; one for another Python
 version is ignored by the interpreter that runs the job. The venv's cache is
 checked by the venv's own interpreter, in a child process whose own imports
@@ -243,11 +292,12 @@ watched, by decision:
 - **`CLAUDE.md` in a parent of the meeting pull's temporary working
   directory**, and `~/.claude/rules`.
 - **Bytecode for a Python version that runs no job**, such as a Homebrew
-  `python3` used by hand. Run the controls with `/usr/bin/python3`, as shown
-  above.
-- **On Windows**, the secrets file's ACL is not checked, and when the monitor
-  runs under the venv interpreter it checks that interpreter's cache in
-  process.
+  `python3` used by hand. Run the controls with `/usr/bin/python3 -I`, from
+  the installed copy, as shown above.
+- **The installed copy's own folder and bytecode** (`bin/`, `bin/__pycache__`)
+  are not hashed; the copy is compared with the vault's instead. Something able
+  to rewrite both, as you, is the EDR's to catch.
+- **On Windows**, the secrets file's ACL is not checked.
 
 ## Where alerts go
 
@@ -285,9 +335,12 @@ otherwise, or after `--auto` / `-NonInteractive`, set them yourself, plugin
 allowlist first:
 
 ```bash
-/usr/bin/python3 ~/Obsidian/Templates/Scripts/plugin_integrity_check.py --update
-/usr/bin/python3 ~/Obsidian/Templates/Scripts/integrity_monitor.py      --update
+/usr/bin/python3 -I ~/.local/share/obsidian-security/bin/plugin_integrity_check.py --update
+/usr/bin/python3 -I ~/.local/share/obsidian-security/bin/integrity_monitor.py      --update
 ```
+
+(On Windows: `<base python.exe> -I -S %LOCALAPPDATA%\obsidian-security\bin\<script> --update`;
+`install.ps1` prints the exact command.)
 
 - The plugin allowlist lives at `~/.local/share/obsidian-security/plugin_allowlist.json`
   and is **HMAC-signed** with a random key stored in your macOS Keychain (service
@@ -305,7 +358,13 @@ allowlist first:
     switch, which would expose the vault's search index on the network; each
     as "set or not" plus a hash of its value (`SETTINGS_CHANGE`);
   - a hash of every script and template those settings point to, including
-    Templater's templates folder (`(referenced) …`);
+    Templater's templates folder (`(referenced) …`). Because whoever can
+    write a settings file chooses that list, it is bounded (finding
+    5277580): each file once, at most 2,000 files, 8 MB per file, 64 MB in
+    all and 20 seconds per plugin. A name with `..`, a drive or an absolute
+    path is not followed. A file left unhashed is reported on every run
+    (`REFERENCE_SKIPPED`, or `REFERENCE_LIMIT` when the budget ran out), never
+    adopted into the baseline;
   - any other dot-folder at the vault root that holds Obsidian configuration:
     Obsidian can be pointed at one from outside the vault (`NEW Obsidian config
     folder`).
@@ -332,18 +391,24 @@ Finding kinds you'll see:
 
 - **Plugin:** `NEW`, `REMOVED`, `VERSION_CHANGE`, `BUNDLE_CHANGE`,
   `MANIFEST_DRIFT`, `ENABLED_CHANGE`, `SETTINGS_CHANGE`, `REFERENCE_LIMIT`,
-  `NOT_BASELINED`, `ALLOWLIST_TAMPER`, and `CONTROL_ERROR`.
+  `REFERENCE_SKIPPED`, `NOT_BASELINED`, `ALLOWLIST_TAMPER`, and `CONTROL_ERROR`.
   `BUNDLE_CHANGE` means a plugin's `main.js` changed **without a version bump** —
   the strongest supply-chain signal; investigate before adopting.
   `MANIFEST_DRIFT` is the same for `manifest.json`. `REFERENCE_LIMIT` means a
   plugin's settings point to more scripts and templates than the check will
-  hash, so not all of them are watched.
+  hash, so not all of them are watched; `REFERENCE_SKIPPED` names files it
+  would not read (outside the vault, or over 8 MB).
 - **Workflow:** `NEW_FILE`, `CONTENT_CHANGE`, `DELETED`, and `BULK_DELETE`
   (vault Markdown count dropped by at least `max(50, 5%)`); `SCAN_FAILED`
   when the Windows scheduled-task scan could not run; `PERMISSIONS` when the
   secrets file is group- or world-readable; `BYTECODE_MISMATCH` /
   `BYTECODE_UNCHECKED` for a cached `.pyc` that does not match its source or
-  could not be checked; `NOT_BASELINED` for a scope added after the baseline.
+  could not be checked; `NOT_BASELINED` for a scope added after the baseline;
+  `INSTALLED_COPY_MISMATCH` when a vault copy of a control differs from the
+  installed copy the agent runs (reinstall the copy once the change is yours);
+  and `CONTROL_ERROR` (exit 3) when the check itself failed, for example on a
+  settings file nested too deep to parse, which is otherwise recorded as
+  unreadable drift (finding 5278113).
 
 ## Manual / on-demand use
 
@@ -371,7 +436,7 @@ Run any control by hand. Useful flags:
   against live state destroys it permanently.
 
   ```bash
-  OBSIDIAN_SECURITY_STATE_DIR=/tmp/sandbox /usr/bin/python3 integrity_monitor.py --update
+  OBSIDIAN_SECURITY_STATE_DIR=/tmp/sandbox /usr/bin/python3 -I integrity_monitor.py --update
   ```
 
   The scheduled jobs never see this: neither plist declares
@@ -385,7 +450,8 @@ Run any control by hand. Useful flags:
 ## Customization
 
 - **Non-default vault name/location:** pass `--vault` (and `--scripts-dir` /
-  `--launchagents-dir`) and adjust the paths in the two plists.
+  `--launchagents-dir`) and adjust the paths in the two plists. The installed
+  copy compares itself with `--scripts-dir`.
 - **Silence a noisy auto-updater** in the workflow monitor: add its plist
   filename to `CONTENT_CHANGE_IGNORE` in `integrity_monitor.py` (it ships with
   `com.adobe.ccxprocess.plist` as an example; add your own vendor updaters).
@@ -429,7 +495,8 @@ built only from the hash-checked `requirements-dev.lock`.
 
 `./uninstall.sh` unloads both security agents, with every other LaunchAgent
 the installer loaded (and the retired process-audit agent, if an older install
-left one), and (by default) removes the security state directory.
+left one), and (by default) removes the security state directory; the
+installed copy of the controls in its `bin/` goes even when you keep the state.
 `./uninstall.sh --newsyslog` also removes the sudo-installed log rotation
 config at `/etc/newsyslog.d/obsidian-security.conf`, and `--secrets` removes
 the Keychain HMAC key (`obsidian-allowlist-hmac`).

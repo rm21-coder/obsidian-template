@@ -180,9 +180,14 @@ Write-Host ''
 Write-Host '== integrity monitor =='
 # --json only reads: no notification, no alert record. It also reports a
 # missing baseline itself, so this does not have to know where state lives.
-$monitor = Join-Path $scriptsDir 'integrity_monitor.py'
+# The installed copy, as the task runs it (finding 5278112); Register-Tasks
+# refreshed it in step 3.
+$monitor = Join-Path (Get-ControlsDir) 'integrity_monitor.py'
+$controlPy = $null
+try { $controlPy = Get-ControlPython } catch { }
+$json = $null
 $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-try { $json = & $venvPy $monitor --json 2>$null }
+try { if ($controlPy) { $json = & $controlPy -I -S $monitor --json 2>$null } }
 finally { $ErrorActionPreference = $prevEAP }
 $status = 'unreadable'
 try { $status = ($json | Out-String | ConvertFrom-Json).status } catch { }
@@ -194,7 +199,7 @@ if ($status -eq 'ok') {
 } else {
     Write-Host "  Status: $status. The update changed watched files, so this is expected." -ForegroundColor Yellow
     Write-Host '  Before adopting it, confirm every finding is part of this update:'
-    Write-Host "    findings:  & `"$venvPy`" `"$monitor`" --json"
+    Write-Host "    findings:  & `"$controlPy`" -I -S `"$monitor`" --json"
     Write-Host "    the diff:  git -C `"$vault`" diff --name-status $From $to"
     # Every file scope, not just scripts: a pull also changes templates and the
     # vault's CLAUDE.md (agent_config), and a rule naming only scripts and
@@ -204,10 +209,11 @@ if ($status -eq 'ok') {
     Write-Host '  or if you rebuilt the venv with install.ps1 since the last baseline and'
     Write-Host '  `.venv\Scripts\python.exe -m pip check` is clean.'
     Write-Host '  Task findings must be \Obsidian\ tasks. Any state_dir, secrets, PERMISSIONS or'
-    Write-Host '  BULK_DELETE finding is NOT the update -- except state_dir plugin_allowlist.json'
+    Write-Host '  BULK_DELETE finding is NOT the update, nor is INSTALLED_COPY_MISMATCH (the update'
+    Write-Host '  refreshed the installed controls) -- except state_dir plugin_allowlist.json'
     Write-Host '  if you re-vetted plugins (plugin_integrity_check.py --update) since the last'
     Write-Host '  baseline. Only then adopt it with:'
-    Write-Host "    & `"$venvPy`" `"$monitor`" --update"
+    Write-Host "    & `"$controlPy`" -I -S `"$monitor`" --update"
 }
 
 Write-Host ''

@@ -320,6 +320,51 @@ def test_an_update_rewrites_only_the_changed_job_and_keeps_the_old_copy(
 
 
 @macos_only
+def test_an_update_installs_the_security_controls_before_reloading_their_agent(
+        scratch, tmp_path, allow_subprocess):
+    """5278112: the security agents run an installed copy outside the vault.
+    An update refreshes it from the pulled scripts, then reloads the agent that
+    names it, and reports from that copy."""
+    home, vault, la, env = scratch
+    scripts = vault / "Templates" / "Scripts"
+    for name in ("integrity_monitor.py", "plugin_integrity_check.py", "security_common.py"):
+        shutil.copy2(REPO / "Templates" / "Scripts" / name, scripts / name)
+    old = _render("com.obsidian.security.integrity").replace(
+        "/Users/tester/.local/share/obsidian-security/bin/", "/Users/tester/Obsidian/Templates/Scripts/")
+    (la / "com.obsidian.security.integrity.plist").write_text(old, encoding="utf-8")
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    calls = tmp_path / "calls.log"
+    (stubs / "launchctl").write_text(f'#!/bin/sh\necho "launchctl $*" >> "{calls}"\n')
+    (stubs / "launchctl").chmod(0o755)
+    venv_py = scripts / ".venv" / "bin" / "python3"
+    venv_py.unlink()
+    venv_py.write_text('#!/bin/sh\nif [ "$1" = "-c" ]; then echo "arm64 13 gil"; exit 0; fi\n')
+    venv_py.chmod(0o755)
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=vault,
+                          capture_output=True, text=True).stdout.strip()
+
+    dry = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--dry-run"],
+                         capture_output=True, text=True, env=env)
+    assert "would refresh the installed security controls in" in dry.stdout + dry.stderr
+    bin_dir = home / ".local" / "share" / "obsidian-security" / "bin"
+    assert not bin_dir.exists(), "a dry run installed the controls"
+
+    r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--after-pull", "--from", head],
+                       capture_output=True, text=True, env={**env, "PATH": f"{stubs}:{env['PATH']}"})
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    for name in ("integrity_monitor.py", "plugin_integrity_check.py", "security_common.py"):
+        assert (bin_dir / name).read_bytes() == (scripts / name).read_bytes()
+    assert (bin_dir.stat().st_mode & 0o777) == 0o700
+    assert out.index("security controls installed in") < out.index(
+        "com.obsidian.security.integrity: updated and reloaded")
+    assert (la / "com.obsidian.security.integrity.plist").read_text(encoding="utf-8") == \
+        _render("com.obsidian.security.integrity")
+    assert "integrity monitor: no baseline" in out, out
+
+
+@macos_only
 @pytest.mark.parametrize("plugins_fail", [False, True])
 def test_a_plugin_reinstall_always_patches_and_retires_and_a_failure_ends_incomplete(
         scratch, tmp_path, plugins_fail, allow_subprocess):

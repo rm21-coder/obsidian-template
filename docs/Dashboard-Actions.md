@@ -127,8 +127,8 @@ Adopting a baseline is a deliberate act. Run it in a terminal, in this order
 hashes):
 
 ```bash
-/usr/bin/python3 ~/Obsidian/Templates/Scripts/plugin_integrity_check.py --update
-/usr/bin/python3 ~/Obsidian/Templates/Scripts/integrity_monitor.py --update
+/usr/bin/python3 -I ~/.local/share/obsidian-security/bin/plugin_integrity_check.py --update
+/usr/bin/python3 -I ~/.local/share/obsidian-security/bin/integrity_monitor.py --update
 ```
 
 The dispatcher now refuses the action, so an old bookmark or a hostile page

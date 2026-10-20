@@ -574,3 +574,96 @@ class TestKeychainCallsAreBounded:
 
         monkeypatch.setattr(sc.subprocess, "run", fake_run)
         assert sc._keychain_get_or_create("svc", "acct") == bytes.fromhex(key)
+
+
+# ---------------------------------------------------------------------------
+# install_controls (finding 5278112)
+# ---------------------------------------------------------------------------
+
+from platform_caps import requires_symlinks  # noqa: E402
+
+SCRIPTS = Path(sc.__file__).resolve().parent
+
+
+class TestInstallControls:
+    def _src(self, tmp_path: Path) -> Path:
+        src = tmp_path / "Scripts"
+        (src / "windows").mkdir(parents=True)
+        for rel in sc.CONTROL_FILES + sc.CONTROL_FILES_WINDOWS:
+            (src / rel).write_bytes((SCRIPTS / rel).read_bytes())
+        return src
+
+    def test_it_copies_each_control_owner_only_and_drops_old_bytecode(self, tmp_path) -> None:
+        src, dest = self._src(tmp_path), tmp_path / "state" / "bin"
+        (dest / "__pycache__").mkdir(parents=True)
+        (dest / "__pycache__" / "security_common.cpython-39.pyc").write_bytes(b"stale")
+        assert sc.install_controls(src, dest) == list(sc.control_files())
+        for rel in sc.control_files():
+            assert (dest / rel).read_bytes() == (src / rel).read_bytes()
+        assert not (dest / "__pycache__").exists()
+        if os.name == "posix":
+            assert (dest.stat().st_mode & 0o777) == 0o700
+            assert all((dest / rel).stat().st_mode & 0o777 == 0o600 for rel in sc.control_files())
+
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX modes")
+    def test_a_state_dir_it_creates_is_owner_only(self, tmp_path) -> None:
+        dest = tmp_path / "state" / "bin"
+        sc.install_controls(self._src(tmp_path), dest)
+        assert (dest.parent.stat().st_mode & 0o777) == 0o700
+
+    def test_windows_installs_the_runner_chain_too(self, monkeypatch) -> None:
+        monkeypatch.setattr(sc.sys, "platform", "win32")
+        files = sc.control_files()
+        assert {"run_logged.py", "job_boot.py", "script_lock.py",
+                "windows/Send-Notification.ps1"} <= set(files)
+
+    def test_the_runner_chain_imports_nothing_else_from_its_folder(self) -> None:
+        """A sibling the installed run_logged imports but that is not installed
+        would be loaded from... nowhere, and the task would fail. Pin the set."""
+        import ast
+        local = {p.stem for p in SCRIPTS.glob("*.py")}
+        for rel in sc.CONTROL_FILES + sc.CONTROL_FILES_WINDOWS:
+            if not rel.endswith(".py"):
+                continue
+            tree = ast.parse((SCRIPTS / rel).read_text(encoding="utf-8"))
+            names = {a.name.split(".")[0] for n in ast.walk(tree) if isinstance(n, ast.Import)
+                     for a in n.names}
+            names |= {n.module.split(".")[0] for n in ast.walk(tree)
+                      if isinstance(n, ast.ImportFrom) and n.module}
+            installed = {Path(r).stem for r in sc.CONTROL_FILES + sc.CONTROL_FILES_WINDOWS}
+            assert (names & local) <= installed, (rel, sorted((names & local) - installed))
+
+    @requires_symlinks
+    def test_a_symlinked_source_is_refused(self, tmp_path) -> None:
+        src = self._src(tmp_path)
+        (src / "security_common.py").unlink()
+        (src / "security_common.py").symlink_to(tmp_path / "elsewhere.py")
+        (tmp_path / "elsewhere.py").write_text("x = 1\n")
+        with pytest.raises(ValueError, match="security_common.py is not a regular file"):
+            sc.install_controls(src, tmp_path / "bin")
+        assert not (tmp_path / "bin").exists()
+
+    @requires_symlinks
+    def test_a_symlinked_destination_is_refused(self, tmp_path) -> None:
+        src = self._src(tmp_path)
+        (tmp_path / "real").mkdir()
+        (tmp_path / "bin").symlink_to(tmp_path / "real", target_is_directory=True)
+        with pytest.raises(ValueError, match="is not a directory"):
+            sc.install_controls(src, tmp_path / "bin")
+        assert list((tmp_path / "real").iterdir()) == []
+
+    def test_the_cli_fails_loudly_on_a_missing_source(self, tmp_path, capsys) -> None:
+        assert sc._cli(["install-controls", str(tmp_path / "nowhere"), str(tmp_path / "bin")]) == 1
+        assert "[install-controls] FAILED:" in capsys.readouterr().err
+
+    def test_the_cli_installs(self, tmp_path, capsys) -> None:
+        src = self._src(tmp_path)
+        assert sc._cli(["install-controls", str(src), str(tmp_path / "bin")]) == 0
+        assert "installed 3 files into" in capsys.readouterr().out or sys.platform == "win32"
+
+    def test_the_installed_copy_is_recognised_with_or_without_the_override(
+            self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setenv(sc.STATE_DIR_ENV, str(tmp_path / "sandbox"))
+        assert sc.is_installed_copy(tmp_path / "sandbox" / "bin")
+        assert sc.is_installed_copy(sc.default_state_dir() / "bin")
+        assert not sc.is_installed_copy(SCRIPTS)

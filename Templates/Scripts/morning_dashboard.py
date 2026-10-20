@@ -704,13 +704,13 @@ PIPELINE_HINTS = {
     "com.obsidian.security.integrity": (
         "Exits non-zero when it detects file drift -- usually your own recent "
         "script edits. Review the alert in {log}, then adopt the new baseline: "
-        "{python} integrity_monitor.py --update."
+        "{control}integrity_monitor.py --update."
     ),
     "com.obsidian.security.plugin-check": (
         "Exits non-zero when an installed plugin's files no longer match the "
         "allowlist -- an update you installed, or tampering. The findings are "
         "in {log}. Vet the changed plugin before "
-        "{python} plugin_integrity_check.py --update."
+        "{control}plugin_integrity_check.py --update."
     ),
     "com.obsidian.vault-lint": (
         "Weekly content sweep. It runs with --exit-zero, so a non-zero status "
@@ -789,17 +789,22 @@ def pipeline_hint(label: str) -> str | None:
 
 
 def _fill_hint(hint: str, label: str) -> str:
-    """Fill {log} and {python} in a hint for the platform this runs on."""
+    """Fill {log}, {python} and {control} in a hint for the platform this runs
+    on. {control} is the start of a command running a security control's
+    installed copy, isolated, as its scheduled job does (finding 5278112):
+    adopting a baseline with the vault's copy runs whatever sits beside it."""
     mac_log, win_task = PIPELINE_LOGS.get(label, ("", ""))
     if sys.platform == "win32":
         import run_logged
         log = run_logged.display_path(win_task) if win_task else ""
         # Run from Templates\Scripts; the venv is the interpreter the task uses.
         python = r".venv\Scripts\python.exe"
+        control = python + " -I -S %LOCALAPPDATA%\\obsidian-security\\bin\\"
     else:
         log = f"~/Library/Logs/{mac_log}" if mac_log else ""
         python = "/usr/bin/python3"
-    return hint.format(log=log, python=python)
+        control = python + " -I ~/.local/share/obsidian-security/bin/"
+    return hint.format(log=log, python=python, control=control)
 
 
 # Wrapper-launched jobs (e.g. /usr/bin/open running an .app) exit immediately,

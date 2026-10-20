@@ -2,11 +2,13 @@
 # 49-security-controls.sh - two security agents + state dir + log rotation.
 #
 #   plugin-check  daily 06:30 + watch ~/Obsidian/.obsidian/plugins
-#   integrity     daily 06:35 + watch ~/Library/LaunchAgents, vault Scripts,
-#                 ~/.local/share/obsidian-security
+#   integrity     daily 06:35 + watch ~/Library/LaunchAgents, vault Scripts
 #
-# All three are stdlib-only and run via /usr/bin/python3, so they never need an
-# executable bit here; component 56-script-permissions sets their modes.
+# Both are stdlib-only and run via /usr/bin/python3 -I from an installed copy in
+# ~/.local/share/obsidian-security/bin (finding 5278112): run from the vault,
+# they imported whatever was planted in the folder they watch. This component
+# installs that copy; ./update.sh refreshes it. The vault copies keep their
+# modes from 56-script-permissions; the installed ones are 0600 in a 0700 dir.
 
 set -euo pipefail
 source "$REPO_ROOT/installers/lib/plist.sh"
@@ -29,6 +31,11 @@ info "Creating state directory..."
 mkdir -p "$STATE_DIR" "$LOG_DIR"
 chmod 0700 "$STATE_DIR"
 ok "  $STATE_DIR (mode 0700)"
+
+info "Installing the controls outside the vault..."
+# Before the agents load: their plists name this copy.
+install_security_controls "$SECDIR" "$STATE_DIR/bin"
+ok "  $STATE_DIR/bin"
 
 info "Installing 2 LaunchAgents..."
 install_plist_and_load Templates/Scripts/com.obsidian.security.plugin-check.plist com.obsidian.security.plugin-check

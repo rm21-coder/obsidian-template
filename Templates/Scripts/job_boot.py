@@ -33,7 +33,11 @@ def main(argv: list) -> None:
     if after > 0:
         faulthandler.dump_traceback_later(after, repeat=False, file=sys.stderr, exit=False)
     sys.argv = [script, *argv[2:]]
-    sys.path[0] = str(Path(script).resolve().parent)
+    # Isolated (-I, the security tasks: 5278112), sys.path[0] is the standard
+    # library, not this folder, and the job is meant to run without its own
+    # folder in front of it; it finds its siblings itself.
+    if not sys.flags.isolated:
+        sys.path[0] = str(Path(script).resolve().parent)
     try:
         runpy.run_path(script, run_name="__main__")
     finally:

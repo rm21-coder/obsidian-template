@@ -775,6 +775,95 @@ class TestReferencedCodeRound3:
                           {"excludedFolders": ["People"]}) == {}
         assert self._refs(tmp_path, "quickadd", {"choices": [{"folder": "People"}]}) == {}
 
+
+class TestReferenceBounds:
+    """5277580: data.json chooses what is hashed, so the check bounds it."""
+
+    @staticmethod
+    def _refs(vault: Path, plugin_id: str, data: dict) -> dict:
+        return pic._referenced_files(vault, plugin_id, data)
+
+    @staticmethod
+    def _findings(refs: dict) -> list:
+        cur = {"quickadd": {"version": "1", "settings": {"file": "ok", "keys": {}, "refs": refs}}}
+        return pic.diff(cur, cur)
+
+    def test_a_file_named_many_times_is_hashed_once(self, tmp_path, monkeypatch) -> None:
+        (tmp_path / "t.md").write_text("x")
+        calls = []
+        real = pic.sha256_file
+        monkeypatch.setattr(pic, "sha256_file", lambda p, limit=None: calls.append(p) or real(p, limit))
+        refs = self._refs(tmp_path, "quickadd",
+                          {"choices": [{"templatePath": "t.md"}] * 5000 + [{"templatePath": "./t"}]})
+        assert refs == {"t.md": real(tmp_path / "t.md")}
+        assert len(calls) == 1
+
+    def test_a_name_climbing_out_of_the_vault_is_not_read_and_is_reported_every_run(
+            self, tmp_path, monkeypatch) -> None:
+        vault = tmp_path / "v"
+        vault.mkdir()
+        (tmp_path / "secret.js").write_text("outside")
+        calls = []
+        monkeypatch.setattr(pic, "sha256_file", lambda p, limit=None: calls.append(p) or "h")
+        refs = self._refs(vault, "quickadd", {"choices": [{"path": "../secret.js"}]})
+        assert refs == {"../secret.js": "skipped: names a path outside the vault"}
+        assert calls == []
+        [f] = self._findings(refs)
+        assert f["kind"] == "REFERENCE_SKIPPED" and f["paths"] == ["../secret.js"]
+
+    def test_a_folder_climbing_out_of_the_vault_is_not_walked(self, tmp_path) -> None:
+        vault = tmp_path / "v"
+        vault.mkdir()
+        (tmp_path / "a.md").write_text("x")
+        refs = pic._referenced_files(vault, "templater-obsidian", {"templates_folder": "../"})
+        assert refs and set(refs.values()) == {"skipped: names a path outside the vault"}
+
+    def test_a_file_over_the_cap_is_skipped_and_reported(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr(pic, "REF_MAX_FILE_BYTES", 10)
+        (tmp_path / "big.js").write_text("x" * 20)
+        refs = self._refs(tmp_path, "quickadd", {"choices": [{"path": "big.js"}]})
+        assert refs == {"big.js": "skipped: larger than 10 bytes"}
+        assert [f["kind"] for f in self._findings(refs)] == ["REFERENCE_SKIPPED"]
+
+    def test_the_read_itself_is_capped(self, tmp_path) -> None:
+        """A file that grows after it was sized is still cut off."""
+        p = tmp_path / "f"
+        p.write_text("x" * 100)
+        assert pic.sha256_file(p, 50) == "skipped: larger than 50 bytes"
+        assert pic.sha256_file(p, 100) == pic.sha256_file(p)
+
+    def test_the_total_is_capped(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr(pic, "REF_MAX_TOTAL_BYTES", 15)
+        for n in ("a.md", "b.md"):
+            (tmp_path / n).write_text("x" * 10)
+        refs = self._refs(tmp_path, "quickadd", {"choices": [{"t": "a.md"}, {"t": "b.md"}]})
+        assert "(overrun)" in refs and "b.md" not in refs
+        assert [f["kind"] for f in self._findings(refs)] == ["REFERENCE_LIMIT"]
+
+    def test_named_files_count_against_the_file_budget(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr(pic, "REF_MAX_FILES", 2)
+        names = [f"n{i}.md" for i in range(6)]
+        for n in names:
+            (tmp_path / n).write_text(n)
+        refs = self._refs(tmp_path, "quickadd", {"choices": [{"t": n} for n in names]})
+        assert "(overrun)" in refs and len(refs) <= 4
+
+    def test_named_files_honour_the_deadline(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr(pic, "REF_WALK_SECONDS", -1)
+        (tmp_path / "t.md").write_text("x")
+        refs = self._refs(tmp_path, "quickadd", {"choices": [{"t": "t.md"}]})
+        assert refs == {"(overrun)": "referenced files exceed the hashing budget"}
+
+    def test_the_automation_folder_is_found_from_the_vault_not_this_file(self, tmp_path) -> None:
+        """The scheduled job runs an installed copy outside the vault (5278112),
+        so the folder to leave to the integrity monitor is the vault's."""
+        auto = tmp_path / "Templates" / "Scripts"
+        auto.mkdir(parents=True)
+        (auto / "report.md").write_text("rewritten nightly")
+        (tmp_path / "Templates" / "t.md").write_text("x")
+        refs = self._refs(tmp_path, "templater-obsidian", {"templates_folder": "Templates"})
+        assert list(refs) == ["Templates/t.md"]
+
 def test_the_agent_reruns_when_a_watched_settings_file_changes() -> None:
     """A change inside a plugin folder does not fire the folder watch, and
     Templater and Meta Bind reload data.json live; every file the check reads

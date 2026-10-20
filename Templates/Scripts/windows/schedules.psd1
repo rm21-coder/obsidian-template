@@ -79,8 +79,11 @@
         # night unseen, so Register-Tasks enables it exactly when RAG is set up.
         # A first index of a large vault takes hours, so more than the default 2.
         @{ Name='rag-sync';             Script='obsidian-rag-sync.py';  Args=@();            Trigger=@{ Type='Daily';  At='03:00' };        Enabled=$true; RequiresRag=$true; TimeLimitMinutes=240 }
-        @{ Name='security-plugin-check';Script='plugin_integrity_check.py'; Args=@();        Trigger=@{ Type='Daily';  At='06:30' };        Enabled=$true }
-        @{ Name='security-integrity';   Script='integrity_monitor.py';  Args=@();            Trigger=@{ Type='Daily';  At='06:35' };        Enabled=$true }
+        # Isolated: run from the installed copy in %LOCALAPPDATA%\obsidian-security\bin
+        # under the base interpreter with -I -S, never from the vault they watch
+        # (finding 5278112; see Register-Tasks.ps1 and Get-ControlPython).
+        @{ Name='security-plugin-check';Script='plugin_integrity_check.py'; Args=@();        Trigger=@{ Type='Daily';  At='06:30' };        Enabled=$true; Isolated=$true }
+        @{ Name='security-integrity';   Script='integrity_monitor.py';  Args=@();            Trigger=@{ Type='Daily';  At='06:35' };        Enabled=$true; Isolated=$true }
         @{ Name='morning-dashboard';    Script='morning_dashboard.py';  Args=@();            Trigger=@{ Type='Weekly'; At='07:00'; DaysOfWeek=@('Monday','Tuesday','Wednesday','Thursday','Friday') }; Enabled=$true }
         # Weekly content lint (see docs/Vault-Lint.md). Read-only: no fixing
         # flags, so an unattended run reports and never rewrites. --exit-zero

@@ -538,6 +538,7 @@ PY
         cp Templates/Scripts/security_common.py "$TMP/scripts/" 2>/dev/null
         printf 'print("x")\n' > "$TMP/scripts/canary.py"
         # OBSIDIAN_SECURITY_STATE_DIR keeps this entirely out of live state.
+        # -I, as the agent runs it (5278112): the control must work isolated.
         #
         # PASS needs all three: the baseline was recorded, the perturbed run
         # exited 1 (drift, not 2 = error), and its JSON says drift on the
@@ -545,12 +546,12 @@ PY
         # that failed silently -- no /usr/bin/python3 on Windows -- made every
         # later run exit non-zero, so the check passed without running.
         env OBSIDIAN_SECURITY_STATE_DIR="$TMP/state" \
-            "$CONTROL_PY" Templates/Scripts/integrity_monitor.py \
+            "$CONTROL_PY" -I Templates/Scripts/integrity_monitor.py \
             --scripts-dir "$TMP/scripts" --update >"$OUT/dast-integrity-baseline.log" 2>&1
         base_rc=$?
         printf 'print("tampered")\n' > "$TMP/scripts/canary.py"
         env OBSIDIAN_SECURITY_STATE_DIR="$TMP/state" \
-            "$CONTROL_PY" Templates/Scripts/integrity_monitor.py \
+            "$CONTROL_PY" -I Templates/Scripts/integrity_monitor.py \
             --scripts-dir "$TMP/scripts" --json >"$OUT/dast-integrity-drift.json" 2>"$OUT/dast-integrity-drift.err"
         drift_rc=$?
         drift_ok=0

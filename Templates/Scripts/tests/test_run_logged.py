@@ -227,10 +227,12 @@ class TestEveryTaskRunsThroughTheWrapper:
     def test_the_task_action_invokes_run_logged_with_the_task_name(self) -> None:
         src = (WINDOWS / "Register-Tasks.ps1").read_text(encoding="utf-8")
         assert "$runner     = Join-Path $scriptsDir 'run_logged.py'" in src
-        assert """$argString = '"{0}" --timeout {1} {2} "{3}"' -f $runner, ([Math]::Max(60, $limitMin * 60 - 120)), $job.Name, $scriptPath""" in src, (
+        # The security tasks use the installed run_logged.py instead (5278112).
+        assert "$jobRunner  = $runner" in src
+        assert """$argString = '{0}"{1}" --timeout {2} {3} "{4}"' -f $jobFlags, $jobRunner, ([Math]::Max(60, $limitMin * 60 - 120)), $job.Name, $scriptPath""" in src, (
             "Register-Tasks.ps1 no longer routes the task through run_logged.py; "
             "Task Scheduler will discard the job's output again")
-        assert "New-ScheduledTaskAction -Execute $python -Argument $argString" in src
+        assert "New-ScheduledTaskAction -Execute $jobPython -Argument $argString" in src
 
     def test_every_manifest_name_is_a_valid_log_name(self) -> None:
         names = _manifest_names()
@@ -380,7 +382,7 @@ class TestRegistrationFailuresAreLoud:
 
     def test_success_is_printed_only_after_reading_the_task_back(self) -> None:
         src = self._src()
-        readback = src.index("$live.Actions[0].Execute -eq $python")
+        readback = src.index("$live.Actions[0].Execute -eq $jobPython")
         assert "$live.Actions[0].Arguments -eq $argString" in src
         for line in ('Write-Host ("  registered (DISABLED): {0}"',
                      'Write-Host ("  registered (ENABLED):  {0}  (kept:',
@@ -437,6 +439,38 @@ class TestScheduledTimeLimit:
 
     def test_without_a_limit_the_job_starts_directly(self) -> None:
         assert rl.child_command("job.py", ["--once"], rl.dump_after(None))[1:] == ["job.py", "--once"]
+
+
+class TestIsolationIsPassedOn:
+    """5278112: the Windows security tasks start run_logged.py with -I -S from
+    an installed copy; the control it starts must run the same way."""
+
+    def _in_child(self, flags: list, code: str) -> str:
+        import subprocess
+        scripts = Path(rl.__file__).resolve().parent
+        prog = f"import sys; sys.path.append({str(scripts)!r}); " + code
+        return subprocess.run([sys.executable, *flags, "-c", prog], capture_output=True,
+                              text=True, check=True, timeout=60).stdout.strip()
+
+    def test_an_isolated_runner_starts_an_isolated_job(self, allow_subprocess) -> None:
+        out = self._in_child(["-I", "-S"], "import run_logged; print(run_logged.child_command('c.py', ['--x'])[1:])")
+        assert out == "['-I', '-u', '-S', 'c.py', '--x']"
+
+    def test_an_ordinary_runner_adds_nothing(self, allow_subprocess) -> None:
+        out = self._in_child([], "import run_logged; print(run_logged.child_command('c.py', [])[1:])")
+        assert out == "['c.py']"
+
+    def test_job_boot_leaves_an_isolated_path_alone(self, tmp_path, allow_subprocess) -> None:
+        import subprocess
+        script = tmp_path / "job.py"
+        script.write_text("import sys\nprint(sys.path[0])\n", encoding="utf-8")
+        boot = Path(rl.__file__).resolve().with_name("job_boot.py")
+        out = subprocess.run([sys.executable, "-I", str(boot), "0", str(script)],
+                             capture_output=True, text=True, check=True, timeout=60).stdout.strip()
+        assert out != str(tmp_path)
+        out = subprocess.run([sys.executable, str(boot), "0", str(script)],
+                             capture_output=True, text=True, check=True, timeout=60).stdout.strip()
+        assert out == str(tmp_path.resolve())
 
     def test_a_hung_job_dumps_its_stack_into_the_log_before_it_is_stopped(
             self, tmp_path, monkeypatch, allow_subprocess) -> None:

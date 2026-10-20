@@ -125,10 +125,19 @@ def child_command(script: str, args: list[str], dump: float | None = None) -> li
         console = exe.with_name("python.exe")
         if console.is_file():
             exe = console
+    # Isolation is passed on (finding 5278112): the security tasks start this
+    # file with -I -S from an installed copy outside the vault, and their
+    # control must run the same way. -u stands in for PYTHONUNBUFFERED, which
+    # an isolated child ignores, like every PYTHON* variable child_env sets.
+    flags = []
+    if sys.flags.isolated:
+        flags += ["-I", "-u"]
+    if sys.flags.no_site:
+        flags.append("-S")
     boot = Path(__file__).resolve().with_name("job_boot.py")
     if dump and boot.is_file():
-        return [str(exe), str(boot), "%.0f" % dump, script, *args]
-    return [str(exe), script, *args]
+        return [str(exe), *flags, str(boot), "%.0f" % dump, script, *args]
+    return [str(exe), *flags, script, *args]
 
 
 def spawn_options() -> dict:

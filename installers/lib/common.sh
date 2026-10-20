@@ -346,3 +346,19 @@ safe_install_file() {
     install -m 0755 "$src" "$dst"
     ok "  installed: $dst"
 }
+
+# ---- the installed copy of the security controls ----------------------------
+# Finding 5278112: the two security LaunchAgents run a copy of the controls
+# installed outside the vault, under /usr/bin/python3 -I, so nothing written
+# into the folder they watch is imported by them. The file list, the copy and
+# its check live in security_common.install_controls (one definition for macOS
+# and Windows); this names the place, which the plists hard-code.
+SECURITY_CONTROLS_DIR="$HOME/.local/share/obsidian-security/bin"
+
+# install_security_controls <Templates/Scripts dir> [<dest>]
+# Copies the controls into <dest> (default $SECURITY_CONTROLS_DIR), owner-only,
+# and fails unless every copy matches what it was copied from.
+install_security_controls() {
+    local src="$1" dest="${2:-$SECURITY_CONTROLS_DIR}"
+    /usr/bin/python3 -I "$src/security_common.py" install-controls "$src" "$dest"
+}

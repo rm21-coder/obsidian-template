@@ -63,6 +63,15 @@ Four independent integrity checks, all built on a single state file
        A baseline from before a scope existed reports NOT_BASELINED once for
        that scope, not every file in it as new.
 
+    6. The installed copy (added 2026-10-20, finding 5278112). The scheduled
+       job runs a copy of the controls installed outside the vault, in
+       ~/.local/share/obsidian-security/bin (%LOCALAPPDATA%\\obsidian-security
+       \\bin on Windows), under `python -I`. Run from there, the monitor
+       reports INSTALLED_COPY_MISMATCH for each vault copy in Templates/Scripts
+       that differs from its installed twin. Refresh the copy with
+       `python3 -I Templates/Scripts/security_common.py install-controls
+       Templates/Scripts` (the installer and the updaters do this).
+
 For each detected change, the script:
     - appends a structured JSON record to the alert log in the state dir
     - emits a desktop notification
@@ -84,6 +93,7 @@ Exit codes
     0 no findings (or --update completed)
     1 drift detected
     2 hard error
+    3 the check itself failed (CONTROL_ERROR, alerted)
 """
 
 from __future__ import annotations
@@ -103,7 +113,15 @@ import sys
 import time
 from pathlib import Path
 
-import security_common
+# 5278112: the scheduled job runs the installed copy of this file under
+# `python3 -I`, which keeps the script's own folder off sys.path, so nothing
+# planted beside it (a json.py, say) can shadow the standard library. Its one
+# sibling module is found by appending that folder: last, after the standard
+# library, and never the current directory or the vault.
+SELF_DIR = Path(os.path.abspath(__file__)).parent
+sys.path.append(str(SELF_DIR))
+
+import security_common  # noqa: E402
 
 DEFAULT_SCRIPTS = Path.home() / "Obsidian" / "Templates" / "Scripts"
 DEFAULT_LAUNCHAGENTS = Path.home() / "Library" / "LaunchAgents"
@@ -458,9 +476,12 @@ def _settings_digest(path: Path, *, mcp_only: bool = False) -> dict | None:
     when the file does not exist."""
     if not path.is_file():
         return None
+    # RecursionError (5278113): deeply nested JSON raises it, not ValueError,
+    # on loads and again on dumps; uncaught it ended every run before the
+    # report. It is recorded as unreadable, so it differs from the baseline.
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RecursionError) as e:
         return {"error": f"unreadable: {e.__class__.__name__}"}
     if not isinstance(data, dict):
         return {"error": "not a JSON object"}
@@ -472,7 +493,10 @@ def _settings_digest(path: Path, *, mcp_only: bool = False) -> dict | None:
                                   if isinstance(v, dict) and v.get("mcpServers")}
     else:
         picked = {k: data[k] for k in AGENT_SETTINGS_KEYS if k in data}
-    blob = json.dumps(picked, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    try:
+        blob = json.dumps(picked, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    except (ValueError, RecursionError) as e:
+        return {"error": f"unreadable: {e.__class__.__name__}"}
     return {"sha256": hashlib.sha256(blob).hexdigest(), "size": len(blob)}
 
 
@@ -603,12 +627,23 @@ def _venv_python(scripts: Path) -> Path | None:
     return None
 
 
+def _environment_ignored() -> bool:
+    """True under -E or -I. A function so the tests can set it."""
+    return bool(sys.flags.ignore_environment)
+
+
 def prefix_cache_findings() -> list[dict]:
     """With a cache prefix (Apple's /usr/bin/python3 uses ~/Library/Caches/
     com.apple.python), every module this interpreter imports -- the standard
     library included -- is cached there, in a user-writable tree. Each .pyc
     for this interpreter whose source still exists must compile from it."""
     prefix = getattr(sys, "pycache_prefix", None)
+    if not prefix and sys.platform == "darwin" and _environment_ignored():
+        # Apple's interpreter sets the prefix only when it reads the
+        # environment, and the controls now run under -I (5278112), so it is
+        # unset here while every other job on /usr/bin/python3 still loads
+        # its bytecode -- the standard library's included -- from this tree.
+        prefix = str(HOME / "Library" / "Caches" / "com.apple.python")
     if not prefix or not Path(prefix).is_dir():
         return []
     root = Path(prefix)
@@ -659,6 +694,29 @@ def venv_bytecode_findings(scripts: Path) -> list[dict]:
              "detail": f"exit {p.returncode}"}]
 
 
+def installed_copy_findings(scripts: Path) -> list[dict]:
+    """5278112: run as the installed copy (security_common.controls_dir()),
+    every file it was installed from must still match it. The scheduled job no
+    longer runs the vault's copies, so without this an edit to one would show
+    only as an ordinary script change, and a stale installed copy not at all.
+    No baseline: the two copies are compared with each other. Skipped when
+    this file is not the installed copy (a run from the vault or a checkout)."""
+    if not security_common.is_installed_copy(SELF_DIR):
+        return []
+    out = []
+    for rel in security_common.control_files():
+        mine, theirs = _file_entry(SELF_DIR / rel), _file_entry(scripts / rel)
+        if mine.get("sha256") and mine.get("sha256") == theirs.get("sha256"):
+            continue
+        out.append({"kind": "INSTALLED_COPY_MISMATCH", "scope": "installed_controls",
+                    "path": rel, "installed_sha": mine.get("sha256"),
+                    "vault_sha": theirs.get("sha256"),
+                    "detail": ("installed copy: " + mine["error"]) if "error" in mine
+                    else ("vault copy: " + theirs["error"]) if "error" in theirs
+                    else "contents differ"})
+    return out
+
+
 def count_vault_md(vault: Path) -> int:
     """Count .md files outside hidden dirs and templates. We deliberately
     exclude .trash, .obsidian and node_modules to keep the count stable
@@ -685,8 +743,8 @@ def load_state() -> dict:
         return {}
     try:
         return json.loads(STATE_PATH.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as e:
-        security_common.log("integrity", f"FATAL: state corrupt: {e}")
+    except (ValueError, RecursionError) as e:
+        security_common.log("integrity", f"FATAL: state corrupt: {type(e).__name__}: {e}"[:400])
         sys.exit(2)
 
 
@@ -916,6 +974,7 @@ def main(argv: list[str]) -> int:
     findings += timed("bytecode", lambda: bytecode_findings(scripts))
     findings += timed("prefix_cache", prefix_cache_findings)
     findings += timed("venv_bytecode", lambda: venv_bytecode_findings(scripts))
+    findings += installed_copy_findings(scripts)
     bulk = diff_md_count(current["vault_md_count"],
                          baseline.get("vault_md_count", 0))
     if bulk:
@@ -957,6 +1016,9 @@ def main(argv: list[str]) -> int:
             summary_parts.append(f"{f['scope']}: not yet baselined")
         elif f["kind"] == "PERMISSIONS":
             summary_parts.append(f"secrets file readable by others ({f['mode']})")
+        elif f["kind"] == "INSTALLED_COPY_MISMATCH":
+            summary_parts.append(f"installed control {f['path']} differs from the vault's "
+                                 f"({f['detail']})")
         elif f["kind"] in ("BYTECODE_MISMATCH", "BYTECODE_UNCHECKED"):
             summary_parts.append(f"bytecode: {Path(f['path']).name} {f['detail']}")
         elif f["kind"] == "BULK_DELETE":
@@ -987,6 +1049,21 @@ def _main_recording(argv: list[str]) -> int:
         rc = main(argv)
     except SystemExit as e:
         rc = e.code if isinstance(e.code, int) else 1
+    except BaseException as exc:            # incl. RecursionError, MemoryError
+        # As plugin_integrity_check._run: a control that dies on malformed
+        # input reports nothing, which is what an attacker wants (5278113).
+        msg = f"CONTROL_ERROR: the check itself failed ({type(exc).__name__}): {exc}"[:400]
+        for report in (
+                lambda: security_common.log("integrity", f"FATAL: {msg}"),
+                lambda: append_alert({"control": "workflow_integrity",
+                                      "kind": "CONTROL_ERROR", "summary": msg}),
+                lambda: ("--json" in argv
+                         or security_common.notify("Workflow integrity ALERT", msg))):
+            try:
+                report()
+            except Exception:
+                pass
+        rc = 3
     if "--bytecode-only" not in argv:
         security_common.record_run("integrity", rc)
     return rc

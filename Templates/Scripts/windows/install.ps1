@@ -601,12 +601,20 @@ Write-Host '== 85 security baselines =='
 $stateDir = if ($env:OBSIDIAN_SECURITY_STATE_DIR) { $env:OBSIDIAN_SECURITY_STATE_DIR } else { Join-Path $env:LOCALAPPDATA 'obsidian-security' }
 $haveBaselines = (Test-Path (Join-Path $stateDir 'plugin_allowlist.json')) -and
                  (Test-Path (Join-Path $stateDir 'integrity_state.json'))
-$pluginCheck = Join-Path $scriptsDir 'plugin_integrity_check.py'
-$integrity   = Join-Path $scriptsDir 'integrity_monitor.py'
+# The installed copies the tasks run (Register-Tasks installs them), under the
+# base interpreter with -I -S: a baseline taken by code planted in the vault
+# would certify that plant (finding 5278112).
+$pluginCheck = Join-Path (Get-ControlsDir) 'plugin_integrity_check.py'
+$integrity   = Join-Path (Get-ControlsDir) 'integrity_monitor.py'
+$controlPy   = $null
+try { $controlPy = Get-ControlPython } catch { }
 if ($haveBaselines) {
     Write-Host "  baselines already present in $stateDir; left as they are"
 } elseif ($SkipTasks) {
     Write-Host '  skipped (-SkipTasks): the task definitions a baseline records are not registered yet'
+} elseif (-not $controlPy -or -not (Test-Path -LiteralPath $integrity) -or -not (Test-Path -LiteralPath $pluginCheck)) {
+    Write-Warning "  the security controls are not installed in $(Get-ControlsDir); no baselines offered."
+    Write-Warning '  Install them by re-running windows\Register-Tasks.ps1, then record the baselines (docs/Windows Setup.md).'
 } else {
     Write-Host '  The two security controls compare this machine against a recorded baseline.'
     Write-Host '  Without one they protect nothing. Record it now only if nothing but this'
@@ -615,18 +623,18 @@ if ($haveBaselines) {
     $ans = Read-Answer -Question '  Record the security baselines now? (y/n)' -Default 'y' -NoPrompt:$NonInteractive
     if ($NonInteractive -or [Console]::IsInputRedirected) {
         Write-Host '  -NonInteractive: not recording baselines. When ready, run, in this order:'
-        Write-Host ("    {0} `"{1}`" --update" -f $venvPy, $pluginCheck)
-        Write-Host ("    {0} `"{1}`" --update" -f $venvPy, $integrity)
+        Write-Host ("    {0} -I -S `"{1}`" --update" -f $controlPy, $pluginCheck)
+        Write-Host ("    {0} -I -S `"{1}`" --update" -f $controlPy, $integrity)
     } elseif ($ans -match '^(y|yes)$') {
         # Plugin allowlist first: it is one of the integrity monitor's trust
         # anchors, so the integrity baseline must record its final form.
-        Invoke-Native -Warn -ErrorMessage 'plugin baseline failed' { & $venvPy $pluginCheck --update }
-        Invoke-Native -Warn -ErrorMessage 'integrity baseline failed' { & $venvPy $integrity --update }
+        Invoke-Native -Warn -ErrorMessage 'plugin baseline failed' { & $controlPy -I -S $pluginCheck --update }
+        Invoke-Native -Warn -ErrorMessage 'integrity baseline failed' { & $controlPy -I -S $integrity --update }
         Write-Host '  baselines recorded'
     } else {
         Write-Warning '  No baselines recorded: both security controls stay inactive until you run, in this order:'
-        Write-Host ("    {0} `"{1}`" --update" -f $venvPy, $pluginCheck)
-        Write-Host ("    {0} `"{1}`" --update" -f $venvPy, $integrity)
+        Write-Host ("    {0} -I -S `"{1}`" --update" -f $controlPy, $pluginCheck)
+        Write-Host ("    {0} -I -S `"{1}`" --update" -f $controlPy, $integrity)
     }
 }
 

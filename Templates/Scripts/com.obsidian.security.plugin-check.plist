@@ -16,6 +16,9 @@
   Stdlib-only - uses /usr/bin/python3 deliberately so the watcher runs
   even if the per-vault venv is broken. Keychain access goes through
   /usr/bin/security via subprocess.
+
+  Runs the installed copy in ~/.local/share/obsidian-security/bin with -I,
+  for the reason given in com.obsidian.security.integrity.plist (5278112).
 -->
 <plist version="1.0">
 <dict>
@@ -25,7 +28,8 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/plugin_integrity_check.py</string>
+        <string>-I</string>
+        <string>/Users/YOUR_USERNAME/.local/share/obsidian-security/bin/plugin_integrity_check.py</string>
     </array>
 
     <key>WatchPaths</key>

@@ -11,6 +11,7 @@
 #                             installed plugin no longer matches its pin
 #   5. script permissions     re-tighten mode bits on Templates/Scripts
 #   6. security controls      report their status; never adopt a baseline
+#                             (step 3 also refreshes their installed copy)
 #
 # Why not just re-run ./install.sh
 # --------------------------------
@@ -144,6 +145,20 @@ main() {
 
     # ---- 3. scheduled jobs ----------------------------------------------------
     info "== 3/6 scheduled jobs =="
+    # The security agents run an installed copy of the controls outside the
+    # vault (5278112). Refreshed from the scripts just pulled, and before any
+    # agent is reloaded: their plists name that copy.
+    if [[ -f "$LA/com.obsidian.security.integrity.plist" || -f "$LA/com.obsidian.security.plugin-check.plist" ]]; then
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            info "  dry run: would refresh the installed security controls in $SECURITY_CONTROLS_DIR"
+        elif install_security_controls "$VAULT/Templates/Scripts"; then
+            ok "  security controls installed in $SECURITY_CONTROLS_DIR"
+        else
+            err "  Could not install the security controls into $SECURITY_CONTROLS_DIR (see above);"
+            err "  not reloading any job. Fix that, then run this update again."
+            return 1
+        fi
+    fi
     local state label comp backup="" n_changed=0 not_installed=()
     while read -r state label comp; do
         case "$state" in
@@ -301,13 +316,18 @@ main() {
 # report_control <name> <script> <from> <to>
 report_control() {
     local name="$1" script="$2" from="$3" to="$4" status
-    local path="$HOME/Obsidian/Templates/Scripts/$script"
+    # The installed copy, as the agents run it (5278112).
+    local path="$SECURITY_CONTROLS_DIR/$script"
     # Hard 180 s ceiling: both controls read the Keychain, and a consent
     # prompt nobody can see would otherwise hang the update indefinitely. Not
     # 60: the integrity check hashes the virtualenv, under a minute from a
     # cold disk cache, and a timeout here reads as "unreadable".
-    status="$(/usr/bin/perl -e 'alarm 180; exec @ARGV' /usr/bin/python3 "$path" --json 2>/dev/null \
-        | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","unreadable"))' \
+    # `|| true` on the control: it exits 1 on drift and 2 with no baseline, and
+    # under pipefail that used to append "unreadable" to the status it printed,
+    # so "no baseline" fell through to the drift advice. The parser is -I too:
+    # -c would put the current directory first on its path.
+    status="$({ /usr/bin/perl -e 'alarm 180; exec @ARGV' /usr/bin/python3 -I "$path" --json 2>/dev/null || true; } \
+        | /usr/bin/python3 -I -c 'import json,sys; print(json.load(sys.stdin).get("status","unreadable"))' \
         2>/dev/null || echo unreadable)"
     case "$status" in
         ok)          ok "  $name: clean" ;;
@@ -316,19 +336,20 @@ report_control() {
         *)
             warn "  $name: $status. An update changes watched files, so this is expected."
             warn "    Before adopting, confirm every finding is part of this update:"
-            warn "      findings:  /usr/bin/python3 $path --json"
+            warn "      findings:  /usr/bin/python3 -I $path --json"
             warn "      the diff:  git -C ~/Obsidian diff --name-status $from $to"
             warn "    Every file finding (scripts, templates, agent_config, script_config)"
             warn "    must be a file in that diff; venv findings fit only if requirements.lock"
             warn "    is in it, or you rebuilt the venv with install.sh since the last baseline"
             warn "    and .venv/bin/python -m pip check is clean; plist findings must be jobs"
-            warn "    this update reloaded. A state_dir,"
+            warn "    this update reloaded. An INSTALLED_COPY_MISMATCH means the installed"
+            warn "    controls differ from the vault's: never the update, which refreshed them. A state_dir,"
             warn "    secrets, PERMISSIONS or BULK_DELETE finding is NOT the update, except a"
             warn "    state_dir plugin_allowlist.json when you re-vetted plugins since. Plugin"
             warn "    findings must be plugins or settings files this update touched (the diff"
             warn "    under .obsidian/ and Templates/): a REMOVED plugin it retired, or QuickAdd"
             warn "    choices and the Templates/QuickAdd scripts it changed. Then:"
-            warn "      /usr/bin/python3 $path --update"
+            warn "      /usr/bin/python3 -I $path --update"
             ;;
     esac
 }

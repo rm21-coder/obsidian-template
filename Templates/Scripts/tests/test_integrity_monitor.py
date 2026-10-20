@@ -852,3 +852,200 @@ def test_the_task_scan_allows_minutes_not_seconds(monkeypatch) -> None:
     monkeypatch.setattr(im.subprocess, "run", fake_run)
     im.scan_scheduled_tasks()
     assert seen["timeout"] == im.TASK_SCAN_TIMEOUT_SEC >= 300
+
+
+# ---------------------------------------------------------------------------
+# 5278112 / 5278113: the installed, isolated copy; unparseable settings.
+# ---------------------------------------------------------------------------
+
+import security_common as sc  # noqa: E402
+
+SCRIPTS = Path(im.__file__).resolve().parent
+# The interpreter the agent runs: Apple's 3.9 where it exists, which has no
+# -P; this interpreter elsewhere.
+CONTROL_PY = "/usr/bin/python3" if Path("/usr/bin/python3").is_file() else sys.executable
+# Deep enough for RecursionError on 3.9 (5,000 was the report) and on 3.14.
+DEPTH = 200000
+DEEP = '{"hooks": ' + "[" * DEPTH + "]" * DEPTH + "}"
+PLANT = ("import pathlib\n"
+         "pathlib.Path({marker!r}).write_text('planted json.py ran')\n"
+         "raise SystemExit('planted json.py ran')\n")
+
+
+def _vault_scripts(tmp_path: Path) -> Path:
+    """A Templates/Scripts holding the control files, as a vault would."""
+    scripts = tmp_path / "vault" / "Templates" / "Scripts"
+    (scripts / "windows").mkdir(parents=True)
+    for rel in sc.CONTROL_FILES + sc.CONTROL_FILES_WINDOWS:
+        shutil.copy2(SCRIPTS / rel, scripts / rel)
+    return scripts
+
+
+class TestInstalledCopy:
+    def _clean_env(self, tmp_path: Path, state: Path) -> dict:
+        env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
+        home = tmp_path / "home"
+        home.mkdir(exist_ok=True)
+        env.update(HOME=str(home), OBSIDIAN_SECURITY_STATE_DIR=str(state))
+        return env
+
+    def test_a_module_planted_in_the_watched_folder_does_not_run_in_the_installed_copy(
+            self, tmp_path: Path, allow_subprocess) -> None:
+        """The finding's reproduction: a json.py written into Templates/Scripts.
+        Run as the old plist ran it (the vault copy, no flags) it executes
+        inside the monitor; run as the new plist runs it (the installed copy,
+        -I, with the planted folder as cwd) it does not, and it is reported."""
+        state = tmp_path / "state"
+        scripts = _vault_scripts(tmp_path)
+        sc.install_controls(scripts, state / "bin")
+        marker = tmp_path / "PLANTED_RAN"
+        (scripts / "json.py").write_text(PLANT.format(marker=str(marker)))
+        # 5278113, on the interpreter where it crashed every run.
+        claude = tmp_path / "home" / ".claude"
+        claude.mkdir(parents=True)
+        (claude / "settings.json").write_text(DEEP)
+        argv = ["--scripts-dir", str(scripts), "--launchagents-dir", str(tmp_path / "agents"),
+                "--vault", str(tmp_path / "vault"), "--json"]
+        env = self._clean_env(tmp_path, state)
+
+        old = subprocess.run([CONTROL_PY, str(scripts / "integrity_monitor.py"), *argv],
+                             cwd=scripts, env=env, capture_output=True, text=True, timeout=300)
+        assert marker.read_text() == "planted json.py ran", old.stderr
+        marker.unlink()
+
+        new = subprocess.run([CONTROL_PY, "-I", str(state / "bin" / "integrity_monitor.py"), *argv],
+                             cwd=scripts, env=env, capture_output=True, text=True, timeout=300)
+        assert not marker.exists(), "the planted json.py ran inside the installed copy"
+        report = json.loads(new.stdout)
+        assert report["status"] == "no_baseline", new.stderr
+        assert "json.py" in report["current"]["scripts"]
+        assert report["current"]["agent_config"]["home:.claude/settings.json"] == {
+            "error": "unreadable: RecursionError"}
+
+    def test_the_plugin_check_runs_isolated_too(self, tmp_path: Path, allow_subprocess) -> None:
+        state = tmp_path / "state"
+        scripts = _vault_scripts(tmp_path)
+        sc.install_controls(scripts, state / "bin")
+        marker = tmp_path / "PLANTED_RAN"
+        (scripts / "json.py").write_text(PLANT.format(marker=str(marker)))
+        r = subprocess.run([CONTROL_PY, "-I", str(state / "bin" / "plugin_integrity_check.py"),
+                            "--vault", str(tmp_path / "vault"), "--json"],
+                           cwd=scripts, env=self._clean_env(tmp_path, state),
+                           capture_output=True, text=True, timeout=120)
+        assert not marker.exists()
+        assert json.loads(r.stdout)["status"] == "no_baseline", r.stderr
+
+    def test_the_installed_copy_reports_a_vault_copy_that_differs(
+            self, tmp_path: Path, tmp_state_dir: Path, monkeypatch) -> None:
+        scripts = _vault_scripts(tmp_path)
+        sc.install_controls(scripts, tmp_state_dir / "bin")
+        monkeypatch.setattr(im, "SELF_DIR", tmp_state_dir / "bin")
+        assert im.installed_copy_findings(scripts) == []
+        with (scripts / "security_common.py").open("a") as fh:
+            fh.write("# edited in the vault\n")
+        (scripts / "plugin_integrity_check.py").unlink()
+        found = {f["path"]: f for f in im.installed_copy_findings(scripts)}
+        assert set(found) == {"security_common.py", "plugin_integrity_check.py"}
+        assert found["security_common.py"]["kind"] == "INSTALLED_COPY_MISMATCH"
+        assert found["security_common.py"]["detail"] == "contents differ"
+        assert found["plugin_integrity_check.py"]["detail"].startswith("vault copy: ")
+        assert found["plugin_integrity_check.py"]["vault_sha"] is None
+
+    def test_a_copy_that_is_not_the_installed_one_compares_nothing(
+            self, tmp_path: Path, tmp_state_dir: Path, monkeypatch) -> None:
+        scripts = _vault_scripts(tmp_path)
+        (scripts / "security_common.py").write_text("# different\n")
+        monkeypatch.setattr(im, "SELF_DIR", scripts)
+        assert im.installed_copy_findings(scripts) == []
+
+    def test_a_mismatch_reaches_the_alert_even_when_the_vault_copy_was_baselined(
+            self, tmp_path: Path, sample_vault: Path, tmp_state_dir: Path,
+            silent_notify: list, monkeypatch) -> None:
+        scripts = _vault_scripts(tmp_path)
+        sc.install_controls(scripts, tmp_state_dir / "bin")
+        monkeypatch.setattr(im, "SELF_DIR", tmp_state_dir / "bin")
+        agents = tmp_path / "agents"
+        agents.mkdir()
+        argv = ["--scripts-dir", str(scripts), "--launchagents-dir", str(agents),
+                "--vault", str(sample_vault)]
+        with (scripts / "integrity_monitor.py").open("a") as fh:
+            fh.write("# planted\n")
+        assert im.main([*argv, "--update"]) == 0
+        assert im.main(argv) == 1
+        rec = json.loads((tmp_state_dir / "alerts.log").read_text().splitlines()[-1])
+        kinds = [(f["kind"], f.get("path")) for f in rec["findings"]]
+        assert ("INSTALLED_COPY_MISMATCH", "integrity_monitor.py") in kinds
+        assert "installed control integrity_monitor.py differs from the vault's" in silent_notify[-1][1]
+
+    def test_the_controls_find_their_sibling_without_their_folder_first(self) -> None:
+        for name in ("integrity_monitor.py", "plugin_integrity_check.py"):
+            src = (SCRIPTS / name).read_text(encoding="utf-8")
+            head = src[:src.index("\nimport security_common")]
+            assert "sys.path.append(" in head and "sys.path.insert(" not in head, name
+
+
+class TestUnparseableSettings:
+    def test_nesting_too_deep_is_unreadable_not_a_crash(self, tmp_path: Path) -> None:
+        p = tmp_path / "settings.json"
+        p.write_text(DEEP)
+        assert im._settings_digest(p) == {"error": "unreadable: RecursionError"}
+
+    def test_it_is_drift_against_a_readable_baseline(
+            self, tmp_path: Path, sample_vault: Path, tmp_state_dir: Path,
+            silent_notify: list, capsys) -> None:
+        scripts, agents = tmp_path / "scripts", tmp_path / "agents"
+        scripts.mkdir(); agents.mkdir()
+        settings = im.HOME / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True)
+        settings.write_text('{"hooks": {}}')
+        argv = ["--scripts-dir", str(scripts), "--launchagents-dir", str(agents),
+                "--vault", str(sample_vault)]
+        assert im.main([*argv, "--update"]) == 0
+        settings.write_text(DEEP)
+        capsys.readouterr()
+        assert im.main([*argv, "--json"]) == 1
+        [f] = json.loads(capsys.readouterr().out)["findings"]
+        assert f["kind"] == "CONTENT_CHANGE" and f["path"] == "home:.claude/settings.json"
+
+    def test_any_other_failure_is_a_control_error_alert(
+            self, tmp_state_dir: Path, silent_notify: list, monkeypatch) -> None:
+        def boom(argv):
+            raise RecursionError("maximum recursion depth exceeded")
+        monkeypatch.setattr(im, "main", boom)
+        assert im._main_recording([]) == 3
+        rec = json.loads((tmp_state_dir / "alerts.log").read_text().splitlines()[-1])
+        assert rec["kind"] == "CONTROL_ERROR" and "RecursionError" in rec["summary"]
+        assert silent_notify and silent_notify[-1][1].startswith("CONTROL_ERROR")
+
+    def test_a_state_file_nested_too_deep_is_corrupt_not_a_crash(
+            self, tmp_state_dir: Path, capsys) -> None:
+        im.STATE_PATH.write_text("[" * DEPTH + "]" * DEPTH)
+        with pytest.raises(SystemExit) as exc:
+            im.load_state()
+        assert exc.value.code == 2
+        assert "FATAL: state corrupt: RecursionError" in capsys.readouterr().err
+
+
+class TestApplePrefixUnderIsolation:
+    def test_the_apple_cache_is_checked_when_isolation_hides_the_prefix(
+            self, tmp_path: Path, monkeypatch) -> None:
+        """Under -I Apple's python reports no pycache_prefix, but every other
+        job on it still loads from ~/Library/Caches/com.apple.python."""
+        src_dir = tmp_path / "lib"
+        src_dir.mkdir()
+        src = src_dir / "jsonish.py"
+        src.write_text("X = 1\n")
+        home = tmp_path / "home"
+        prefix = home / "Library" / "Caches" / "com.apple.python"
+        pyc = prefix / src_dir.relative_to(src_dir.anchor) / f"jsonish.{sys.implementation.cache_tag}.pyc"
+        pyc.parent.mkdir(parents=True)
+        py_compile.compile(str(src), cfile=str(pyc), doraise=True)
+        pyc.write_bytes(pyc.read_bytes()[:16] + marshal.dumps(compile("X = 2\n", str(src), "exec")))
+        monkeypatch.setattr(im, "HOME", home)
+        monkeypatch.setattr(sys, "pycache_prefix", None)
+        monkeypatch.setattr(im.sys, "platform", "darwin")
+        monkeypatch.setattr(im, "_environment_ignored", lambda: False)
+        assert im.prefix_cache_findings() == []
+        monkeypatch.setattr(im, "_environment_ignored", lambda: True)
+        [f] = im.prefix_cache_findings()
+        assert f["kind"] == "BYTECODE_MISMATCH" and f["path"] == str(pyc)

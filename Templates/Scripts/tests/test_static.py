@@ -236,6 +236,7 @@ PLISTS = tuple(sorted(
     p.name for p in Path(__file__).resolve().parent.parent.glob("*.plist")
 ))
 assert PLISTS, "no plists found next to tests/ — layout changed?"
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # The shipped plists use a /Users/YOUR_USERNAME/... placeholder (substituted
 # by the installer), so we assert on the path *suffix* rather than a real
@@ -294,6 +295,63 @@ class TestPlists:
         sched = plist.get("StartCalendarInterval", {})
         assert sched.get("Hour") == 6
         assert sched.get("Minute") == 35
+
+    @pytest.mark.parametrize("label,script", [
+        ("com.obsidian.security.integrity", "integrity_monitor.py"),
+        ("com.obsidian.security.plugin-check", "plugin_integrity_check.py")])
+    def test_the_controls_run_isolated_from_the_installed_copy(
+            self, scripts_dir: Path, label: str, script: str) -> None:
+        """5278112: run from the vault with no flags, the integrity monitor
+        imported a json.py planted in the folder it watches, and that folder's
+        WatchPaths started the run. Apple's 3.9 has no -P, so: -I, and a copy
+        installed outside the vault (security_common.controls_dir())."""
+        with (scripts_dir / f"{label}.plist").open("rb") as f:
+            plist = plistlib.load(f)
+        assert plist["ProgramArguments"] == [
+            "/usr/bin/python3", "-I",
+            f"/Users/YOUR_USERNAME/.local/share/obsidian-security/bin/{script}"]
+        assert not any("Obsidian" in a for a in plist["ProgramArguments"])
+        assert "EnvironmentVariables" not in plist
+        assert "WorkingDirectory" not in plist
+
+    def test_the_vault_scripts_folder_is_still_watched(self, scripts_dir: Path) -> None:
+        """The watch stays: it is what reports a plant within 30 seconds; the
+        fix is that the run it starts no longer imports from there."""
+        with (scripts_dir / "com.obsidian.security.integrity.plist").open("rb") as f:
+            watch = plistlib.load(f)["WatchPaths"]
+        assert "/Users/YOUR_USERNAME/Obsidian/Templates/Scripts" in watch
+
+    def test_the_installer_installs_the_copy_before_loading_the_agents(self) -> None:
+        comp = (REPO_ROOT / "installers" / "components" / "49-security-controls.sh"
+                ).read_text(encoding="utf-8")
+        assert comp.index('install_security_controls "$SECDIR" "$STATE_DIR/bin"') \
+            < comp.index("install_plist_and_load")
+        common = (REPO_ROOT / "installers" / "lib" / "common.sh").read_text(encoding="utf-8")
+        assert 'SECURITY_CONTROLS_DIR="$HOME/.local/share/obsidian-security/bin"' in common
+        assert ('/usr/bin/python3 -I "$src/security_common.py" install-controls "$src" "$dest"'
+                in common)
+
+    def test_the_updater_refreshes_the_copy_before_reloading_any_agent(self) -> None:
+        upd = (REPO_ROOT / "update.sh").read_text(encoding="utf-8")
+        assert upd.index('install_security_controls "$VAULT/Templates/Scripts"') \
+            < upd.index("launchctl_reload")
+        assert "/usr/bin/python3 -I \"$path\" --json" in upd
+
+    def test_the_windows_security_tasks_run_isolated_from_the_installed_copy(self) -> None:
+        win = REPO_ROOT / "Templates" / "Scripts" / "windows"
+        sched = (win / "schedules.psd1").read_text(encoding="utf-8")
+        for name in ("security-plugin-check", "security-integrity"):
+            [line] = [l for l in sched.splitlines() if f"Name='{name}'" in l]
+            assert "Isolated=$true" in line
+        assert sched.count("Isolated=$true") == 2
+        reg = (win / "Register-Tasks.ps1").read_text(encoding="utf-8")
+        assert "Install-SecurityControls" in reg
+        assert "$jobRunner  = Join-Path $controlsDir 'run_logged.py'" in reg
+        assert "$jobFlags   = '-I -S '" in reg
+        assert "$live.Actions[0].Execute -eq $jobPython" in reg
+        common = (win / "common.ps1").read_text(encoding="utf-8")
+        assert "Join-Path $env:LOCALAPPDATA 'obsidian-security\\bin'" in common
+        assert "& $py -I -S $tool install-controls $src $dest" in common
 
 
 # ---------------------------------------------------------------------------

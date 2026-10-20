@@ -14,14 +14,19 @@
 
 set -euo pipefail
 
-SECDIR="$HOME/Obsidian/Templates/Scripts"
+# The installed copy the agents run (component 49), not the vault's: a baseline
+# taken by code planted in the vault would certify that plant (5278112).
+SECDIR="$HOME/.local/share/obsidian-security/bin"
 STATE_DIR="${OBSIDIAN_SECURITY_STATE_DIR:-$HOME/.local/share/obsidian-security}"
 
 NEEDS_BASELINE=0
 if [[ ! -f "$STATE_DIR/plugin_allowlist.json" || "${REBASELINE:-0}" -eq 1 ]]; then NEEDS_BASELINE=1; fi
 if [[ ! -f "$STATE_DIR/integrity_state.json" || "${REBASELINE:-0}" -eq 1 ]]; then NEEDS_BASELINE=1; fi
 
-if [[ "$NEEDS_BASELINE" -eq 0 ]]; then
+if [[ ! -f "$SECDIR/integrity_monitor.py" || ! -f "$SECDIR/plugin_integrity_check.py" ]]; then
+    warn "  the security controls are not installed in $SECDIR; no baselines offered."
+    warn "  Install them with: ./install.sh --only 49-security-controls"
+elif [[ "$NEEDS_BASELINE" -eq 0 ]]; then
     ok "  baselines already present at $STATE_DIR"
 elif [[ "${INTERACTIVE:-1}" -eq 1 ]]; then
     info "  The two security controls compare this machine against a recorded baseline;"
@@ -30,16 +35,16 @@ elif [[ "${INTERACTIVE:-1}" -eq 1 ]]; then
     if confirm "Record the security baselines now?" Y; then
         # Plugin allowlist first: it is one of the integrity monitor's trust
         # anchors, so the integrity baseline must record its final form.
-        /usr/bin/python3 "$SECDIR/plugin_integrity_check.py" --update || warn "  plugin baseline returned non-zero"
-        /usr/bin/python3 "$SECDIR/integrity_monitor.py"      --update || warn "  integrity baseline returned non-zero"
+        /usr/bin/python3 -I "$SECDIR/plugin_integrity_check.py" --update || warn "  plugin baseline returned non-zero"
+        /usr/bin/python3 -I "$SECDIR/integrity_monitor.py"      --update || warn "  integrity baseline returned non-zero"
         ok "  baselines recorded"
     else
         warn "  no baselines recorded; both controls stay inactive until you run, in this order:"
-        warn "    /usr/bin/python3 $SECDIR/plugin_integrity_check.py --update"
-        warn "    /usr/bin/python3 $SECDIR/integrity_monitor.py --update"
+        warn "    /usr/bin/python3 -I $SECDIR/plugin_integrity_check.py --update"
+        warn "    /usr/bin/python3 -I $SECDIR/integrity_monitor.py --update"
     fi
 else
     info "  --auto: not recording baselines. When ready, run, in this order:"
-    info "    /usr/bin/python3 $SECDIR/plugin_integrity_check.py --update"
-    info "    /usr/bin/python3 $SECDIR/integrity_monitor.py --update"
+    info "    /usr/bin/python3 -I $SECDIR/plugin_integrity_check.py --update"
+    info "    /usr/bin/python3 -I $SECDIR/integrity_monitor.py --update"
 fi

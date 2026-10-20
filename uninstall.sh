@@ -12,7 +12,8 @@
 #   - agent logs under ~/Library/Logs
 #   - regenerable state: the per-vault .venv, and logs/.locks/.state/.config
 #     under Templates/Scripts, .tag_tracking.json, and the security state dir
-#     (~/.local/share/obsidian-security)
+#     (~/.local/share/obsidian-security, with the installed copy of the
+#     security controls in its bin/)
 #
 # Removed ONLY when asked (flags below), because they hold data or need sudo:
 #   --llm         stop + remove the open-webui Docker container
@@ -239,6 +240,9 @@ if [[ "$do_state" -eq 1 ]]; then
     [[ -d "$VAULT_SCRIPTS/.config" ]] && \
         info "  kept $VAULT_SCRIPTS/.config (hand-built job configuration)"
 else
+    # The installed controls are code, not state: with their agents gone,
+    # nothing runs them, and a reinstall writes them afresh.
+    rm_path "$HOME/.local/share/obsidian-security/bin"
     info "  kept runtime state."
 fi
 

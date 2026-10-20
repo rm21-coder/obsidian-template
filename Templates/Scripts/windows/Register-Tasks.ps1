@@ -25,6 +25,12 @@
   console window. (-Hidden on the settings set would not do this: it hides the
   task in the Task Scheduler UI, not the window.) Re-run this script to move an
   existing install's tasks to pythonw.exe.
+
+  The two security tasks (Isolated=$true in the manifest) are the exception:
+  they run an installed copy of run_logged.py and the control from
+  %LOCALAPPDATA%\obsidian-security\bin under the base pythonw.exe with -I -S,
+  so no code from the vault they watch runs inside them. This script installs
+  that copy before registering them.
 .PARAMETER Only    Register just one job by name.
 .PARAMETER WhatIf  Show what would be registered without changing anything.
 #>
@@ -93,10 +99,47 @@ if ($manifest.Jobs | Where-Object { $_.RequiresRag }) {
     }
 }
 
+# Jobs marked Isolated (the two security controls, finding 5278112) run an
+# installed copy outside the vault -- run_logged.py and the control both --
+# under the base interpreter with -I -S. The copy is refreshed here, from the
+# vault's scripts, before any of those tasks is registered against it: every
+# install and update re-runs this script.
+$isolatedJobs = @($manifest.Jobs | Where-Object { $_.Isolated -and (-not $Only -or $_.Name -eq $Only) })
+$controlsDir = Get-ControlsDir
+$controlsReady = $false
+if ($isolatedJobs.Count -gt 0) {
+    try {
+        $controlPython = Get-ControlPython -Windowless
+        if ($PSCmdlet.ShouldProcess($controlsDir, 'Install the security controls')) {
+            Install-SecurityControls
+        }
+        $controlsReady = $true
+    } catch {
+        Write-Warning "  could not install the security controls: $_"
+    }
+}
+
 foreach ($job in $manifest.Jobs) {
     if ($Only -and $job.Name -ne $Only) { continue }
 
-    $scriptPath = Join-Path $scriptsDir $job.Script
+    if ($job.Isolated) {
+        if (-not $controlsReady) {
+            # Left as it was rather than pointed at a copy that is not there.
+            $failed += "$($job.Name) (security controls not installed in $controlsDir)"
+            continue
+        }
+        $jobRunner  = Join-Path $controlsDir 'run_logged.py'
+        $scriptPath = Join-Path $controlsDir $job.Script
+        $jobPython  = $controlPython
+        $jobFlags   = '-I -S '
+        $workDir    = $controlsDir
+    } else {
+        $jobRunner  = $runner
+        $scriptPath = Join-Path $scriptsDir $job.Script
+        $jobPython  = $python
+        $jobFlags   = ''
+        $workDir    = $scriptsDir
+    }
     if (-not (Test-Path $scriptPath)) {
         Write-Warning "Skipping $($job.Name): script not found at $scriptPath"
         continue
@@ -110,10 +153,10 @@ foreach ($job in $manifest.Jobs) {
     # has already dumped its stacks into its log (job_boot.py); Task
     # Scheduler's limit alone ends only run_logged and orphans the job.
     $limitMin  = Get-TimeLimitMinutes $job
-    $argString = '"{0}" --timeout {1} {2} "{3}"' -f $runner, ([Math]::Max(60, $limitMin * 60 - 120)), $job.Name, $scriptPath
+    $argString = '{0}"{1}" --timeout {2} {3} "{4}"' -f $jobFlags, $jobRunner, ([Math]::Max(60, $limitMin * 60 - 120)), $job.Name, $scriptPath
     if ($job.Args -and $job.Args.Count -gt 0) { $argString += ' ' + ($job.Args -join ' ') }
 
-    $action   = New-ScheduledTaskAction -Execute $python -Argument $argString -WorkingDirectory $scriptsDir
+    $action   = New-ScheduledTaskAction -Execute $jobPython -Argument $argString -WorkingDirectory $workDir
     $trigger  = New-TriggerFromSpec $job.Trigger
     $limit    = New-TimeSpan -Minutes $limitMin
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
@@ -150,7 +193,7 @@ foreach ($job in $manifest.Jobs) {
         $live = Get-ScheduledTask -TaskName $taskName -TaskPath "$folder\" -ErrorAction SilentlyContinue
         $liveLimit = $null
         try { $liveLimit = [System.Xml.XmlConvert]::ToTimeSpan([string]$live.Settings.ExecutionTimeLimit) } catch { }
-        $ok = $live -and $live.Actions[0].Execute -eq $python -and
+        $ok = $live -and $live.Actions[0].Execute -eq $jobPython -and
               $live.Actions[0].Arguments -eq $argString -and
               $liveLimit -eq $limit -and
               (($live.State -eq 'Disabled') -eq (-not $enable))

@@ -192,6 +192,12 @@ def state_dir() -> Path:
     override = (os.environ.get(STATE_DIR_ENV) or "").strip()
     if override:
         return Path(override).expanduser().resolve()
+    return default_state_dir()
+
+
+def default_state_dir() -> Path:
+    """state_dir() without the OBSIDIAN_SECURITY_STATE_DIR override: where the
+    scheduled jobs, which never see that variable, keep their state."""
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(base) / "obsidian-security"
@@ -510,3 +516,125 @@ def append_alert(record: dict) -> None:
             restrict_file(log)
     except Exception as exc:
         print(f"[security_common] alert append failed: {exc}", file=sys.stderr)
+
+
+# ---------- the installed copy of the controls --------------------------------
+#
+# Finding 5278112. The controls used to run from the vault's Templates/Scripts,
+# the folder the integrity monitor watches, so anything able to write there --
+# a json.py beside the scripts, say -- was imported by the very check meant to
+# report it, and the folder's own WatchPaths started that run within seconds.
+# The scheduled jobs now run a copy installed here, owner-only and outside the
+# vault and every sync, under `python -I` (no script folder, no PYTHON*
+# variables, no user site on sys.path). The vault copies stay where they are;
+# the installed integrity monitor reports any of them that no longer matches
+# its installed twin, so an edit there is still seen.
+#
+# A bin/ folder inside the state directory rather than beside it: that
+# directory already exists, is 0700, and is outside the vault and outside
+# iCloud/OneDrive; uninstall already removes it; and a subfolder keeps code
+# apart from the *.json trust anchors and alerts.log at its top level, which
+# are all the integrity monitor's state_dir scope reads.
+
+CONTROL_FILES = ("integrity_monitor.py", "plugin_integrity_check.py", "security_common.py")
+# Windows tasks start through run_logged.py (and job_boot.py, script_lock.py),
+# and notify() runs windows/Send-Notification.ps1 from beside this file, so
+# those are installed too: otherwise vault code would still run first.
+CONTROL_FILES_WINDOWS = ("run_logged.py", "job_boot.py", "script_lock.py",
+                         "windows/Send-Notification.ps1")
+
+
+def control_files() -> tuple:
+    """Files (relative to Templates/Scripts, '/'-separated) installed into
+    controls_dir() on this platform."""
+    if sys.platform == "win32":
+        return CONTROL_FILES + CONTROL_FILES_WINDOWS
+    return CONTROL_FILES
+
+
+def controls_dir() -> Path:
+    """Where the installed copy of the controls lives: state_dir()/bin."""
+    return state_dir() / "bin"
+
+
+def is_installed_copy(directory: Path) -> bool:
+    """True when `directory` is controls_dir(), with or without the state-dir
+    override (a sandboxed manual run of the live copy is still that copy)."""
+    try:
+        here = Path(directory).resolve()
+        return here in {controls_dir().resolve(), (default_state_dir() / "bin").resolve()}
+    except (OSError, RuntimeError):
+        return False
+
+
+def _sha256_bytes(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha256(data).hexdigest()
+
+
+def install_controls(src: Path, dest: Path | None = None) -> list:
+    """Copy control_files() from `src` (a Templates/Scripts folder) into
+    `dest` (default controls_dir()), owner-only, and check each copy against
+    the bytes read. Raises OSError or ValueError on any failure: a partial
+    install must not read as a successful one."""
+    import shutil
+    import stat as _st
+
+    src = Path(src)
+    dest = Path(dest) if dest is not None else controls_dir()
+    names = control_files()
+    blobs = {}
+    for rel in names:
+        path = src / rel
+        if not _st.S_ISREG(os.lstat(path).st_mode):
+            raise ValueError(f"{path} is not a regular file")
+        blobs[rel] = path.read_bytes()
+    new_parent = not dest.parent.exists()
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if dest.is_symlink() or not dest.is_dir():
+        raise ValueError(f"{dest} is not a directory")
+    if os.name == "posix":
+        os.chmod(dest, 0o700)
+        if new_parent:          # the state dir, created here: owner-only too
+            os.chmod(dest.parent, 0o700)
+    for rel, data in blobs.items():
+        target = dest / rel
+        if target.parent != dest:
+            target.parent.mkdir(mode=0o700, exist_ok=True)
+            if target.parent.is_symlink():
+                raise ValueError(f"{target.parent} is a symlink")
+        tmp = target.with_name(target.name + ".tmp")
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                     | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0), 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, target)
+        restrict_file(target)
+        if _sha256_bytes(target.read_bytes()) != _sha256_bytes(data):
+            raise ValueError(f"{target} does not match {src / rel} after copying")
+    # Bytecode of the previous copy: never loaded once stale, but not ours to keep.
+    shutil.rmtree(dest / "__pycache__", ignore_errors=True)
+    return list(names)
+
+
+def _cli(argv: list) -> int:
+    """python -I security_common.py install-controls <scripts-dir> [<dest>]"""
+    if len(argv) in (2, 3) and argv[0] == "install-controls":
+        dest = Path(argv[2]) if len(argv) == 3 else controls_dir()
+        try:
+            names = install_controls(Path(argv[1]), dest)
+        except (OSError, ValueError) as exc:
+            log("install-controls", f"FAILED: {exc}")
+            return 1
+        log("install-controls", f"installed {len(names)} files into {dest}", stream=sys.stdout)
+        return 0
+    log("install-controls", "usage: security_common.py install-controls <scripts-dir> [<dest>]")
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(_cli(sys.argv[1:]))

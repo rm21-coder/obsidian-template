@@ -51,9 +51,10 @@ case "$action" in
   # detection is erased. The browser's "open this app?" prompt was the only
   # thing in the way, and "always allow" removes it.
   #
-  # Adopting a baseline is a deliberate act; do it in a terminal, in order:
-  #   /usr/bin/python3 plugin_integrity_check.py --update
-  #   /usr/bin/python3 integrity_monitor.py --update
+  # Adopting a baseline is a deliberate act; do it in a terminal, in order,
+  # with the installed copies the agents run:
+  #   /usr/bin/python3 -I ~/.local/share/obsidian-security/bin/plugin_integrity_check.py --update
+  #   /usr/bin/python3 -I ~/.local/share/obsidian-security/bin/integrity_monitor.py --update
   # A request for it now falls through to *) below and is refused.
 
   refresh-dashboard)

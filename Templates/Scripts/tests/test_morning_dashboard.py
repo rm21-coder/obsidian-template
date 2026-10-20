@@ -394,9 +394,14 @@ def test_every_hint_is_fully_filled_in(monkeypatch, platform, label):
 def test_the_integrity_rebaseline_command_is_the_platforms(monkeypatch):
     label = "com.obsidian.security.integrity"
     monkeypatch.setattr(md.sys, "platform", "win32")
-    assert ".venv\\Scripts\\python.exe integrity_monitor.py --update" in md.pipeline_hint(label)
+    assert (".venv\\Scripts\\python.exe -I -S %LOCALAPPDATA%\\obsidian-security\\bin\\"
+            "integrity_monitor.py --update") in md.pipeline_hint(label)
     monkeypatch.setattr(md.sys, "platform", "darwin")
-    assert "/usr/bin/python3 integrity_monitor.py --update" in md.pipeline_hint(label)
+    # The installed copy, isolated, as the agent runs it (5278112).
+    assert ("/usr/bin/python3 -I ~/.local/share/obsidian-security/bin/integrity_monitor.py --update"
+            in md.pipeline_hint(label))
+    assert ("/usr/bin/python3 -I ~/.local/share/obsidian-security/bin/plugin_integrity_check.py --update"
+            in md.pipeline_hint("com.obsidian.security.plugin-check"))
 
 
 def test_the_shipped_meeting_pull_label_gets_the_real_hint(monkeypatch):

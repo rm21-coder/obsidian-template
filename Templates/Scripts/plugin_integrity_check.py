@@ -70,7 +70,12 @@ import time
 import unicodedata
 from pathlib import Path
 
-import security_common
+# 5278112: run as the installed copy under `python3 -I`, so the script's own
+# folder is not on sys.path; its one sibling module is found by appending that
+# folder, after the standard library. See integrity_monitor.py.
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+import security_common  # noqa: E402
 
 DEFAULT_VAULT = Path.home() / "Obsidian"
 STATE_DIR = security_common.state_dir()
@@ -113,6 +118,9 @@ HMAC_ACCOUNT = os.environ.get("USER") or os.environ.get("USERNAME") or "obsidian
 # Recorded in place of a hash for anything that is not a plain file. Cannot
 # equal a real digest, so it always differs from a vetted baseline.
 NOT_A_FILE = "not-a-regular-file"
+# Prefix of a referenced file recorded but not hashed (5277580). Reported on
+# every run, like "(overrun)": a baseline cannot vouch for what was not read.
+SKIPPED = "skipped: "
 
 
 def _regular_file(path: Path) -> bool:
@@ -125,12 +133,19 @@ def _regular_file(path: Path) -> bool:
         return False
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path, limit: int | None = None) -> str:
+    """Hex digest, NOT_A_FILE, or -- past `limit` bytes -- a SKIPPED marker.
+    The limit is enforced on the bytes read, so a file that grows after it
+    was sized is still cut off."""
     if not _regular_file(path):
         return NOT_A_FILE
     h = hashlib.sha256()
+    n = 0
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(65536), b""):
+            n += len(chunk)
+            if limit is not None and n > limit:
+                return f"{SKIPPED}larger than {limit} bytes"
             h.update(chunk)
     return h.hexdigest()
 
@@ -272,6 +287,16 @@ REF_SKIP_KEYS: dict[str, tuple[str, ...]] = {"obsidian-meta-bind-plugin": ("excl
 BARE_NAME_KEYS: dict[str, tuple[str, ...]] = {
     "obsidian-meta-bind-plugin": ("buttonTemplates", "inputFieldTemplates")}
 REF_WALK_SECONDS = 20
+# 5277580: a watched data.json names the files hashed below, so whoever can
+# write it chose how much this run reads. Every name counts against
+# REF_MAX_FILES and the one deadline, a file named twice is hashed once, each
+# file and the whole set are capped in bytes, and a name that climbs out of
+# the vault ("..", a drive or an absolute path) is not followed. Whatever is
+# not hashed is recorded as SKIPPED or "(overrun)" and reported on every run.
+# (A symlink inside the vault is still followed wherever it points: the plugin
+# reads its target -- review round 3. The caps bound it.)
+REF_MAX_FILE_BYTES = 8 * 1024 * 1024
+REF_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 
 
 def _obsidian_path(raw: str) -> str:
@@ -285,7 +310,14 @@ def _obsidian_path(raw: str) -> str:
     return unicodedata.normalize("NFC", p.strip("/"))
 
 
-def _hash_ref(vault: Path, target: Path) -> str:
+def _climbs_out(name: str) -> bool:
+    """A normalised name that does not stay below the vault: a ".." part, or
+    one Path would treat as absolute (a drive on Windows)."""
+    p = Path(name)
+    return ".." in name.split("/") or bool(p.drive or p.anchor)
+
+
+def _hash_ref(vault: Path, target: Path, limit: int | None = None) -> str:
     """Content hash of a referenced file. A symlink is followed wherever it
     points -- the plugin reads the target -- and its destination recorded."""
     if target.is_symlink():
@@ -294,25 +326,34 @@ def _hash_ref(vault: Path, target: Path) -> str:
             real = target.resolve()
         except (OSError, RuntimeError):
             return "symlink->unresolvable"
-        return f"symlink->{dest}:" + (sha256_file(real) if real.is_file() else NOT_A_FILE)
-    return sha256_file(target)
+        digest = sha256_file(real, limit) if real.is_file() else NOT_A_FILE
+        return digest if digest.startswith(SKIPPED) else f"symlink->{dest}:{digest}"
+    return sha256_file(target, limit)
 
 
-# The automation folder sits inside Templater's templates folder. Its code is
-# the integrity monitor's to watch, and its .md files are reports the jobs
-# rewrite every night -- hashed here they would alert nightly.
-AUTOMATION_DIR = Path(__file__).resolve().parent
+def _automation_dir(vault: Path) -> Path:
+    """The automation folder sits inside Templater's templates folder. Its code
+    is the integrity monitor's to watch, and its .md files are reports the
+    jobs rewrite every night -- hashed here they would alert nightly. Taken
+    from the vault, not from this file's location: the scheduled job runs an
+    installed copy outside the vault (5278112)."""
+    try:
+        return (vault / "Templates" / "Scripts").resolve()
+    except (OSError, RuntimeError):
+        return vault / "Templates" / "Scripts"
 
 
 def _walk(root: Path, suffixes: tuple, budget: dict) -> list[Path]:
     """Files under root with these suffixes: never following a directory
-    symlink (a loop would stall the run), skipping dot-folders, bounded in
-    files and time. Running out is recorded, not silently truncated."""
+    symlink (a loop would stall the run), skipping dot-folders and
+    budget["skip"], bounded in files and time. Running out is recorded, not
+    silently truncated."""
     out: list[Path] = []
+    skip = budget.get("skip")
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         here = Path(dirpath)
         dirnames[:] = sorted(d for d in dirnames if not d.startswith(".")
-                             and (here / d).resolve() != AUTOMATION_DIR)
+                             and (here / d).resolve() != skip)
         for f in sorted(filenames):
             if not f.startswith(".") and f.lower().endswith(suffixes):
                 out.append(Path(dirpath) / f)
@@ -325,12 +366,57 @@ def _walk(root: Path, suffixes: tuple, budget: dict) -> list[Path]:
 
 def _referenced_files(vault: Path, plugin_id: str, data: dict) -> dict[str, str]:
     out: dict[str, str] = {}
-    budget = {"files": REF_MAX_FILES, "deadline": time.monotonic() + REF_WALK_SECONDS,
-              "overrun": False}
+    budget = {"files": REF_MAX_FILES, "bytes": REF_MAX_TOTAL_BYTES,
+              "deadline": time.monotonic() + REF_WALK_SECONDS, "overrun": False,
+              "skip": _automation_dir(vault)}
     by_name: dict[str, list[Path]] | None = None
+    seen: set = set()          # resolved paths already hashed
+    walked: set = set()        # resolved folders already walked
 
-    def add(path: Path) -> None:
-        out[path.relative_to(vault).as_posix()] = _hash_ref(vault, path)
+    def spent() -> bool:
+        if (budget["files"] < 0 or budget["bytes"] < 0
+                or time.monotonic() > budget["deadline"]):
+            budget["overrun"] = True
+        return budget["overrun"]
+
+    def add(path: Path, named: bool = False) -> None:
+        if spent():
+            return
+        try:
+            real = path.resolve()
+        except (OSError, RuntimeError):
+            real = None
+        if real is not None:
+            if real in seen:
+                return
+            seen.add(real)
+        if named:               # a walk counts its own files
+            budget["files"] -= 1
+            if spent():
+                return
+        key = path.relative_to(vault).as_posix()
+        try:
+            size = real.stat().st_size if real is not None and real.is_file() else 0
+        except OSError:
+            size = 0
+        if size > REF_MAX_FILE_BYTES:
+            out[key] = f"{SKIPPED}larger than {REF_MAX_FILE_BYTES} bytes"
+            return
+        budget["bytes"] -= size
+        if spent():
+            return
+        out[key] = _hash_ref(vault, path, REF_MAX_FILE_BYTES)
+
+    def walk(root: Path, suffixes: tuple) -> None:
+        try:
+            real = root.resolve()
+        except (OSError, RuntimeError):
+            return
+        if real in walked or spent():
+            return
+        walked.add(real)
+        for g in _walk(root, suffixes, budget):
+            add(g)
 
     skip = REF_SKIP_KEYS.get(plugin_id, ())
     bare_ok = set(BARE_NAME_KEYS.get(plugin_id, ()))
@@ -338,8 +424,13 @@ def _referenced_files(vault: Path, plugin_id: str, data: dict) -> dict[str, str]
              if k in data and k not in skip for raw in _strings(data[k])]
     named: list[Path] = []
     for key, raw in pairs:
+        if spent():
+            break
         name = _obsidian_path(raw)
         if not name or len(name) > 1024 or "\n" in name:
+            continue
+        if _climbs_out(name):
+            out[name] = f"{SKIPPED}names a path outside the vault"
             continue
         hit = None
         for cand in (name, name + ".md"):
@@ -351,30 +442,33 @@ def _referenced_files(vault: Path, plugin_id: str, data: dict) -> dict[str, str]
             # A bare note name, resolved by link name as Obsidian does.
             if by_name is None:
                 by_name = {}
-                for f in _walk(vault, REF_SUFFIXES, {"files": 200000,
-                               "deadline": time.monotonic() + REF_WALK_SECONDS,
-                               "overrun": False}):
+                every = {"files": 200000, "deadline": budget["deadline"],
+                         "overrun": False, "skip": budget["skip"]}
+                for f in _walk(vault, REF_SUFFIXES, every):
                     by_name.setdefault(f.stem.casefold(), []).append(f)
+                if every["overrun"]:
+                    budget["overrun"] = True   # a partial index was a silent miss
             for f in by_name.get(name.casefold().removesuffix(".md"), []):
                 named.append(f)
             continue
         if hit is not None:
             named.append(hit)
     for f in named:
-        add(f)
+        add(f, named=True)
         # A script can require() its neighbours: hash its folder's code too.
         if f.suffix.lower() in (".js", ".mjs", ".cjs") and f.parent != vault:
-            for g in _walk(f.parent, REF_EXTRA_SUFFIXES, budget):
-                add(g)
+            walk(f.parent, REF_EXTRA_SUFFIXES)
     for key in REF_FOLDER_KEYS.get(plugin_id, ()):
         folder = data.get(key)
         if not isinstance(folder, str) or not _obsidian_path(folder):
             continue
+        if _climbs_out(_obsidian_path(folder)):
+            out[_obsidian_path(folder) + "/"] = f"{SKIPPED}names a path outside the vault"
+            continue
         root = vault / _obsidian_path(folder)
         if not root.is_dir():
             continue
-        for g in _walk(root, REF_SUFFIXES, budget):
-            add(g)
+        walk(root, REF_SUFFIXES)
     if budget["overrun"]:
         # Not a state a baseline can hold: reported on every run until the
         # referenced folders are small enough to hash completely.
@@ -700,8 +794,16 @@ def diff(current: dict[str, dict], allowlist: dict[str, dict]) -> list[dict]:
         if "enabled" in cur and "enabled" in old and cur["enabled"] != old["enabled"]:
             findings.append({"kind": "ENABLED_CHANGE", "plugin": pid,
                              "from": old["enabled"], "to": cur["enabled"]})
-        if "(overrun)" in ((cur.get("settings") or {}).get("refs") or {}):
+        refs = (cur.get("settings") or {}).get("refs") or {}
+        if "(overrun)" in refs:
             findings.append({"kind": "REFERENCE_LIMIT", "plugin": pid})
+        skipped = sorted(k for k, v in refs.items()
+                         if isinstance(v, str) and v.startswith(SKIPPED))
+        if skipped:
+            # Every run, like REFERENCE_LIMIT: adopting it would vouch for a
+            # file nobody read (5277580).
+            findings.append({"kind": "REFERENCE_SKIPPED", "plugin": pid,
+                             "count": len(skipped), "paths": skipped[:20]})
         if ("settings" in cur and "settings" in old
                 and isinstance(old["settings"], dict) and "keys" in old["settings"]):
             changed = _settings_changes(old["settings"], cur["settings"])
@@ -835,6 +937,9 @@ def main(argv: list[str]) -> int:
         elif f["kind"] == "REFERENCE_LIMIT":
             summary_parts.append(f"{f['plugin']}: its scripts/templates are too many "
                                  "to hash completely; not all are watched")
+        elif f["kind"] == "REFERENCE_SKIPPED":
+            summary_parts.append(f"{f['plugin']}: {f['count']} referenced file(s) not "
+                                 "hashed (outside the vault or too large)")
         elif f["kind"] == "NOT_BASELINED":
             summary_parts.append(f"{f['plugin']} {'/'.join(f['fields'])} not yet "
                                  "baselined: vet, then --update")

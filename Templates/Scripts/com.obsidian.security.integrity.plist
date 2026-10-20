@@ -16,6 +16,14 @@
 
   Stdlib-only - uses /usr/bin/python3 so the watcher runs even if the
   per-vault venv is broken.
+
+  Runs the INSTALLED copy in ~/.local/share/obsidian-security/bin, never the
+  vault's, and with -I (finding 5278112). Run from the folder it watches, a
+  module planted there (a json.py) was imported by the monitor itself, and
+  the WatchPaths below started that run within 30s of the plant. -I keeps
+  the script's folder, PYTHON* variables and the user site off sys.path.
+  Component 49 (and ./update.sh) install the copy; the monitor reports any
+  vault copy that no longer matches it.
 -->
 <plist version="1.0">
 <dict>
@@ -25,7 +33,8 @@
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>
-        <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/integrity_monitor.py</string>
+        <string>-I</string>
+        <string>/Users/YOUR_USERNAME/.local/share/obsidian-security/bin/integrity_monitor.py</string>
     </array>
 
     <key>StartCalendarInterval</key>

@@ -44,6 +44,52 @@ function Get-VenvPythonW {
     return (Get-VenvPython)
 }
 
+# The security controls (finding 5278112). Their tasks run an installed copy in
+# %LOCALAPPDATA%\obsidian-security\bin, not the vault's: run from the folder the
+# integrity monitor watches, a module planted there (a json.py) was imported by
+# the control itself. The copy and its check are security_common.py's
+# install-controls, the same code macOS uses; the installed integrity monitor
+# reports any vault copy that no longer matches it.
+function Get-ControlsDir {
+    return (Join-Path $env:LOCALAPPDATA 'obsidian-security\bin')
+}
+
+# The interpreter the security tasks run under: the base Python the venv was
+# built from, as the venv's pyvenv.cfg names it, never the venv itself. The
+# venv lives inside the vault, and its site-packages (.pth files included) run
+# at every start. Always started with -I -S: no script folder, no PYTHON*
+# variables, no site-packages at all (the controls are stdlib-only).
+function Get-ControlPython([switch]$Windowless) {
+    $cfg = Join-Path (Get-ScriptsDir) '.venv\pyvenv.cfg'
+    $pyHome = $null
+    if (Test-Path -LiteralPath $cfg) {
+        foreach ($line in (Get-Content -LiteralPath $cfg)) {
+            if ($line -match '^\s*home\s*=\s*(.+?)\s*$') { $pyHome = $Matches[1]; break }
+        }
+    }
+    if (-not $pyHome) { throw "No base interpreter named in $cfg. Run install.ps1 first." }
+    if ($Windowless) {
+        $pyw = Join-Path $pyHome 'pythonw.exe'
+        if (Test-Path -LiteralPath $pyw) { return $pyw }
+        Write-Warning "No pythonw.exe in $pyHome; the security tasks will use python.exe and show a console window."
+    }
+    $py = Join-Path $pyHome 'python.exe'
+    if (Test-Path -LiteralPath $py) { return $py }
+    throw "No python.exe in $pyHome (named by $cfg)."
+}
+
+# Copy the controls into Get-ControlsDir, owner-only, checked file by file.
+# Throws on any failure: a task must not be pointed at a partial copy.
+function Install-SecurityControls {
+    $src  = Get-ScriptsDir
+    $dest = Get-ControlsDir
+    $py   = Get-ControlPython
+    $tool = Join-Path $src 'security_common.py'
+    Invoke-Native -ErrorMessage "installing the security controls into $dest failed" {
+        & $py -I -S $tool install-controls $src $dest
+    }
+}
+
 # The lowest Python 3 minor version that can install requirements.lock here.
 # 3.10 is the floor everywhere (the scripts use PEP 604 unions); on Windows
 # ARM64 it is 3.12, because pyyaml publishes no win_arm64 wheel for 3.11 and

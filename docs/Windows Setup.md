@@ -248,7 +248,11 @@ diff, `venv` findings appear only if `requirements.lock` is in it (or you
 rebuilt the venv with `install.ps1` since the last baseline and
 `.venv\Scripts\python.exe -m pip check` is clean), every task
 finding is an `\Obsidian\` task, and there is no `state_dir`, `secrets`,
-`PERMISSIONS` or `BULK_DELETE` finding. The one expected `state_dir` finding
+`PERMISSIONS`, `BULK_DELETE` or `INSTALLED_COPY_MISMATCH` finding (the two
+security tasks run a copy of the controls installed in
+`%LOCALAPPDATA%\obsidian-security\bin`, under the base Python with `-I -S`;
+`Register-Tasks.ps1` refreshes it, and the monitor reports a vault copy that
+differs from it). The one expected `state_dir` finding
 is `plugin_allowlist.json` after you re-vet plugins
 (`plugin_integrity_check.py --update`) since the last baseline. Anything else
 is a real alert. An
