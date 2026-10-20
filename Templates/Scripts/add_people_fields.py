@@ -37,29 +37,38 @@ FIELDS = (("Email-Work-2", "Email-Work", ""), ("Email-Priority", "Email-Work-2",
 
 
 def _has_key(lines: list, key: str) -> int:
-    """Index of the top-level `key:` line, or -1."""
-    for i, line in enumerate(lines):
+    """Index of the top-level `key:` line in [text, ending] pairs, or -1."""
+    for i, (line, _) in enumerate(lines):
         if line == key + ":" or line.startswith(key + ": ") or line.startswith(key + ":\t"):
             return i
     return -1
 
 
 def add_fields(text: str):
-    """(new_text, keys_added), or (None, reason) when the note is skipped."""
-    nl = "\r\n" if text.startswith("---\r\n") else "\n"
-    if not text.startswith("---" + nl):
+    """(new_text, keys_added), or (None, reason) when the note is skipped.
+
+    Line endings are read per line, not from the opening `---`: a note can
+    open with CRLF and continue in LF (82 of 440 People notes in one vault,
+    2026-10-19), and keying the closing-fence search on the first line's ending
+    skipped every one of them as unterminated."""
+    if text.startswith("---\r\n"):
+        start = 5
+    elif text.startswith("---\n"):
+        start = 4
+    else:
         return None, "no frontmatter"
-    end = text.find(nl + "---", 3)
+    end = text.find("\n---", start - 1)     # the "\n" that ends the last frontmatter line
     if end < 0:
         return None, "unterminated frontmatter"
-    head = text[len("---" + nl):end]
-    lines = head.split(nl)
+    # [text, ending] per line, so each existing line is written back as it was.
+    lines = [[raw[:-1], "\r\n"] if raw.endswith("\r") else [raw, "\n"]
+             for raw in text[start:end].split("\n")] if end >= start else []
     added = []
     for key, after, value in FIELDS:
         at = _has_key(lines, key)
         if at >= 0:
-            if value and lines[at].strip() == key + ":":
-                lines[at] = "%s: %s" % (key, value)
+            if value and lines[at][0].strip() == key + ":":
+                lines[at][0] = "%s: %s" % (key, value)
                 added.append(key)
             continue
         anchor = _has_key(lines, after)
@@ -67,13 +76,14 @@ def add_fields(text: str):
             return None, "no %s line" % after
         # A value continued on indented lines (a YAML list) stays with its key.
         at = anchor + 1
-        while at < len(lines) and lines[at][:1] in (" ", "\t", "-") and lines[at].strip():
+        while at < len(lines) and lines[at][0][:1] in (" ", "\t", "-") and lines[at][0].strip():
             at += 1
-        lines.insert(at, ("%s: %s" % (key, value)) if value else key + ":")
+        # The new line ends the way the line it follows does.
+        lines.insert(at, [("%s: %s" % (key, value)) if value else key + ":", lines[at - 1][1]])
         added.append(key)
     if not added:
         return text, []
-    return "---" + nl + nl.join(lines) + text[end:], added
+    return text[:start] + "".join(t + e for t, e in lines) + text[end + 1:], added
 
 
 def obsidian_running():
@@ -143,7 +153,7 @@ def main(argv=None) -> int:
     print("%s %d note(s): +Email-Work-2 in %d, +Email-Priority in %d; %d already current"
           % (verb, changed, counts["Email-Work-2"], counts["Email-Priority"], current))
     for note, why in skipped:
-        print("  skipped %s: %s" % (note.relative_to(vault), why))
+        print("  skipped %s: %s" % (note.relative_to(vault).as_posix(), why))
     if not args.write and changed:
         print("dry run: nothing written. Quit Obsidian, then re-run with --write.")
     return 0

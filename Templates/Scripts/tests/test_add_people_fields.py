@@ -48,6 +48,35 @@ def test_crlf_notes_stay_crlf() -> None:
     assert "Email-Work-2:\r\nEmail-Priority: false\r\n" in new
 
 
+def test_lf_notes_stay_lf() -> None:
+    new, added = apf.add_fields(OLD)
+    assert added == ["Email-Work-2", "Email-Priority"] and "\r" not in new
+
+
+def test_a_crlf_opening_with_an_lf_body_is_not_skipped() -> None:
+    """One vault had 82 of 440 People notes like this (2026-10-19): the first
+    line's CRLF set the closing-fence search, which never matched, so every one
+    was skipped as unterminated. Each line keeps its own ending."""
+    mixed = "---\r\n" + OLD[len("---\n"):]
+    new, added = apf.add_fields(mixed)
+    assert added == ["Email-Work-2", "Email-Priority"]
+    assert new.startswith("---\r\ncategories:\n")
+    assert "Email-Work: bob@example.edu\nEmail-Work-2:\nEmail-Priority: false\nMobile Phone" in new
+    assert new.replace("Email-Work-2:\nEmail-Priority: false\n", "") == mixed
+    assert apf.add_fields(new) == (new, [])
+    empty = mixed.replace("Email-Work: bob@example.edu\n",
+                          "Email-Work: bob@example.edu\nEmail-Work-2:\nEmail-Priority:\n")
+    new, added = apf.add_fields(empty)
+    assert added == ["Email-Priority"]
+    assert new == empty.replace("Email-Priority:\n", "Email-Priority: false\n")
+
+
+def test_a_crlf_fence_line_keeps_its_ending() -> None:
+    text = OLD.replace("tags: []\n---\n", "tags: []\r\n---\r\n")
+    new, _ = apf.add_fields(text)
+    assert new.replace("Email-Work-2:\nEmail-Priority: false\n", "") == text
+
+
 def test_a_list_value_stays_with_its_key() -> None:
     text = OLD.replace("Email-Work: bob@example.edu\n", "Email-Work:\n  - bob@example.edu\n")
     new, _ = apf.add_fields(text)
