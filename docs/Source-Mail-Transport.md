@@ -138,6 +138,15 @@ Enable 2-Step Verification first, then generate an App Password
 2SV is on, and it stays hidden if 2SV is passkey- or security-key-only. Create
 **one App Password per machine** so a lost machine can be revoked on its own.
 
+The puller logs in over IMAPS (port 993) with a verified TLS context: the
+system CA store, hostname checking, and TLS 1.2 as the floor. Python's
+`imaplib` does not verify certificates unless it is given a context, so this is
+set explicitly; without it anyone on the network path could present any
+certificate and read the App Password at login. A certificate failure shows in
+the log as an IMAP error and the run retries five minutes later. On macOS the
+venv's Homebrew Python reads Homebrew's CA bundle; a python.org build needs its
+`Install Certificates.command` run once, or every login fails verification.
+
 > Google is phasing App Passwords out during 2026 in favour of OAuth 2.0. When
 > that lands, only `_secret()` in `source_mail_pull.py` needs to change; the
 > routing, verification and sanitising logic is independent of how the mailbox

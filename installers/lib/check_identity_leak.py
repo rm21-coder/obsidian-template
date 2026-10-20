@@ -202,6 +202,59 @@ def skip_path(path: str) -> bool:
     return name in SELF_EXCLUDE or Path(path).suffix.lower() in SKIP_SUFFIXES
 
 
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def _diff_added_lines(diff: str) -> list[tuple[str, int, str]]:
+    """Added lines of a unified diff, as (path, line_no, text).
+
+    Hunk bodies are counted from their `@@ -a,b +c,d @@` header (an omitted
+    count is 1), and file headers are read only outside a hunk. Finding
+    5278123: an added line `++ x.png` shows as `+++ x.png`, was read as a
+    file header, and moved every later added line onto a skipped binary path;
+    `++name` (shown `+++name`) was dropped outright. Split on newline only:
+    splitlines() also breaks on U+2028, \x85, \x1c and others, which turned
+    one content line into several and would throw the counts off.
+    """
+    out: list[tuple[str, int, str]] = []
+    path, lineno, old_left, new_left = None, 0, 0, 0
+    for line in diff.split("\n"):
+        if line.endswith("\r"):
+            line = line[:-1]
+        if old_left > 0 or new_left > 0:
+            tag = line[:1]
+            if tag == "+":
+                if path and not skip_path(path):
+                    out.append((path, lineno, line[1:]))
+                lineno += 1
+                new_left -= 1
+                continue
+            if tag == "-":
+                old_left -= 1
+                continue
+            if tag == " ":
+                lineno += 1
+                old_left -= 1
+                new_left -= 1
+                continue
+            if tag == "\\":  # "\ No newline at end of file"
+                continue
+            # Nothing else can be hunk body, so the counts were wrong: read
+            # the line as a header rather than lose the rest of the diff.
+            old_left = new_left = 0
+        if line.startswith("diff "):
+            path = None
+        elif line.startswith("+++ "):
+            path = _diff_path(line)
+        elif line.startswith("@@"):
+            m = _HUNK_RE.match(line)
+            if m:
+                old_left = int(m.group(1)) if m.group(1) is not None else 1
+                lineno = int(m.group(2))
+                new_left = int(m.group(3)) if m.group(3) is not None else 1
+    return out
+
+
 def staged_added_lines() -> list[tuple[str, int, str]]:
     """Added lines in the index, as (path, line_no, text).
 
@@ -218,19 +271,7 @@ def staged_added_lines() -> list[tuple[str, int, str]]:
     names = [p for p in run_git("diff", "--cached", "--name-only", "-z",
                                 "--diff-filter=ACMRT").split("\0") if p]
     out: list[tuple[str, int, str]] = _name_lines(names)
-    path, lineno = None, 0
-    for line in diff.splitlines():
-        if line.startswith("+++ "):
-            path = _diff_path(line)
-            continue
-        if line.startswith("@@"):
-            m = re.search(r"\+(\d+)", line)
-            lineno = int(m.group(1)) if m else 0
-            continue
-        if line.startswith("+") and not line.startswith("+++"):
-            if path and not skip_path(path):
-                out.append((path, lineno, line[1:]))
-            lineno += 1
+    out += _diff_added_lines(diff)
     return out
 
 
@@ -439,19 +480,7 @@ def range_added_lines(rev_range: str,
         out += _name_lines(names)
         diff = run_git("show", "--format=", "--unified=0", "--no-color", "--text",
                        "--diff-merges=separate", "--diff-filter=ACMRT", "--root", commit)
-        path, lineno = None, 0
-        for line in diff.splitlines():
-            if line.startswith("+++ "):
-                path = _diff_path(line)
-                continue
-            if line.startswith("@@"):
-                m = re.search(r"\+(\d+)", line)
-                lineno = int(m.group(1)) if m else 0
-                continue
-            if line.startswith("+") and not line.startswith("+++"):
-                if path and not skip_path(path):
-                    out.append((path, lineno, line[1:]))
-                lineno += 1
+        out += _diff_added_lines(diff)
     return out
 
 

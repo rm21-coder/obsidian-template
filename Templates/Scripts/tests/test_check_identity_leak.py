@@ -498,3 +498,81 @@ class TestPushedRange:
         assert 'check_classification.py" --repo-root "$REPO_ROOT" --quiet --range "$r"' in hook
         assert 'check_identity_leak.py" --quiet --range "$r"' in hook
         assert hook.index("--range") < hook.index('"$CHECKS" --full')
+
+
+class TestHunkFraming:
+    """5278123: a content line that looks like a file header.
+
+    An added line `++ x.png` is shown in the diff as `+++ x.png`. Read as a
+    `+++ ` header, it moved every later added line of the file onto x.png,
+    which skip_path drops as binary, so the leak below it went unscanned.
+    """
+
+    BODY = 'intro\n++ x.png\nHOST = "acme-tenant.edu"\n'
+
+    def _commit(self, repo: Path, msg: str) -> None:
+        subprocess.run(("git", "commit", "-qm", msg, "--no-verify"), cwd=repo,
+                       check=True, capture_output=True)
+
+    def test_staged_line_after_a_fake_header_is_scanned(self, monkeypatch, lib, repo) -> None:
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        stage(repo, "note.md", self.BODY)
+        hits = m.scan(m.staged_added_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert [(h[0], h[1]) for h in hits] == [("note.md", 3)], hits
+
+    def test_range_line_after_a_fake_header_is_scanned(self, monkeypatch, lib, repo) -> None:
+        """The case pre-push --worktree cannot cover: added, then removed
+        inside the pushed range, so only the range diff ever sees it."""
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        stage(repo, "note.md", "clean\n")
+        self._commit(repo, "base")
+        base = subprocess.run(("git", "rev-parse", "HEAD"), cwd=repo, check=True,
+                              capture_output=True, text=True).stdout.strip()
+        stage(repo, "note.md", "clean\n" + self.BODY)
+        self._commit(repo, "leak")
+        stage(repo, "note.md", "clean\n")
+        self._commit(repo, "fix")
+        hits = m.scan(m.range_added_lines(f"{base}..HEAD"), m.load_denylist(),
+                      m.load_allowed_domains())
+        assert [(h[0], h[1]) for h in hits] == [("note.md", 4)], hits
+
+    def test_a_line_shown_as_triple_plus_without_space_is_scanned(self, monkeypatch, lib, repo) -> None:
+        """`++acme...` shows as `+++acme...`, which the old reader dropped as a
+        header-shaped line even though it took no path from it."""
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        stage(repo, "note.md", "++acme-tenant.edu\n")
+        hits = m.scan(m.staged_added_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert [(h[0], h[1]) for h in hits] == [("note.md", 1)], hits
+
+    def test_a_unicode_line_separator_does_not_split_the_line(self, monkeypatch, lib, repo) -> None:
+        """splitlines() broke a content line at U+2028 and the second half,
+        lacking the `+` prefix, was never scanned."""
+        m = load_module(monkeypatch, lib)
+        monkeypatch.chdir(repo)
+        stage(repo, "note.md", "hello acme-tenant.edu\nnext\n")
+        hits = m.scan(m.staged_added_lines(), m.load_denylist(), m.load_allowed_domains())
+        assert [(h[0], h[1]) for h in hits] == [("note.md", 1)], hits
+
+    def test_omitted_hunk_counts_default_to_one(self, monkeypatch, lib) -> None:
+        """`@@ -3 +3 @@` means one line each side. Defaulting to zero would
+        end the hunk before its body, and the `+++ x.png` body line would be
+        read as a header again."""
+        m = load_module(monkeypatch, lib)
+        diff = ("diff --git a/n.md b/n.md\n--- a/n.md\n+++ b/n.md\n"
+                "@@ -3 +3 @@\n-old\n+++ x.png\n"
+                "@@ -9,0 +10 @@\n+acme-tenant.edu\n")
+        assert m._diff_added_lines(diff) == [("n.md", 3, "++ x.png"),
+                                             ("n.md", 10, "acme-tenant.edu")]
+
+    def test_a_new_file_header_ends_the_previous_path(self, monkeypatch, lib) -> None:
+        """Real headers still switch files: a skipped binary's lines stay
+        skipped while the next file's are scanned."""
+        m = load_module(monkeypatch, lib)
+        diff = ("diff --git a/x.png b/x.png\n--- /dev/null\n+++ b/x.png\n"
+                "@@ -0,0 +1 @@\n+binaryish\n"
+                "diff --git a/n.md b/n.md\n--- a/n.md\n+++ b/n.md\n"
+                "@@ -1,0 +2,2 @@\n+one\n+two\n\\ No newline at end of file\n")
+        assert m._diff_added_lines(diff) == [("n.md", 2, "one"), ("n.md", 3, "two")]

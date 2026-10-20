@@ -15,6 +15,7 @@ from __future__ import annotations
 import datetime as dt
 import email
 import os
+import ssl
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -367,13 +368,17 @@ class _FakeIMAP:
         self.stored: list[tuple[bytes, str]] = []
         self.timeout = None
 
-    def __call__(self, host, port, timeout=None):
+    def __call__(self, host, port, timeout=None, ssl_context=None):
         # `timeout` is required, not merely tolerated: a double that silently
         # accepted **kwargs would keep passing if the production call ever
         # lost the argument again, and losing it is what cost fourteen hours
         # of runs on 2026-09-15. Asserted rather than defaulted.
         assert timeout, "IMAP4_SSL must be constructed with a socket timeout"
+        # Same reasoning for 5268566: no ssl_context means imaplib's
+        # unverified default, which hands the app password to any MITM.
+        assert ssl_context is not None, "IMAP4_SSL must get a verified ssl_context"
         self.timeout = timeout
+        self.ssl_context = ssl_context
         return self
 
     def login(self, user, password): return "OK", []
@@ -409,6 +414,39 @@ def _raw_drop(fields: dict[str, str], sender: str = "phone@example.com") -> byte
     return msg.as_bytes()
 
 
+class TestImapTlsVerification:
+    """5268566: IMAP4_SSL without ssl_context uses
+    ssl._create_unverified_context (CERT_NONE, no hostname check) on every
+    CPython this runs on, so anyone on the network path could present any
+    certificate and read the app password at login."""
+
+    def _capture(self, monkeypatch, root: Path) -> dict:
+        seen = {}
+
+        class _Probe:
+            def __init__(self, host, port, timeout=None, ssl_context=None):
+                seen["host"], seen["ctx"] = host, ssl_context
+                raise RuntimeError("stop here; only the constructor matters")
+
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", _Probe)
+        with pytest.raises(RuntimeError, match="only the constructor matters"):
+            smp.process_mailbox(user="u", password="p", key="k", allowed=[],
+                                root=root, dry_run=True)
+        return seen
+
+    def test_the_connection_gets_a_verifying_context(self, monkeypatch, tmp_path) -> None:
+        ctx = self._capture(monkeypatch, tmp_path)["ctx"]
+        assert isinstance(ctx, ssl.SSLContext), (
+            "IMAP4_SSL was opened without ssl_context: imaplib would fall back "
+            "to an unverified context")
+        assert ctx.verify_mode == ssl.CERT_REQUIRED
+        assert ctx.check_hostname is True
+
+    def test_the_context_refuses_legacy_tls(self, monkeypatch, tmp_path) -> None:
+        ctx = self._capture(monkeypatch, tmp_path)["ctx"]
+        assert ctx.minimum_version >= ssl.TLSVersion.TLSv1_2
+
+
 class TestHangGuards:
     """The 2026-09-15 stall: one stuck socket suppressed fourteen hours of runs.
 
@@ -432,7 +470,7 @@ class TestHangGuards:
         seen = {}
 
         class _Probe:
-            def __init__(self, host, port, timeout=None):
+            def __init__(self, host, port, timeout=None, ssl_context=None):
                 seen["host"], seen["port"], seen["timeout"] = host, port, timeout
                 raise RuntimeError("stop here; only the constructor matters")
 

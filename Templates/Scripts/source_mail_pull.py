@@ -93,6 +93,7 @@ import logging
 import os
 import re
 import signal
+import ssl
 import sys
 import time
 from email.message import Message
@@ -531,6 +532,14 @@ def save_seen(root: Path, seen: dict[str, float]) -> None:
 # IMAP
 # ---------------------------------------------------------------------------
 
+def _imap_tls_context() -> ssl.SSLContext:
+    """Verified TLS for the IMAP login: system CA store, hostname check,
+    TLS 1.2 floor."""
+    ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    return ctx
+
+
 def process_mailbox(*, user: str, password: str, key: str,
                     allowed: list[str], root: Path | None, dry_run: bool,
                     host: str = IMAP_HOST) -> tuple[int, int]:
@@ -541,7 +550,10 @@ def process_mailbox(*, user: str, password: str, key: str,
     cache_root = root if root is not None else default_source_media_root()
     seen = load_seen(cache_root)
     seen_dirty = False
-    conn = imaplib.IMAP4_SSL(host, IMAP_PORT, timeout=IMAP_TIMEOUT)
+    # 5268566: without ssl_context, imaplib uses an unverified context
+    # (CERT_NONE, no hostname check) and any on-path host gets the password.
+    conn = imaplib.IMAP4_SSL(host, IMAP_PORT, timeout=IMAP_TIMEOUT,
+                             ssl_context=_imap_tls_context())
     try:
         conn.login(user, password)
         conn.select("INBOX")
