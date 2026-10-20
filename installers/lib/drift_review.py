@@ -457,20 +457,37 @@ def apply_verdicts(findings: list[dict], raw: dict) -> list[dict]:
 # Outputs
 # ---------------------------------------------------------------------------
 
-def _task_text(text: str) -> str:
-    """Model-written text made safe and short for one vault task line.
-    A companion's staged name (companions/04-Note.md) reads as its own."""
-    text = re.sub(r"\bcompanions/\d\d-", "", text)
+def _vault_guards():
+    """(sanitize, neutralize): the vault's own defusers for outside text,
+    imported from this checkout's Templates/Scripts. sanitize makes remote
+    images, HTML and non-web links inert (F-20261020 5278613); neutralize
+    stops plugin code. Without the modules, a cruder fallback that still
+    defuses every one of those openers."""
     try:
         sys.path.insert(0, str(SCRIPTS_DIR))
+        from output_sanitizer import sanitize_report
         from templater_guard import neutralize      # the vault's ingest guard
+
+        def sanitize(t: str) -> str:
+            return sanitize_report(t)[0]
     except ImportError:                              # pragma: no cover
+        def sanitize(t: str) -> str:
+            return t.replace("!", "!\u200b").replace("<", "<\u200b").replace(":", "\u200b:")
+
         def neutralize(t: str) -> str:
             return t.replace("<%", "<\u200b%")
     finally:
         if sys.path and sys.path[0] == str(SCRIPTS_DIR):
             sys.path.pop(0)
-    t = " ".join(neutralize(text).split())
+    return sanitize, neutralize
+
+
+def _task_text(text: str) -> str:
+    """Model-written text made safe and short for one vault task line.
+    A companion's staged name (companions/04-Note.md) reads as its own."""
+    text = re.sub(r"\bcompanions/\d\d-", "", text)
+    sanitize, neutralize = _vault_guards()
+    t = " ".join(neutralize(sanitize(text)).split())
     t = t.replace("[[", "[\u200b[").replace("]]", "]\u200b]")
     t = re.sub(r"#(?=[\w/-])", "#\u200b", t)        # no tags, so no #task forgery
     t = re.sub(r"^[-*+>]\s*|^\[.\]\s*", "", t)

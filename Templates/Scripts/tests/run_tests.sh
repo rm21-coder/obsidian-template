@@ -87,6 +87,7 @@ cov_args=(
     "--cov=plugin_integrity_check"
     "--cov=youtube_summarize"
     "--cov=templater_guard"
+    "--cov=output_sanitizer"
     "--cov=classification_tier"
     "--cov=disclosure_check"
     "--cov=meeting_pull"

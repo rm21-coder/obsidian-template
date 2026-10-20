@@ -77,6 +77,7 @@ except ImportError:
 _vault = Path(os.environ.get("OBSIDIAN_VAULT", str(Path.home() / "Obsidian"))).expanduser()
 sys.path.insert(0, str(_vault / "Templates" / "Scripts"))
 import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+import output_sanitizer  # noqa: E402  -- nor load remote images, HTML or other schemes on open
 import archive_limits  # noqa: E402  -- refuse an inflating archive before convert()
 
 try:
@@ -111,6 +112,12 @@ def unique_destination(dest_dir: Path, base_name: str) -> Path:
         return out
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
     return dest_dir / f"{base_name}-{stamp}.md"
+
+
+def _embed_names(summary: dict) -> list:
+    """The image files cleanup extracted and embedded as ![[name]]."""
+    return [p.name for p in list(summary.get("images_extracted") or [])
+            + list(summary.get("source_images") or [])]
 
 
 def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, str]:
@@ -167,6 +174,9 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
 
     try:
         out.parent.mkdir(parents=True, exist_ok=True)
+        # A document's remote images, HTML and non-web links would act when
+        # the note opens; only the embeds cleanup wrote stay (F-20261020 5278628).
+        body, _counts = output_sanitizer.sanitize_keeping_embeds(body, _embed_names(summary))
         out.write_text(templater_guard.neutralize(body), encoding="utf-8")
     except Exception as e:
         return False, f"{src.name}: write failed: {e}"

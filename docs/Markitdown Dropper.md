@@ -60,11 +60,13 @@ After Markitdown converts a file, the dropper imports `markitdown_cleanup.py` fr
 
    If the converted document starts with its own `---` frontmatter block, that block does **not** become the note's frontmatter: a document could otherwise declare its own `classification: public`. It is kept, visibly, as a fenced `yaml` code block at the top of the body under "Frontmatter from the source document (kept as text, not applied)". The standalone CLI below is the exception: it re-cleans notes already in the vault, so it keeps the file's existing frontmatter.
 
+7. **Makes the document's active markup inert** (the dropper and `markitdown_convert.py`, not the standalone cleanup CLI). A converted document is outside text, and Obsidian acts on some markdown as soon as a note opens. `output_sanitizer.sanitize_keeping_embeds` inserts an invisible zero-width space into every remote image (`![x](https://...)`), HTML tag, link scheme other than http(s) (`obsidian:`, `file:`, `ms-word:`, entity-spelled forms too) and Mermaid block, everywhere including code. The image embeds the cleanup itself wrote (`![[<name>-img-1.png]]`) are put back, so extracted images still show; any other `![[...]]` embed in the document stays defused. Web links keep working. `templater_guard.neutralize` then runs as for any outside text.
+
 **What it does NOT do** (intentionally):
 
 - Aggressive heading inference from inline labels surrounded by prose. False-positive risk too high.
 - Smart-quote / em-dash / ellipsis normalization. They render fine in Obsidian and read better in print.
-- Touch fenced code blocks, tables, or links.
+- Rewrite fenced code blocks, tables, or links (step 7 only inserts invisible characters).
 - Backups. Markitdown leaves the source file untouched — your originals are still wherever they came from.
 
 **Per-drop log:**

@@ -90,8 +90,12 @@ shell or MCP tool was offered.
 The diff and documents are text the tool did not write. The prompt tells the
 session to treat them as data and to report any instruction it finds as a
 finding. Before model text is written into the vault note, it goes through
-the vault's own ingest guard (`templater_guard.neutralize`), and links and
-tags are broken up, so a finding cannot run plugin code or forge a task.
+the vault's own defusers for outside text: `output_sanitizer.sanitize_report`
+(remote images, HTML tags and every link scheme other than http(s) made
+inert) and then the ingest guard (`templater_guard.neutralize`), and links
+and tags are broken up, so a finding cannot load a remote image when the note
+opens, carry an `obsidian:` link, run plugin code or forge a task. The full
+reports in `report_dir` are not sanitized: keep that folder outside the vault.
 
 Companion documents are sent to the model, so name only documents your
 Claude account is entitled to process.
