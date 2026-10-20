@@ -4,3 +4,7 @@
 # run python3 installers/lib/lock_requirements.py and commit both.
 markitdown[all]
 PySide6
+# Floors for advisories the sca pass flagged on 2026-10-20: certifi
+# PYSEC-2026-4320; pillow (a markitdown dependency) nine CVEs fixed in 13.0.0.
+certifi>=2026.10.19
+pillow>=13.0.0

@@ -2,6 +2,9 @@ anthropic
 pyyaml
 python-dotenv
 requests
+# certifi (a requests dependency): floor for PYSEC-2026-4320, flagged by the
+# sca pass on 2026-10-20.
+certifi>=2026.10.19
 
 # Optional feature scripts (bundled in core per the Windows "deploy completely"
 # goal). yt-dlp: youtube_summarize.py. markitdown: markitdown_cleanup/_dropper
