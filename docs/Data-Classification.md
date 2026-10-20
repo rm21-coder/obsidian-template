@@ -48,6 +48,17 @@ vault like this discusses regulation, security, governance and personnel policy
 constantly as subject matter; that is ordinary professional content. A note is
 elevated only when it *contains* the sensitive thing.
 
+The note's current tier is read with the same strict reader the gates use
+(`classification_tier.py`), not with PyYAML. A note whose frontmatter PyYAML
+cannot parse — an unquoted colon in a title (`title: Q3: plan`), a
+tab-indented list, an `@`-leading value — or whose `classification` line the
+strict reader flags as unreadable is **refused**: never sent to the model,
+never given a baseline tier, and reported as an error on every run until it is
+fixed by hand. L0 still runs on it and can still raise it. Every write is
+re-read with the strict reader before it lands; if the tier would come out
+lower, or unreadable, the write is withheld. A note larger than the shared
+1 MiB note read cap is refused the same way, without being read.
+
 This matters more than it sounds. Measured against a real vault, candidate
 keyword rules fired on 121 of 2,200 notes and the top hits were the data-
 classification policy note itself, the owner's published bio, and a job

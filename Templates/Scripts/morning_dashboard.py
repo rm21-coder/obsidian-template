@@ -51,6 +51,9 @@ import time
 import urllib.parse
 from pathlib import Path
 
+# Stdlib-only sibling; holds the shared 1 MiB note read cap (5278128).
+import classification_tier
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -207,7 +210,10 @@ def collect_todos() -> list[tuple[Path, str]]:
                 continue
             fp = Path(root) / fn
             try:
-                lines = fp.read_text(encoding="utf-8", errors="ignore").splitlines()
+                # A note over the read cap raises NoteTooLarge (an OSError)
+                # and is skipped, not scanned for tasks.
+                lines = classification_tier.read_note(
+                    fp, errors="ignore").splitlines()
             except OSError:
                 continue
             rel = vault_rel(fp)
@@ -247,7 +253,7 @@ def _frontmatter(p: Path) -> str:
     """Return the raw YAML frontmatter block (without the --- fences),
     or an empty string if the file has none."""
     try:
-        text = p.read_text(encoding="utf-8", errors="ignore")
+        text = classification_tier.read_note(p, errors="ignore")
     except OSError:
         return ""
     if not text.startswith("---"):

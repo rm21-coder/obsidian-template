@@ -47,6 +47,7 @@ import argparse
 import re
 import sys
 import templater_guard  # noqa: E402
+import classification_tier  # noqa: E402
 
 from pathlib import Path
 
@@ -155,7 +156,9 @@ def strip_ads(text: str) -> str:
 def process_file(path: Path, *, dry_run: bool, quiet: bool, verbose: bool) -> bool:
     """Process one .md file. Returns True on success, False on error."""
     try:
-        original = path.read_text(encoding="utf-8")
+        # Capped (classification_tier.MAX_NOTE_BYTES): an oversize file is
+        # reported as an error and left untouched.
+        original = classification_tier.read_note(path)
     except (OSError, UnicodeDecodeError) as exc:
         print(f"ERROR  {path}: {exc}", file=sys.stderr)
         return False

@@ -171,7 +171,7 @@ DETECTORS: list[tuple[str, str, re.Pattern, str]] = [
      "Anthropic API key"),
     ("generic-secret", "restricted",
      re.compile(r"(?i)\b(?:api[_\- ]?key|secret[_\- ]?key|access[_\- ]?token|"
-                r"client[_\- ]?secret)\s*[:=]\s*[\"']?[A-Za-z0-9_\-]{24,}"),
+                r"client[_\- ]?secret)\s{0,8}[:=]\s{0,8}[\"']?[A-Za-z0-9_\-]{24,}"),
      "credential assigned in text"),
     ("bearer-token", "restricted",
      re.compile(r"\bBearer\s+[A-Za-z0-9_\-]{24,}\.[A-Za-z0-9_\-]{8,}"),
@@ -179,8 +179,10 @@ DETECTORS: list[tuple[str, str, re.Pattern, str]] = [
     ("aws-key", "restricted",
      re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
      "AWS access key id"),
+    # Whitespace runs are bounded: `\s*[:#]?\s*` let "MRN" + 50k spaces take
+    # ~15 s, quadratic in the run (5278128). Eight covers any real spacing.
     ("mrn", "restricted",
-     re.compile(r"(?i)\b(?:MRN|medical record (?:number|no\.?))\b\s*[:#]?\s*\d{5,}"),
+     re.compile(r"(?i)\b(?:MRN|medical record (?:number|no\.?))\b\s{0,8}[:#]?\s{0,8}\d{5,}"),
      "medical record number with value"),
 ]
 
@@ -257,7 +259,10 @@ tier; for internal-use-only say why briefly>"}}"""
 
 # ─── Frontmatter handling (read via YAML, write via splice) ──────────────────
 
-_FM_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---[ \t]*\r?\n?", re.DOTALL)
+# Up to two leading BOMs, as classification_tier._OPEN_RE allows: without
+# them a BOM-prefixed note had no frontmatter here while the gates still read
+# its tier, so a restricted note was sent to the model (5268564).
+_FM_RE = re.compile(r"\A\ufeff{0,2}---\r?\n(.*?)\r?\n---[ \t]*\r?\n?", re.DOTALL)
 
 
 def split_frontmatter(text: str) -> tuple[str | None, str, int]:
@@ -307,7 +312,11 @@ def parse_fm_checked(fm_body: str | None) -> tuple[dict, str | None]:
     except AliasRefused:
         return {}, "frontmatter refused: YAML anchor or alias"
     except yaml.YAMLError:
-        return {}, None
+        # Not "nothing to act on": PyYAML failing on an ordinary note (an
+        # unquoted colon in a title, a tab-indented list) does not stop the
+        # gates reading its tier, so it must not read as unclassified here
+        # either (5268564).
+        return {}, "frontmatter refused: not valid YAML"
     finally:
         loader.dispose()
     return (data if isinstance(data, dict) else {}), None
@@ -414,6 +423,7 @@ def splice_frontmatter(text: str, updates: dict[str, str],
     """
     m = _FM_RE.match(text)
     lf = "\r\n" if text[:2048].find("\r\n") != -1 else "\n"
+    bom = text[:len(text) - len(text.lstrip("\ufeff"))] if m else ""
 
     if not m:
         block = "---\n" + "".join(
@@ -448,7 +458,7 @@ def splice_frontmatter(text: str, updates: dict[str, str],
     rest = text[m.end():]
     # Assemble with LF only, then translate once — building with `lf` inline
     # and translating afterwards would turn each CRLF into CR + CRLF.
-    return f"---\n{new_body}\n---\n".replace("\n", lf) + rest
+    return bom + f"---\n{new_body}\n---\n".replace("\n", lf) + rest
 
 
 # ─── Tracking ────────────────────────────────────────────────────────────────
@@ -575,14 +585,27 @@ def preserve_updated(updates: dict[str, str], fm_body: str | None) -> dict[str, 
 def process_file(filepath: Path, client, dry_run: bool,
                  detectors_only: bool, force: bool) -> dict | None:
     """Evaluate one note. Returns an action record, or None if nothing to do."""
-    with filepath.open("r", encoding="utf-8", newline="") as fh:
-        original = fh.read()
+    rel = filepath.relative_to(VAULT_ROOT)
+    try:
+        original = classification_tier.read_note(filepath, newline="")
+    except classification_tier.NoteTooLarge:
+        # Never read, never sent, tier untouched: an oversize note is not
+        # evidence of anything, least of all of being public. Reported as an
+        # error, so it is never tracked and comes back every run.
+        return {"action": "error", "rel": str(rel), "title": filepath.stem,
+                "from": "(unread)", "to": "", "layer": "parse",
+                "confidence": "",
+                "rationale": "note refused: larger than the "
+                             f"{classification_tier.MAX_NOTE_BYTES}-byte read cap"}
     file_newline = "\r\n" if "\r\n" in original else "\n"
     text = original.replace("\r\n", "\n").replace("\r", "\n")
 
     fm_body, body, _ = split_frontmatter(text)
     fm, refused = parse_fm_checked(fm_body)
-    rel = filepath.relative_to(VAULT_ROOT)
+    # The tier is the one every gate reads (5268564), not PyYAML's view of it.
+    strict_cur, strict_unknown = classification_tier.effective(text)
+    if strict_unknown and not refused:
+        refused = "frontmatter refused: classification cannot be read reliably"
     if refused:
         # Never adjudicated, and reported as an error, which is never tracked,
         # so it is reported again every run until fixed. L0 still runs: an
@@ -633,7 +656,9 @@ def process_file(filepath: Path, client, dry_run: bool,
     folder = rel.parts[0] if len(rel.parts) > 1 else "(root)"
     title = str(fm.get("title") or filepath.stem)
 
-    cur = current_tier(fm)
+    # The strict reader decides; PyYAML's reading can only raise it.
+    cur = max((t for t in (strict_cur, current_tier(fm)) if t),
+              key=TIER_RANK.__getitem__, default=None)
     # An unset or typo'd note is judged against the tier it *would* have been
     # given at creation, not against -1. Without this floor the model could
     # "elevate" such a note to public, which is a demotion in disguise.
@@ -660,8 +685,15 @@ def process_file(filepath: Path, client, dry_run: bool,
             }
             updates["classification_prior"] = cur or f"(unset:{baseline})"
             preserve_updated(updates, fm_body)
+            new_text = splice_frontmatter(text, updates)
+            if not classification_tier.tier_not_lowered(text, new_text, tier):
+                return {"action": "error", "rel": str(rel), "title": title,
+                        "from": cur or "(unset)", "to": tier, "layer": "detector",
+                        "confidence": "",
+                        "rationale": f"L0 detector hit ({rules}): {tier} material, "
+                                     "NOT applied — the tier could not be written "
+                                     "safely; fix by hand"}
             if not dry_run:
-                new_text = splice_frontmatter(text, updates)
                 filepath.write_text(new_text, encoding="utf-8", newline=file_newline)
             return {"action": "auto-applied", "rel": str(rel), "title": title,
                     "from": cur or "(unset)", "to": tier, "layer": "detector",
@@ -716,9 +748,18 @@ def process_file(filepath: Path, client, dry_run: bool,
     if not updates:
         return None
     preserve_updated(updates, fm_body)
+    new_text = splice_frontmatter(text, updates)
+    # Re-read what would be written with the gates' reader: a splice must
+    # never leave the note lower, or unreadable, to them (5268564).
+    if not classification_tier.tier_not_lowered(
+            text, new_text, updates.get("classification")):
+        return {"action": "error", "rel": str(rel), "title": title,
+                "from": cur or "(unset)", "to": "", "layer": "llm",
+                "confidence": "",
+                "rationale": "verdict NOT written — the tier could not be "
+                             "written safely; fix by hand"}
     if not dry_run:
-        filepath.write_text(splice_frontmatter(text, updates),
-                            encoding="utf-8", newline=file_newline)
+        filepath.write_text(new_text, encoding="utf-8", newline=file_newline)
 
     return {"action": "suggested" if elevated else "backfilled",
             "rel": str(rel), "title": title,
@@ -746,8 +787,8 @@ def reconcile(files: list[Path], dry_run: bool) -> tuple[int, int]:
     accepted = skipped = 0
     for filepath in files:
         try:
-            with filepath.open("r", encoding="utf-8", newline="") as fh:
-                original = fh.read()
+            # Capped: oversize raises NoteTooLarge, an OSError, so it is skipped.
+            original = classification_tier.read_note(filepath, newline="")
         except (OSError, UnicodeDecodeError):
             continue
         file_newline = "\r\n" if "\r\n" in original else "\n"
@@ -805,15 +846,20 @@ def rebaseline(files: list[Path], dry_run: bool) -> tuple[int, int, int]:
         folder = rel.parts[0] if len(rel.parts) > 1 else "(root)"
         floor = FOLDER_BASELINE.get(folder, DEFAULT_TIER)
         try:
-            with filepath.open("r", encoding="utf-8", newline="") as fh:
-                original = fh.read()
+            # Capped: oversize raises NoteTooLarge, an OSError, so it is skipped.
+            original = classification_tier.read_note(filepath, newline="")
         except (OSError, UnicodeDecodeError):
             continue
         file_newline = "\r\n" if "\r\n" in original else "\n"
         text = original.replace("\r\n", "\n").replace("\r", "\n")
         fm_body, _, _ = split_frontmatter(text)
-        fm = parse_fm(fm_body)
-        cur = current_tier(fm)
+        # The gates' reader, not PyYAML: a note PyYAML cannot parse still has
+        # the tier the gates read, and must not be "raised" over it (5268564).
+        cur, unknown = classification_tier.effective(text)
+        if unknown:
+            skipped += 1
+            print(f"  skipped, classification cannot be read reliably: {rel}")
+            continue
 
         if cur is not None and TIER_RANK[cur] >= TIER_RANK[floor]:
             already += 1
@@ -821,9 +867,13 @@ def rebaseline(files: list[Path], dry_run: bool) -> tuple[int, int, int]:
 
         updates = {"classification": floor}
         preserve_updated(updates, fm_body)
+        new_text = splice_frontmatter(text, updates)
+        if not classification_tier.tier_not_lowered(text, new_text, floor):
+            skipped += 1
+            print(f"  skipped, the tier could not be written safely: {rel}")
+            continue
         if not dry_run:
-            filepath.write_text(splice_frontmatter(text, updates),
-                                encoding="utf-8", newline=file_newline)
+            filepath.write_text(new_text, encoding="utf-8", newline=file_newline)
         raised += 1
         print(f"  {cur or '(unset)'} -> {floor}: {rel}")
     return raised, already, skipped
@@ -855,8 +905,8 @@ def rule_on(files: list[Path], action: str, tier_filter: str | None,
     ruled = skipped = 0
     for filepath in files:
         try:
-            with filepath.open("r", encoding="utf-8", newline="") as fh:
-                original = fh.read()
+            # Capped: oversize raises NoteTooLarge, an OSError, so it is skipped.
+            original = classification_tier.read_note(filepath, newline="")
         except (OSError, UnicodeDecodeError):
             continue
         file_newline = "\r\n" if "\r\n" in original else "\n"
@@ -1040,7 +1090,7 @@ def collect_queue(files: list[Path]) -> list[dict]:
     queue: list[dict] = []
     for filepath in files:
         try:
-            text = filepath.read_text(encoding="utf-8")
+            text = classification_tier.read_note(filepath)
         except (OSError, UnicodeDecodeError):
             continue
         if "classification_suggested" not in text:
@@ -1428,7 +1478,11 @@ def main() -> int:
             # as_posix(): tracking keys are relative vault paths, and
             # str(Path) is backslash-separated on Windows.
             key = filepath.relative_to(VAULT_ROOT).as_posix()
-            digest = content_hash(filepath.read_text(encoding="utf-8"))
+            digest = content_hash(classification_tier.read_note(filepath))
+        except classification_tier.NoteTooLarge:
+            # Queued anyway so process_file reports it as refused, untracked.
+            queue.append(filepath)
+            continue
         except (OSError, UnicodeDecodeError, ValueError):
             continue
         if not args.force and tracking.get(key) == digest:
@@ -1467,7 +1521,7 @@ def main() -> int:
             if not args.dry_run and adjudicated:
                 try:
                     tracking[filepath.relative_to(VAULT_ROOT).as_posix()] = content_hash(
-                        filepath.read_text(encoding="utf-8"))
+                        classification_tier.read_note(filepath))
                 except (OSError, ValueError):
                     pass
 

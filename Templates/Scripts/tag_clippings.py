@@ -246,8 +246,8 @@ def collect_all_tags(vault_root: Path) -> list[str]:
         if any(p.startswith(".") for p in parts):
             continue
         try:
-            text = md_file.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, PermissionError):
+            text = classification_tier.read_note(md_file)
+        except (UnicodeDecodeError, PermissionError, classification_tier.NoteTooLarge):
             continue
         fm, _ = parse_frontmatter(text)
         if fm and "tags" in fm and isinstance(fm["tags"], list):
@@ -517,8 +517,7 @@ def process_file(
     # back unchanged. Without this, Path.write_text on Windows would rewrite
     # every note with CRLF endings and produce a spurious full-file diff on
     # each run. Content is normalized to \n for parsing, restored on write.
-    with filepath.open("r", encoding="utf-8", newline="") as fh:
-        original = fh.read()
+    original = classification_tier.read_note(filepath, newline="")
     file_newline = "\r\n" if "\r\n" in original else "\n"
     text = original.replace("\r\n", "\n").replace("\r", "\n")
     fm, body = parse_frontmatter(text)
@@ -723,7 +722,13 @@ def main():
         # as_posix(): see integrity_monitor.scan_dir -- str(Path) is
         # backslash-separated on Windows, which makes this cache platform-specific.
         file_key = filepath.relative_to(VAULT_ROOT).as_posix()
-        text = filepath.read_text(encoding="utf-8")
+        try:
+            text = classification_tier.read_note(filepath)
+        except classification_tier.NoteTooLarge:
+            # Not tagged and not tracked: no real clipping is this big.
+            print(f"  Skipping (over the note read cap): {filepath.name}")
+            skipped_count += 1
+            continue
         file_hash = content_hash(text)
 
         # Skip if already processed and content hasn't changed

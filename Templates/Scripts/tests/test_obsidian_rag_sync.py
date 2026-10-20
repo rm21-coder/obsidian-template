@@ -373,3 +373,39 @@ def test_user_docs_and_readmes_below_the_root_are_still_indexed(rag):
         _note(vault / rel)
     all_files, _ = rag.scan_vault()
     assert sorted(rel for rel in kept if rel in all_files) == sorted(kept)
+
+
+# ---------------------------------------------------------------------------
+# Extraction regexes are linear (5278610); oversize notes are not uploaded.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("pump", ["[[" * 250000, "![" * 250000, "![](" * 125000,
+                                  "![[" * 160000])
+def test_body_extraction_is_linear_on_unclosed_brackets(rag, pump):
+    import time
+    t = time.perf_counter()
+    rag.extractable_body_chars(pump)
+    assert time.perf_counter() - t < 1.0
+
+
+def test_body_extraction_still_strips_links_and_images(rag):
+    text = ("---\nclassification: public\n---\nkeep [[Some Note|alias]] one "
+            "![[pic.png]] two ![alt text](https://example.invalid/a.png) three")
+    assert rag.extractable_body_chars(text) == len("keep one two three")
+
+
+def test_an_oversize_note_is_excluded_not_uploaded(rag, caplog):
+    import classification_tier
+    vault = rag.VAULT_PATH
+    _note(vault / "Notes" / "kept.md")
+    big = vault / "Notes" / "huge.md"
+    big.write_text("---\nclassification: public\n---\n"
+                   + "word " * (classification_tier.MAX_NOTE_BYTES // 5 + 1),
+                   encoding="utf-8")
+    with caplog.at_level("WARNING"):
+        all_files, excluded = rag.scan_vault()
+    assert "Notes/kept.md" in all_files
+    assert "Notes/huge.md" not in all_files
+    assert excluded == {"Notes/huge.md": rag.OVERSIZE_MARKER}
+    assert "Notes/huge.md is over the" in caplog.text
+    assert "-byte note read cap; excluding from index" in caplog.text

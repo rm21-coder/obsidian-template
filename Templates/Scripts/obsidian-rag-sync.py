@@ -33,6 +33,10 @@ prose). Files already in the collection are NEVER removed just because they
 fell below the threshold — only true filesystem deletions remove from the
 collection.
 
+A note over the shared 1 MiB read cap (classification_tier.MAX_NOTE_BYTES) is
+never read or uploaded: it is excluded like a blocked tier, logged, and
+deindexed if an earlier, smaller version was indexed.
+
 ------------------------------------------------------------
 CLASSIFICATION GATING (optional — degrades gracefully if unused)
 ------------------------------------------------------------
@@ -219,6 +223,8 @@ PROCESSING_POLL_SECONDS = 1.0
 INDEXABLE_CLASSIFICATIONS = frozenset({"public", "internal-use-only", "confidential"})
 EXCLUDED_CLASSIFICATIONS = frozenset({"restricted"})
 KNOWN_CLASSIFICATIONS = INDEXABLE_CLASSIFICATIONS | EXCLUDED_CLASSIFICATIONS
+# What an oversize note (classification_tier.MAX_NOTE_BYTES) is excluded as.
+OVERSIZE_MARKER = "(over the note read cap)"
 
 # Per-run report destination inside the vault, for visibility into sync
 # health. Reports use REPORT_FILENAME_PREFIX so EXCLUDE_FILENAME_PREFIXES
@@ -254,8 +260,10 @@ session = requests.Session()
 # ----- text extraction -----
 
 FRONTMATTER_RE = re.compile(r"\A---\n.*?\n---\n", re.DOTALL)
-WIKILINK_RE = re.compile(r"!?\[\[[^\]]*\]\]")
-IMG_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+# Neither class admits a bracket (nor the image URL a paren): the old
+# `[^\]]*` forms were quadratic on "[[" * n, 84 s at 500k (5278610).
+WIKILINK_RE = re.compile(r"!?\[\[[^\[\]]*\]\]")
+IMG_RE = re.compile(r"!\[[^\[\]]*\]\([^()]*\)")
 WS_RE = re.compile(r"\s+")
 
 
@@ -322,7 +330,15 @@ def scan_vault() -> tuple[dict[str, dict], dict[str, str]]:
         if stat.st_size == 0:
             continue
         try:
-            text = md.read_text(encoding="utf-8", errors="replace")
+            text = classification_tier.read_note(md, errors="replace")
+        except classification_tier.NoteTooLarge:
+            # Never uploaded (and deindexed if it was): no real note is this
+            # big, and the extraction regexes and the server are not where to
+            # find out what one is. Reported, like a blocked tier.
+            log.warning(f"{rel} is over the {classification_tier.MAX_NOTE_BYTES}"
+                        f"-byte note read cap; excluding from index")
+            excluded[rel.as_posix()] = OVERSIZE_MARKER
+            continue
         except Exception:
             continue
 

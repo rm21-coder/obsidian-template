@@ -177,6 +177,8 @@ Files whose extractable body text is below `MIN_BODY_CHARS = 100` (after strippi
 
 To make a thin People note (or any sparse file) indexable, add a paragraph of real content.
 
+A note larger than 1 MiB (`classification_tier.MAX_NOTE_BYTES`, the read cap the classifier, taggers, strip-ads and dashboard share) is never read or uploaded. It is logged and excluded like a blocked tier (`DEINDEXED (classification: (over the note read cap))` if an earlier, smaller version was indexed).
+
 ### Classification gating (optional)
 
 If you tag notes with a `classification` frontmatter property, the sync will

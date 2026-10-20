@@ -980,3 +980,238 @@ def test_the_tracking_file_is_gitignored(allow_subprocess):
     r = subprocess.run(["git", "-C", str(repo), "check-ignore", "-q", "--no-index",
                         ".classification_tracking.json"], check=False)
     assert r.returncode == 0
+
+
+# ---------------------------------------------------------------------------
+# Frontmatter PyYAML cannot parse keeps the tier the gates read (5268564).
+# Four ordinary forms made PyYAML fail (or, with a BOM, see no block) while
+# classification_tier still read `restricted`; the note was sent to the
+# model and a baseline `internal-use-only` spliced over the label.
+# ---------------------------------------------------------------------------
+
+_UNPARSEABLE_RESTRICTED = {
+    "colon": "---\ntitle: Q3: plan\nclassification: restricted\n---\n\nbody\n",
+    "tab": "---\ntags:\n\t- a\nclassification: restricted\n---\n\nbody\n",
+    "at": "---\nalias: @foo\nclassification: restricted\n---\n\nbody\n",
+    "bom": "\ufeff---\nclassification: restricted\n---\n\nbody\n",
+}
+
+
+@pytest.mark.parametrize("form", sorted(_UNPARSEABLE_RESTRICTED))
+def test_a_restricted_note_pyyaml_cannot_read_is_never_sent(vault: Path, form: str):
+    import classification_tier
+    p = vault / "Knowledge" / f"{form}.md"
+    p.write_text(_UNPARSEABLE_RESTRICTED[form], encoding="utf-8")
+    before = p.read_bytes()
+    client = FakeClient("internal-use-only")
+    rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=True)
+    assert client.calls == []
+    assert p.read_bytes() == before
+    assert classification_tier.effective(p.read_text(encoding="utf-8")) == (
+        "restricted", [])
+    if form == "bom":
+        # The block is now found, so it reads as already restricted: no record.
+        assert rec is None
+    else:
+        assert rec is not None and rec["action"] == "error"
+        assert rec["rationale"] == "frontmatter refused: not valid YAML"
+
+
+@pytest.mark.parametrize("form", ["colon", "tab", "at"])
+def test_an_unparseable_unset_note_is_refused_not_backfilled(vault: Path, form: str):
+    """Without a tier the old path backfilled one after a model call; now
+    nothing is sent and nothing is written."""
+    text = _UNPARSEABLE_RESTRICTED[form].replace("classification: restricted\n", "")
+    p = vault / "Knowledge" / f"{form}.md"
+    p.write_text(text, encoding="utf-8")
+    client = FakeClient("confidential")
+    rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=False)
+    assert rec["rationale"] == "frontmatter refused: not valid YAML"
+    assert client.calls == []
+    assert p.read_text(encoding="utf-8") == text
+
+
+def test_an_unparseable_note_still_gets_the_detectors(vault: Path):
+    import classification_tier
+    p = vault / "Knowledge" / "Colon.md"
+    p.write_text(f"---\ntitle: Q3: plan\nclassification: public\n---\n\n"
+                 f"{_KEY_HEADER}\n", encoding="utf-8")
+    rec = C.process_file(p, None, dry_run=False, detectors_only=True, force=False)
+    assert rec["rationale"] == (
+        "frontmatter refused: not valid YAML; L0 detector hit (private-key): "
+        "auto-applied restricted (was public)")
+    text = p.read_text(encoding="utf-8")
+    assert classification_tier.effective(text) == ("restricted", [])
+    assert "title: Q3: plan" in text
+
+
+def test_a_bom_note_is_spliced_with_its_bom_kept(vault: Path):
+    import classification_tier
+    p = vault / "Knowledge" / "Bom.md"
+    p.write_text(f"\ufeff---\nclassification: public\n---\n\n{_KEY_HEADER}\n",
+                 encoding="utf-8")
+    rec = C.process_file(p, None, dry_run=False, detectors_only=True, force=False)
+    assert rec["action"] == "auto-applied" and rec["from"] == "public"
+    text = p.read_text(encoding="utf-8")
+    assert text.startswith("\ufeff---\nclassification: restricted\n")
+    assert text.count("\ufeff") == 1 and text.count("\n---\n") == 1
+    assert classification_tier.effective(text) == ("restricted", [])
+
+
+def test_a_duplicate_declaration_is_refused_before_any_model_call(vault: Path):
+    p = vault / "Knowledge" / "Dup.md"
+    p.write_text("---\nclassification: public\nclassification: public\n---\n\nbody\n",
+                 encoding="utf-8")
+    client = FakeClient("confidential")
+    rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=False)
+    assert rec["rationale"] == (
+        "frontmatter refused: classification cannot be read reliably")
+    assert client.calls == []
+
+
+def test_a_verdict_splice_that_would_lower_the_tier_is_not_written(
+        vault: Path, monkeypatch: pytest.MonkeyPatch):
+    p = write(vault, "Knowledge/Conf.md", "prose", classification="confidential")
+    before = p.read_bytes()
+    monkeypatch.setattr(C, "splice_frontmatter", lambda text, updates, **_:
+                        text.replace("classification: confidential",
+                                     "classification: public"))
+    rec = C.process_file(p, FakeClient("restricted"), dry_run=False,
+                         detectors_only=False, force=False)
+    assert rec["action"] == "error"
+    assert rec["rationale"] == ("verdict NOT written — the tier could not be "
+                                "written safely; fix by hand")
+    assert p.read_bytes() == before
+
+
+def test_a_detector_splice_that_misses_the_tier_is_not_written(
+        vault: Path, monkeypatch: pytest.MonkeyPatch):
+    p = write(vault, "Knowledge/Pub.md", _KEY_HEADER, classification="public")
+    before = p.read_bytes()
+    monkeypatch.setattr(C, "splice_frontmatter", lambda text, updates, **_: text)
+    rec = C.process_file(p, None, dry_run=False, detectors_only=True, force=False)
+    assert rec["action"] == "error"
+    assert ("restricted material, NOT applied — the tier could not be written "
+            "safely; fix by hand") in rec["rationale"]
+    assert p.read_bytes() == before
+
+
+def test_rebaseline_never_lowers_a_note_pyyaml_cannot_parse(vault: Path):
+    """`title: Q3: plan` made PyYAML read no tier, so rebaseline "raised" a
+    restricted meeting note to its confidential floor."""
+    p = vault / "Meetings" / "M.md"
+    p.parent.mkdir(parents=True)
+    p.write_text("---\ntitle: Q3: plan\nclassification: restricted\n---\n\nbody\n",
+                 encoding="utf-8")
+    before = p.read_bytes()
+    assert C.rebaseline([p], dry_run=False) == (0, 1, 0)
+    assert p.read_bytes() == before
+
+
+def test_rebaseline_skips_an_unreadable_declaration(vault: Path, capsys):
+    p = vault / "Meetings" / "D.md"
+    p.parent.mkdir(parents=True)
+    p.write_text("---\nclassification: public\nclassification: public\n---\n\nb\n",
+                 encoding="utf-8")
+    before = p.read_bytes()
+    assert C.rebaseline([p], dry_run=False) == (0, 0, 1)
+    assert p.read_bytes() == before
+    assert "skipped, classification cannot be read reliably" in capsys.readouterr().out
+
+
+def test_rebaseline_still_raises_an_ordinary_note(vault: Path):
+    import classification_tier
+    p = vault / "Meetings" / "O.md"
+    p.parent.mkdir(parents=True)
+    p.write_text("---\ntitle: ok\nclassification: internal-use-only\n---\n\nb\n",
+                 encoding="utf-8")
+    assert C.rebaseline([p], dry_run=False) == (1, 0, 0)
+    assert classification_tier.effective(p.read_text(encoding="utf-8")) == (
+        "confidential", [])
+
+
+# ---------------------------------------------------------------------------
+# Detector regexes are linear (5278128) and still match.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("pump", [
+    "MRN" + " " * 50000,
+    "MRN " * 12500,
+    "medical record number" + " " * 50000,
+    "api key" + " " * 50000,
+    "client_secret:" + " " * 50000,
+])
+def test_detectors_are_linear_on_whitespace_runs(pump: str):
+    import time
+    t = time.perf_counter()
+    C.run_detectors(pump)
+    assert time.perf_counter() - t < 1.0
+
+
+@pytest.mark.parametrize("text", [
+    "MRN: 1234567", "MRN 1234567", "mrn#1234567", "MRN:   1234567",
+    "Medical record number 00123456", "medical record no 0012345",
+    "MRN\t:\t1234567",
+])
+def test_mrn_still_matches(text: str):
+    assert [h[0] for h in C.run_detectors(text)] == ["mrn"]
+
+
+@pytest.mark.parametrize("text", [
+    "api_key = " + "a" * 30, "client secret: '" + "B" * 30 + "'",
+    "ACCESS-TOKEN=" + "c" * 24,
+])
+def test_generic_secret_still_matches(text: str):
+    assert [h[0] for h in C.run_detectors(text)] == ["generic-secret"]
+
+
+# ---------------------------------------------------------------------------
+# Per-note read cap (shared mitigation for 5278128 / 5278610).
+# ---------------------------------------------------------------------------
+
+def _oversize(path: Path) -> None:
+    import classification_tier
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\nclassification: public\n---\n\n"
+                    + "x" * classification_tier.MAX_NOTE_BYTES, encoding="utf-8")
+
+
+def test_an_oversize_note_is_refused_not_classified(vault: Path):
+    import classification_tier
+    p = vault / "Knowledge" / "Huge.md"
+    _oversize(p)
+    before = p.read_bytes()
+    client = FakeClient("internal-use-only")
+    rec = C.process_file(p, client, dry_run=False, detectors_only=False, force=True)
+    assert rec["action"] == "error" and rec["from"] == "(unread)"
+    assert rec["rationale"] == (
+        f"note refused: larger than the {classification_tier.MAX_NOTE_BYTES}"
+        "-byte read cap")
+    assert client.calls == []
+    assert p.read_bytes() == before
+
+
+def test_an_oversize_note_is_reported_by_a_run(vault: Path,
+                                               monkeypatch: pytest.MonkeyPatch,
+                                               capsys):
+    p = vault / "Knowledge" / "Huge.md"
+    _oversize(p)
+    monkeypatch.setattr(C.sys, "argv", ["classify_notes.py", "--vault", str(vault),
+                                        "--detectors-only"])
+    assert C.main() == 0
+    out = capsys.readouterr().out
+    assert "?? Knowledge/Huge.md" in out
+    assert "-byte read cap" in out
+
+
+def test_read_note_caps_and_translates(tmp_path: Path):
+    import classification_tier as T
+    p = tmp_path / "n.md"
+    p.write_bytes(b"a\r\nb\rc\n")
+    assert T.read_note(p) == "a\nb\nc\n"
+    assert T.read_note(p, newline="") == "a\r\nb\rc\n"
+    p.write_bytes(b"x" * 11)
+    assert T.read_note(p, limit=11) == "x" * 11
+    with pytest.raises(T.NoteTooLarge, match="larger than the 10-byte note read cap"):
+        T.read_note(p, limit=10)
+    assert issubclass(T.NoteTooLarge, OSError)

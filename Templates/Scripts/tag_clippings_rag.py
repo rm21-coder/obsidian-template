@@ -363,11 +363,15 @@ Respond with ONLY a JSON array of tag strings, e.g. ["AI/Agents", "Vendors/Micro
 
 # ─── Per-note processing ─────────────────────────────────────────────────────
 def process(path: Path, client, tags, tag_emb, apply: bool, additive: bool, max_add: int):
-    raw = path.read_text(encoding="utf-8")
-    # Same rule as tag_clippings: a restricted or unreadable tier stays off the
-    # model endpoint unless llm_endpoint.restricted_allowed().
     import classification_tier
     import llm_endpoint
+    try:
+        raw = classification_tier.read_note(path)
+    except classification_tier.NoteTooLarge:
+        print(f"  . skipped (over the note read cap): {path.name}")
+        return None
+    # Same rule as tag_clippings: a restricted or unreadable tier stays off the
+    # model endpoint unless llm_endpoint.restricted_allowed().
     tier, unreadable = classification_tier.effective(raw)
     if (tier == "restricted" or unreadable) and not llm_endpoint.restricted_allowed():
         print(f"  . withheld (restricted): {path.name}")

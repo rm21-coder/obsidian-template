@@ -20,7 +20,9 @@ block, apply YAML's comment and quoting rules, and take the MOST RESTRICTIVE
 recognised one. Anything declared but unrecognised is reported so each gate
 can fail closed on it rather than guess.
 
-Stdlib only and import-light, so every gate can use it.
+Stdlib only and import-light, so every gate can use it. For the same reason it
+also holds the shared per-note read cap (read_note, MAX_NOTE_BYTES) and the
+post-splice check writers use (tier_not_lowered).
 """
 from __future__ import annotations
 
@@ -151,6 +153,65 @@ def declared(text: str) -> list[str]:
             # parser, but they are a claim about it: fail closed.
             out.append(UNREADABLE)
     return out
+
+
+def tier_not_lowered(before: str, after: str,
+                     expected: str | None = None) -> bool:
+    """True when a rewrite of a note keeps its tier readable and not lower.
+
+    For a writer's post-splice check: the rewritten text must read cleanly
+    (nothing UNREADABLE), must not sit below the tier `before` declared, and,
+    when the write set a tier, must read as exactly that tier (5268564)."""
+    old, _ = effective(before)
+    new, unknown = effective(after)
+    if unknown:
+        return False
+    if expected is not None and new != expected:
+        return False
+    if old is not None and (new is None or TIER_RANK[new] < TIER_RANK[old]):
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Per-note read cap (5278128 / 5278610 shared mitigation).
+#
+# No real note is anywhere near a megabyte; a clipping or mail drop that is
+# one is either a mistake or input built to make a regex or the model spend
+# minutes on it. Every script that reads note bodies for content (the
+# classifier, the RAG sync, the taggers, strip-ads, the dashboard) reads
+# through read_note(), so the cap is one number. What a caller does with an
+# oversize note is its own decision and must fail safe for that caller: the
+# classifier refuses it (tier untouched, reported), the RAG sync does not
+# upload it, the dashboard and taggers skip it.
+# ---------------------------------------------------------------------------
+
+MAX_NOTE_BYTES = 1024 * 1024
+
+
+class NoteTooLarge(OSError):
+    """A note over MAX_NOTE_BYTES. An OSError, so a caller that already skips
+    unreadable files skips this too; callers that must report it catch it
+    first."""
+
+
+def read_note(path, *, errors: str = "strict", newline: str | None = None,
+              limit: int | None = None) -> str:
+    """The note's text, read like Path.read_text(encoding="utf-8"), but never
+    more than `limit` (default MAX_NOTE_BYTES) bytes of it.
+
+    newline=None translates CRLF and CR to LF as read_text does; newline=""
+    returns the text untranslated, as open(..., newline="") does. A file over
+    the cap raises NoteTooLarge without its content being decoded."""
+    cap = MAX_NOTE_BYTES if limit is None else limit
+    with open(path, "rb") as fh:
+        raw = fh.read(cap + 1)
+    if len(raw) > cap:
+        raise NoteTooLarge(f"{path}: larger than the {cap}-byte note read cap")
+    text = raw.decode("utf-8", errors=errors)
+    if newline is None:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text
 
 
 def effective(text: str) -> tuple[str | None, list[str]]:
