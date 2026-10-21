@@ -204,7 +204,7 @@ if ($status -eq 'ok') {
     # Every file scope, not just scripts: a pull also changes templates and the
     # vault's CLAUDE.md (agent_config), and a rule naming only scripts and
     # tasks left those to guesswork (a Windows update, 2026-10-12).
-    Write-Host '  Every file finding (scripts, templates, agent_config, script_config) must be a'
+    Write-Host '  Every file finding (scripts, templates, installers, agent_config, script_config) must be a'
     Write-Host '  file in that diff. venv findings fit only if requirements.lock is in the diff,'
     Write-Host '  or if you rebuilt the venv with install.ps1 since the last baseline and'
     Write-Host '  `.venv\Scripts\python.exe -m pip check` is clean.'

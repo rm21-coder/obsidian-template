@@ -45,6 +45,7 @@ fi
 
 info "  handoff folder: $HANDOFF"
 mkdir -p "$HANDOFF"
+chmod 700 "$HANDOFF"     # 5278617: meeting bodies and join URLs
 
 # Assistant/EA exclusion. Any producer that reads a real calendar will
 # eventually hand you a meeting where your assistant is a required attendee

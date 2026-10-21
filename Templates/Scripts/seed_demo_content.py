@@ -1522,7 +1522,7 @@ def build_plan(anchor: dt.date) -> list[tuple[Path, str]]:
             "The CIO's direct leadership team. A **static** roster — membership "
             "is listed explicitly, so the Meeting template can read it and "
             "pre-fill attendees. Photos refresh nightly via "
-            "`Z_attachments/refresh_groups.py`.", made)),
+            "`Templates/Scripts/refresh_groups.py`.", made)),
         (GROUPS_DIR / "Security Team.md", static_group(
             SECURITY, "Security leadership. Another **static** roster.", made)),
         (GROUPS_DIR / "Infrastructure Team.md", tag_group(

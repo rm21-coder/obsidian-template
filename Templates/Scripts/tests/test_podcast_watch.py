@@ -204,3 +204,15 @@ def test_the_default_timeout_is_parsed_from_the_constant(monkeypatch, tmp_path):
     pw.main(["--once", "--inbox", str(tmp_path / "in"), "--out", str(tmp_path / "out"),
              "--timeout", "10200"])
     assert seen["timeout"] == 10200
+
+
+# 5278632 follow-up (2026-10-20): done/ and failed/ hold transcripts and
+# error logs; _retire creates them owner-only.
+def test_retire_makes_its_folder_owner_only(tmp_path):
+    import os, stat, podcast_watch as pw
+    item = tmp_path / "drop.json"
+    item.write_text("{}", encoding="utf-8")
+    out = pw._retire(item, tmp_path / "done")
+    assert out.exists()
+    if os.name == "posix":
+        assert stat.S_IMODE((tmp_path / "done").stat().st_mode) == 0o700

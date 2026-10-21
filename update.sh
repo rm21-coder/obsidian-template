@@ -338,7 +338,7 @@ report_control() {
             warn "    Before adopting, confirm every finding is part of this update:"
             warn "      findings:  /usr/bin/python3 -I $path --json"
             warn "      the diff:  git -C ~/Obsidian diff --name-status $from $to"
-            warn "    Every file finding (scripts, templates, agent_config, script_config)"
+            warn "    Every file finding (scripts, templates, installers, agent_config, script_config)"
             warn "    must be a file in that diff; venv findings fit only if requirements.lock"
             warn "    is in it, or you rebuilt the venv with install.sh since the last baseline"
             warn "    and .venv/bin/python -m pip check is clean; plist findings must be jobs"

@@ -281,7 +281,12 @@ def find_claude(override: str | None) -> str:
         if p.is_file() and os.access(p, os.X_OK):
             return str(p)
         raise ReviewError("claude not executable at %s" % p)
-    found = shutil.which("claude")
+    try:                                # not the CWD or the checkout (5277585)
+        sys.path.insert(0, str(SCRIPTS_DIR))
+        from exe_lookup import find_executable
+        found = find_executable("claude")
+    except ImportError:                 # pragma: no cover
+        found = shutil.which("claude")
     if found:
         return found
     home = Path.home()

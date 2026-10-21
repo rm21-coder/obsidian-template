@@ -234,11 +234,43 @@ if ($RemovePlugins) {
         Write-Warning "  if you are sure, keeping each plugin's data.json."
     } else {
         $pins = Get-Content $pinsFile -Raw | ConvertFrom-Json
+        # Finding N4 (2026-10-20): the manifest's id and file names reached the
+        # delete unchecked, so '..\..' or an absolute name removed files outside
+        # the plugin folder. Plain names only; regular files only; and only when
+        # the file's resolved parent is this plugin's own folder.
+        $nameRe = '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        $pluginsFull = [System.IO.Path]::GetFullPath($pluginsDir)
         foreach ($pin in $pins) {
+            if (-not ("$($pin.id)" -match $nameRe) -or "$($pin.id)".Contains('..')) {
+                Write-Warning "  REFUSED plugin id '$($pin.id)': not a plain name; nothing removed for it"
+                continue
+            }
             $dir = Join-Path $pluginsDir $pin.id
             if (-not (Test-Path -LiteralPath $dir)) { continue }
+            $dirItem = Get-Item -LiteralPath $dir -Force
+            if ($dirItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                Write-Warning "  REFUSED $dir`: a link, not a plugin folder; nothing removed"
+                continue
+            }
+            $dirFull = [System.IO.Path]::GetFullPath($dir)
+            if ([System.IO.Path]::GetDirectoryName($dirFull) -ne $pluginsFull) {
+                Write-Warning "  REFUSED $dir`: outside $pluginsDir; nothing removed"
+                continue
+            }
             foreach ($prop in $pin.files.PSObject.Properties) {
-                Remove-PathSafe (Join-Path $dir $prop.Name)
+                if (-not ($prop.Name -match $nameRe) -or $prop.Name.Contains('..')) {
+                    Write-Warning "  REFUSED file name '$($prop.Name)' in $($pin.id): not a plain name"
+                    continue
+                }
+                $file = Join-Path $dir $prop.Name
+                if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { continue }
+                $fileItem = Get-Item -LiteralPath $file -Force
+                if ($fileItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    Write-Warning "  REFUSED $file`: a link; not removed"
+                    continue
+                }
+                if ([System.IO.Path]::GetDirectoryName([System.IO.Path]::GetFullPath($file)) -ne $dirFull) { continue }
+                Remove-PathSafe $file
             }
             if ($DryRun) { continue }
             $left = @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)

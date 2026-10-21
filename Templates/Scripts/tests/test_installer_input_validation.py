@@ -535,3 +535,17 @@ def test_outside_a_git_checkout_nothing_is_planned(tmp_path, allow_subprocess):
     plan, err = _plan(repo, la)
     assert plan == {}
     assert "is not a git checkout: not planning any job update" in err
+
+
+# N4 (2026-10-20, found while fixing 5278629): windows/uninstall.ps1 removed
+# pin-manifest names unchecked. Static check: the plain-name rule, the
+# reparse-point refusal and the containment test sit before Remove-PathSafe.
+def test_windows_uninstall_validates_plugin_names_before_removing():
+    src = (SCRIPTS / "windows" / "uninstall.ps1").read_text(encoding="ascii")
+    block = src[src.index("== community plugins =="):src.index("# ---- 6. junction")]
+    assert "^[A-Za-z0-9][A-Za-z0-9._-]*$" in block
+    assert "REFUSED plugin id" in block and "REFUSED file name" in block
+    assert "ReparsePoint" in block and "GetDirectoryName" in block
+    first_remove = block.index("Remove-PathSafe $file")
+    assert block.index("REFUSED file name") < first_remove
+    assert block.index("-PathType Leaf") < first_remove

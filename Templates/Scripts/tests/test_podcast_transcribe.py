@@ -503,3 +503,14 @@ def test_an_episode_at_the_cap_is_transcribed(monkeypatch, tmp_path):
     monkeypatch.setattr(pt, "transcribe", lambda *a, **k: {
         "segments": [], "text": "hello", "_model": "base", "_elapsed_seconds": 1.0})
     assert pt.main([str(audio), "--out", str(tmp_path / "out")]) == 0
+
+
+# 5268567 (Mythos review 2026-10-20): a feed title starting with a dot
+# became a hidden dotfile note in Clippings.
+@pytest.mark.parametrize("title,want", [(".hidden", "hidden"), ("..", "Untitled"),
+                                        ("é.x", "x"), (". . .Show", "Show"),
+                                        ("Normal Title", "Normal Title")])
+def test_safe_filename_never_starts_with_a_dot(title, want):
+    out = pt.safe_filename(title)
+    assert out == want
+    assert not out.startswith(".")

@@ -99,9 +99,10 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
   it -- the morning dashboard and both security controls (on purpose: they
   must work when the venv is broken), the meeting pull, prep and
   pre-population jobs, vault lint, strip-ads, the Claude auth check, group
-  photos (which runs `Z_attachments/insert_group_placeholders.py` and
-  `refresh_groups.py`), the ribbon-order installer step. So treat every
-  script in `Templates/Scripts` and `Z_attachments` as 3.9 code: no nested
+  photos (`Templates/Scripts/insert_group_placeholders.py` and
+  `refresh_groups.py`, under `-I`), the ribbon-order installer step. So treat
+  every script in `Templates/Scripts` as 3.9 code (`Z_attachments` no longer
+  holds any): no nested
   same-quote f-strings, no `match`, no runtime `X | Y` (in annotations only
   under `from __future__ import annotations`). `test_platform_hardening.py`
   parses both folders with `/usr/bin/python3` on macOS and fails an `X | Y`

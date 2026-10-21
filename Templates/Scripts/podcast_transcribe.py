@@ -354,6 +354,8 @@ def parse_atom(root, localname) -> tuple[str, list[dict]]:
 def safe_filename(s: str, max_len: int = 120) -> str:
     s = re.sub(r"[^A-Za-z0-9 _\-.,&!]", "", s).strip()
     s = re.sub(r"\s+", " ", s)
+    # 5268567: a leading dot made a hidden note in Clippings.
+    s = s.lstrip(". ")
     return (s[:max_len].rstrip() if len(s) > max_len else s) or "Untitled"
 
 

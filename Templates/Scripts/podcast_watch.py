@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -218,7 +219,8 @@ def pending_items(inbox: Path, *, min_age: float = 20.0) -> list[Path]:
 
 def _retire(item: Path, target_dir: Path) -> Path:
     """Move a processed drop aside, keeping both copies if names collide."""
-    target_dir.mkdir(parents=True, exist_ok=True)
+    target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(target_dir, 0o700)          # 5278632: done/ and failed/ hold transcripts
     dest = target_dir / item.name
     if dest.exists():
         stem, suffix = item.stem, item.suffix

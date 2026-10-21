@@ -110,7 +110,7 @@ converted documents. `Meetings/`, `People/` and `Groups/` hold meeting notes,
 contact records and rosters. `Knowledge/` is the curated home for graduated
 notes, including the optional `Tag Taxonomy.md` allowlist the tagger
 enforces. `Topics/` holds tag-driven pages, `Actions/` the to-do views, and
-`Z_attachments/` images and the group-photo scripts. `Z_dashboards/` is
+`Z_attachments/` images. `Z_dashboards/` is
 written by the dashboard and gitignored. `Templates/` holds note templates,
 `Bases/`, `QuickAdd/` scripts, and `Scripts/`, the automation.
 
@@ -201,9 +201,9 @@ security controls and the dashboard do this on purpose, so they keep working
 when the venv is broken, and an Apple-signed interpreter is not replaced by a
 package upgrade. The rest are standard-library only and have no reason to
 depend on the venv. The consequence is a rule for every script in
-`Templates/Scripts/` and `Z_attachments/`: write 3.9-compatible code (no
+`Templates/Scripts/`: write 3.9-compatible code (no
 `match`, no runtime `X | Y` unions, no nested same-quote f-strings).
-`test_platform_hardening.py` parses both folders with `/usr/bin/python3` to
+`test_platform_hardening.py` parses that folder (and `Z_attachments/`, which now holds no code) with `/usr/bin/python3` to
 enforce it.
 
 On Windows every task runs the venv's interpreter, launched windowless.
@@ -236,6 +236,13 @@ Jobs that must not overlap take a single-instance lock through
 `Templates/Scripts/.locks/`). On Windows, `run_logged.py` also takes a
 per-task lock, so a dashboard click and a scheduled run of the same job
 cannot overlap.
+
+External programs (ffmpeg, ffprobe, claude) are resolved through
+`exe_lookup.find_executable`, which searches only absolute PATH entries
+outside the working directory and the vault; Windows tasks start in
+`%LOCALAPPDATA%\obsidian-logs`. Every LaunchAgent runs with umask 077 and
+keeps Python bytecode out of the vault (`PYTHONDONTWRITEBYTECODE` and a
+`PYTHONPYCACHEPREFIX` under `~/Library/Caches/obsidian-template`).
 
 ## Model access
 
@@ -400,7 +407,8 @@ date without re-asking every question:
    so the remaining steps are the new code.
 3. Reinstalls the requirements from the lock, hash-checked.
 4. On macOS, re-renders each LaunchAgent this machine already has, and
-   reloads only those whose definition changed, with a diff and a backup. A
+   reloads only those whose git-tracked definition changed, with a diff and a
+   backup; a changed agent with no installer component is named and left alone. A
    job you never installed is listed with the command that adds it, never
    added. On Windows, `Register-Tasks.ps1` re-registers every task and keeps
    any task you enabled by hand enabled.

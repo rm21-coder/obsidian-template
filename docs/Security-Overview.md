@@ -133,7 +133,9 @@ and `strip_ads` neutralizes it seconds to minutes afterwards (see
 Community plugins install only from `installers/plugin-pins.json`, which names
 each plugin's release tag, the exact download URL of each file and its
 SHA-256. The installer downloads into a staging directory, hashes each file,
-and on a mismatch refuses with nothing moved into place. Upgrading a plugin is
+and on a mismatch refuses with nothing moved into place. Pin ids and file
+names must be plain names and URLs https on github.com or
+raw.githubusercontent.com, checked before any download. Upgrading a plugin is
 a deliberate re-pin with `installers/lib/pin_plugins.py` and a commit, so the
 review moment is the diff of the pin file. One deployed file differs from its
 pin by design: `quickadd_patch.py` rewrites a call in QuickAdd's `main.js`
@@ -145,7 +147,9 @@ needed; `requirements.lock` (and the `-dropper` and `-dev` pairs) pins every
 package, dependencies included, with the hash of every file. Every pip step in
 both installers and both updaters installs only a lock, with
 `--require-hashes --no-deps --only-binary :all:`; the last flag stops a source
-build fetching its build tools unhashed. `lock_requirements.py` takes hashes
+build fetching its build tools unhashed. Before pip runs, a lock line that is
+not `name==version` or a `--hash=sha256` continuation (an option, a direct URL,
+a wheel path) is refused. `lock_requirements.py` takes hashes
 fresh from the index and refuses to write an unhashed entry. A reinstall
 replaces only what the lock names, so a package added by hand stays unchecked
 until the venv is rebuilt.
@@ -154,9 +158,17 @@ Whisper models load through `pinned_model.py`, which downloads a model only
 at the commit named in `whisper_model_pins.py` and checks every file the
 backend will load against its pinned size and hash. An unpinned model is
 refused unless the operator passes `--allow-unpinned-model`, which is logged.
+A local model directory is used only when a caller explicitly allows it and
+names it by an absolute or `./` path; no shipped job does, and the pins are
+checked first.
 `yt-dlp` runs with `-I`, `--ignore-config` and only its YouTube extractors,
 so a file planted in the working directory or a config file cannot change
-what it loads.
+what it loads. Other external programs (ffmpeg, ffprobe, claude) are found
+through `exe_lookup.find_executable`, which searches only absolute PATH entries
+outside the working directory and the vault, and Windows tasks start in
+`%LOCALAPPDATA%\obsidian-logs` rather than the scripts folder. Every
+LaunchAgent runs with umask 077 and keeps Python bytecode out of the vault
+(`PYTHONDONTWRITEBYTECODE`, `PYTHONPYCACHEPREFIX`); the vault root is 0700.
 
 ### Outside text
 
@@ -192,7 +204,8 @@ opened inside that window would render.
 Two pipelines are hardened at the transport. The **mail drop** treats the
 mailbox as world-writable: a sender allowlist that rejects everything when
 empty, an HMAC-SHA256 over a length-prefixed canonical string compared with
-`hmac.compare_digest`, the routing type read from inside the MAC, a timestamp
+`hmac.compare_digest` (a non-ASCII `hmac:` value is refused before the
+comparison, which would otherwise raise and stop the drain), the routing type read from inside the MAC, a timestamp
 inside the MAC bounding age to seven days (and rejecting one more than five
 minutes in the future), a seen-cache of accepted digests that refuses a replay
 inside that window, `text/plain` only by default, a size cap, and filenames

@@ -89,3 +89,8 @@ bandit   Templates/Scripts/tests/test_meeting_prepopulate_paths.py   B108   coun
 # run, not a pass. Line: the marshal.loads in _pyc_problem.
 bandit   Templates/Scripts/integrity_monitor.py   B302   count=1   # the bytecode check itself; see above. re-check 2027-01-03
 semgrep  Templates/Scripts/integrity_monitor.py   marshal-usage   count=1   # as above. re-check 2027-01-03
+bandit   Templates/Scripts/tests/test_handoff_source.py   B103   count=1   # loosens the ingest folder to 0755 so the test can prove ack() tightens it to 0700 (5278617). Tests are not deployed. re-check 2027-01-20
+bandit   Templates/Scripts/tests/test_script_lock.py   B103   count=1   # pre-loosens .locks to 0755 to prove the lock folder is tightened to 0700 (5278107). re-check 2027-01-20
+bandit   Templates/Scripts/tests/test_source_media.py   B103   count=2   # loosens the drop folders, and an outside folder, to prove ensure_dirs tightens only its own (5278632). re-check 2027-01-20
+bandit   Templates/Scripts/tests/test_vault_bootstrap.py   B103   count=2   # a stand-in executable, and a loose real folder the bootstrap must refuse to link into (5278631). re-check 2027-01-20
+bandit   Templates/Scripts/tests/test_installer_input_validation.py   B108   count=1   # hostile pin file name "/tmp/NAME_ESCAPE.txt" the installer must refuse before any download (5278122); nothing is written there. re-check 2027-01-20

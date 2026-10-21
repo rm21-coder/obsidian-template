@@ -53,6 +53,13 @@ import time
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent.parent
+# 5278114: never read or write bytecode beside the vault's scripts. Set
+# before the first import from SCRIPTS, as run_logged does for its children,
+# and only when run as the handler: an importer (the tests) keeps its own.
+if __name__ == "__main__":
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = os.path.join(os.environ.get("LOCALAPPDATA") or str(Path.home()),
+                                      "obsidian-template", "pycache")
 sys.path.insert(0, str(SCRIPTS))
 
 # action -> (scheduled task, script, args, label)
