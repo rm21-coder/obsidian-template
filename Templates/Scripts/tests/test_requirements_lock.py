@@ -205,7 +205,7 @@ def _mac_setup(tmp_path: Path, *, with_lock: bool = True, probe: str = "arm64 13
     (d / "requirements.txt").write_text("six\n", encoding="utf-8")
     if with_lock:
         (d / (lock_name or "requirements.lock")).write_text(
-            "six==1.17.0 \\\n    --hash=sha256:00\n", encoding="utf-8")
+            "six==1.17.0 \\\n    --hash=sha256:" + "0" * 64 + "\n", encoding="utf-8")
     (d / "lock_extras.py").write_text("", encoding="utf-8")
     argv = tmp_path / "argv"
     fake = tmp_path / "venv" / "bin" / "python"      # venv root: tmp_path/venv
@@ -213,7 +213,7 @@ def _mac_setup(tmp_path: Path, *, with_lock: bool = True, probe: str = "arm64 13
     fake.write_text(
         "#!/bin/sh\n"
         f'if [ "$1" = "-c" ]; then echo "{probe}"; exit 0; fi\n'
-        f'case "$1" in *lock_extras.py) printf "%s" "{extras}"; exit 0;; esac\n'
+        f'case "$*" in *lock_extras.py*) printf "%s" "{extras}"; exit 0;; esac\n'
         f'printf "%s\\n" "$@" >> "{argv}"\n'
         f"exit {pip_exit}\n", encoding="utf-8")
     fake.chmod(0o755)
@@ -500,7 +500,7 @@ def test_macos_reinstalls_everything_only_when_the_lock_is_new(tmp_path, allow_s
     p2 = _mac_run(d, fake)                                  # same lock
     assert "unchanged since this venv's last install" in p2.stdout + p2.stderr
 
-    lock.write_text(lock.read_text() + "idna==3.20 \\\n    --hash=sha256:11\n")
+    lock.write_text(lock.read_text() + "idna==3.20 \\\n    --hash=sha256:" + "1" * 64 + "\n")
     p3 = _mac_run(d, fake)                                  # lock changed
     assert "is new to this venv" in p3.stdout + p3.stderr
 

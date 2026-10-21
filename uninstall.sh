@@ -69,6 +69,10 @@ source "$REPO_ROOT/installers/lib/common.sh"
 # /usr/bin/security. See the Keychain section for why a bare call is not
 # acceptable here.
 source "$REPO_ROOT/installers/lib/secrets.sh"
+# plugins.sh: definitions only. Needed for plugin_name_ok, the check every
+# pin-named path passes before --plugins deletes it.
+# shellcheck source=installers/lib/plugins.sh
+source "$REPO_ROOT/installers/lib/plugins.sh"
 
 # ---- defaults & argument parsing -------------------------------------------
 INTERACTIVE=1
@@ -163,6 +167,38 @@ rm_path() {
         else
             warn "  reported removed but still present: $p"
         fi
+    fi
+}
+
+# rm_plugin_file <plugins dir> <its resolved path> <plugin id> <file name>
+# Delete one file a pin names (finding 5278629). The pin is input: the id and
+# the name must each be a plain name (plugin_name_ok), the target must be a
+# regular file -- never a directory or a symlink -- and its folder must resolve
+# to <plugins dir>/<id> itself, not somewhere a symlinked plugin folder points.
+# Anything else is reported and left alone. rm -f, never rm -rf.
+rm_plugin_file() {
+    local plugins="$1" plugins_real="$2" pid="$3" fname="$4"
+    if ! plugin_name_ok "$pid" || ! plugin_name_ok "$fname"; then
+        warn "  REFUSED to remove pin entry '$pid/$fname': not a plain plugin id and file name"
+        return 0
+    fi
+    local dir="$plugins/$pid" p="$plugins/$pid/$fname"
+    [[ -e "$p" || -L "$p" ]] || return 0
+    if [[ -L "$dir" || ! -d "$dir" || "$(cd "$dir" && pwd -P)" != "$plugins_real/$pid" ]]; then
+        warn "  REFUSED to remove $p: its folder does not resolve to $plugins_real/$pid"
+        return 0
+    fi
+    if [[ -L "$p" || ! -f "$p" ]]; then
+        warn "  REFUSED to remove $p: not a regular file"
+        return 0
+    fi
+    run rm -f "$p"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        ok "  would remove: $p"
+    elif [[ ! -e "$p" ]]; then
+        ok "  removed: $p"
+    else
+        warn "  reported removed but still present: $p"
     fi
 }
 
@@ -353,9 +389,10 @@ if [[ "$DO_PLUGINS" -eq 1 ]]; then
         warn "  settings, so nothing was removed. Delete by hand if you are"
         warn "  sure, keeping each plugin's data.json."
     elif [[ "$INTERACTIVE" -eq 0 ]] || confirm "Remove fetched plugin files at $PLUGINS (settings kept)?" N; then
+        PLUGINS_REAL="$(cd "$PLUGINS" && pwd -P)"
         while IFS=$'\t' read -r pid fname; do
             [[ -n "$pid" ]] || continue
-            rm_path "$PLUGINS/$pid/$fname"
+            rm_plugin_file "$PLUGINS" "$PLUGINS_REAL" "$pid" "$fname"
         done < <(python3 -c '
 import json, sys
 for pin in json.load(open(sys.argv[1])):
@@ -365,7 +402,7 @@ for pin in json.load(open(sys.argv[1])):
         # Only if nothing survives. A folder still holding data.json - or
         # anything else the pin manifest does not name - keeps its directory.
         for d in "$PLUGINS"/*/; do
-            [[ -d "$d" ]] || continue
+            [[ -d "$d" && ! -L "${d%/}" ]] || continue
             if [[ -z "$(ls -A "$d" 2>/dev/null)" ]]; then
                 rm_path "${d%/}"
             else

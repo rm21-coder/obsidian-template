@@ -37,9 +37,32 @@ $listFile = Join-Path $vault '.obsidian\community-plugins.json'
 if (-not (Test-Path $listFile)) { throw "plugin list not found: $listFile" }
 $ids = @(Get-Content $listFile -Raw | ConvertFrom-Json)
 
+# Pin values are input, not code (findings 5278122, 5278131; the twin of
+# plugins.sh). A plugin id and a file name each become ONE path component under
+# .obsidian\plugins: a letter or digit, then letters, digits, '.', '_' or '-',
+# never '..' and never a trailing '.' (Windows drops it). A download URL must
+# be https on a host pin_plugins.py writes: github.com (release assets) or
+# raw.githubusercontent.com (release-less plugins pinned at a commit). All of
+# it is checked before the first download, and every destination must resolve
+# inside plugins\<id>.
+$PluginNameRe = '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+$PluginUrlRe  = '^https://(github\.com|raw\.githubusercontent\.com)/\S+$'
+
+function Test-PluginName([string]$Name) {
+    return ($Name -cmatch $PluginNameRe) -and ($Name -notlike '*..*') -and (-not $Name.EndsWith('.'))
+}
+
+function Test-PluginUrl([string]$Url) {
+    return $Url -cmatch $PluginUrlRe
+}
+
 function Install-OnePlugin {
     param([string]$Id, [string]$Vault)
 
+    if (-not (Test-PluginName $Id)) {
+        Write-Warning "  REFUSED plugin id '$Id': not a plain name (letters, digits, . _ -; no '..')"
+        return $false
+    }
     $pin = $pinById[$Id]
     if (-not $pin) {
         Write-Warning "  plugin '$Id' has no pin -- re-run pin_plugins.py"
@@ -47,10 +70,44 @@ function Install-OnePlugin {
     }
     Write-Host "  $Id @ $($pin.ref) (pinned)"
 
+    $dir = Join-Path $Vault ".obsidian\plugins\$Id"
+    $dirFull = [System.IO.Path]::GetFullPath($dir).TrimEnd('\') + '\'
+    $files = @($pin.files.PSObject.Properties)
+    if ($files.Count -eq 0) {
+        Write-Warning "    no files pinned for $Id (pin parse problem?)"
+        return $false
+    }
+    foreach ($prop in $files) {
+        $name = [string]$prop.Name
+        $url  = [string]$prop.Value.url
+        $sha  = [string]$prop.Value.sha256
+        if (-not (Test-PluginName $name)) {
+            Write-Warning "    REFUSED file name '$name' in the $Id pin: not a plain name (letters, digits, . _ -; no '..')"
+            return $false
+        }
+        if (-not (Test-PluginUrl $url)) {
+            Write-Warning "    REFUSED URL for $Id/${name}: '$url' is not https://github.com/ or https://raw.githubusercontent.com/"
+            return $false
+        }
+        if ($sha -notmatch '^[0-9a-fA-F]{64}$') {
+            Write-Warning "    REFUSED sha256 for $Id/${name}: not 64 hex digits"
+            return $false
+        }
+        $target = [System.IO.Path]::GetFullPath((Join-Path $dir $name))
+        if (-not $target.StartsWith($dirFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Warning "    REFUSED $Id/${name}: resolves to $target, outside $dirFull"
+            return $false
+        }
+    }
+    if ((Test-Path -LiteralPath $dir) -and ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        Write-Warning "    REFUSED: $dir is a link or junction"
+        return $false
+    }
+
     $staging = Join-Path $env:TEMP ("obsidian_plugin_" + [System.IO.Path]::GetRandomFileName())
     New-Item -ItemType Directory -Force -Path $staging | Out-Null
     try {
-        foreach ($prop in $pin.files.PSObject.Properties) {
+        foreach ($prop in $files) {
             $name = $prop.Name
             $meta = $prop.Value
             $dst  = Join-Path $staging $name
@@ -71,7 +128,6 @@ function Install-OnePlugin {
             }
         }
         # All files verified -- move into place.
-        $dir = Join-Path $Vault ".obsidian\plugins\$Id"
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         Get-ChildItem $staging | ForEach-Object {
             Copy-Item $_.FullName (Join-Path $dir $_.Name) -Force

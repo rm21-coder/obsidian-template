@@ -132,6 +132,40 @@ function Remove-PipLeftovers {
     }
 }
 
+# Finding 5278623, the twin of lock_is_plain in installers/lib/common.sh:
+# --require-hashes does not stop a lock from naming its own source. A
+# "pkg @ file:///x.whl --hash=<its own hash>" line, a bare wheel path or an
+# option line (-i, --extra-index-url, -r, -e, ...) installs whatever it points
+# at. Before pip sees the lock, every line must be what lock_requirements.py
+# (uv) writes: a comment, a "--hash=sha256:<64 hex>" continuation, or
+# "name[extras]==version[ ; marker]". Throws naming the line otherwise.
+function Assert-PlainLock {
+    param([Parameter(Mandatory)][string]$Lock)
+    $hashRe = '^--hash=sha256:[0-9a-f]{64}( \\)?$'
+    $reqRe  = '^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?==[A-Za-z0-9.+!_-]+( ;[A-Za-z0-9_ .''"<>=!~*()-]*)?( \\)?$'
+    $n = 0
+    foreach ($line in (Get-Content -LiteralPath $Lock)) {
+        $n++
+        $s = $line.Trim()
+        if ($s -eq '' -or $s.StartsWith('#')) { continue }
+        $why = ''
+        if ($s.StartsWith('--hash=')) {
+            if ($s -cnotmatch $hashRe) { $why = 'a --hash line that is not exactly --hash=sha256:<64 hex>' }
+        } elseif ($s.StartsWith('-')) {
+            $why = 'a pip option line'
+        } elseif ($s.Contains(' @ ') -or $s.Contains('@') -or $s.Contains('://')) {
+            $why = 'a direct-URL requirement'
+        } elseif ($s -match '\s-') {
+            $why = 'a pip option on a requirement line'
+        } elseif ($s -cnotmatch $reqRe) {
+            $why = 'not a name==version requirement'
+        }
+        if ($why) {
+            throw "REFUSED $Lock line ${n}: $why. A lock may hold only name==version lines and their --hash=sha256 continuations; regenerate it with installers/lib/lock_requirements.py."
+        }
+    }
+}
+
 function Install-Requirements {
     param(
         [Parameter(Mandatory)][string]$VenvPython,
@@ -141,6 +175,7 @@ function Install-Requirements {
     if (-not (Test-Path $lock)) {
         throw "$lock is missing; refusing to install unpinned requirements"
     }
+    Assert-PlainLock -Lock $lock
     # An existing venv may predate the floor (3.12 on ARM64) or exceed the
     # ceiling; say so plainly rather than let pip report a missing wheel.
     $ver = ((& $VenvPython --version 2>&1) | Out-String)

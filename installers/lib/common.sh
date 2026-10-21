@@ -286,6 +286,48 @@ run() {
 # on an Apple Silicon Mac would otherwise pass the preflight and fail in pip).
 LOCK_PYTHON_MIN=10
 LOCK_PYTHON_MAX=14
+
+# lock_is_plain <lock>
+# Finding 5278623: --require-hashes does not stop a lock from naming its own
+# source. A "pkg @ file:///x.whl --hash=<its own hash>" line, a bare wheel
+# path, or an option line (-i, --extra-index-url, -r, -e, ...) installs
+# whatever it points at, hash-checked against a hash the same line supplies.
+# So before pip sees the lock, every line must be one of the three things
+# lock_requirements.py (uv) writes: a comment, an indented
+# "--hash=sha256:<64 hex>" continuation, or "name[extras]==version[ ; marker]".
+# Anything else fails with the line number. Prints nothing on success.
+LOCK_HASH_RE='^--hash=sha256:[0-9a-f]{64}( \\)?$'
+LOCK_REQ_RE="^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?==[A-Za-z0-9.+!_-]+( ;[A-Za-z0-9_ .'\"<>=!~*()-]*)?( \\\\)?$"
+lock_is_plain() {
+    local lock="$1" s n=0 why
+    # read into one variable trims leading and trailing spaces and tabs in
+    # linear time; then the CR of a Windows checkout, and any blanks it hid.
+    # Substrings, not ${s%...}: suffix removal is quadratic on a long line
+    # under a UTF-8 locale (1.8 s for a 100 kB line).
+    while IFS=$' \t' read -r s || [[ -n "$s" ]]; do
+        n=$((n + 1))
+        while [[ "$s" == *[[:space:]] ]]; do s="${s:0:${#s}-1}"; done
+        [[ -z "$s" || "$s" == \#* ]] && continue
+        why=""
+        if [[ "$s" == --hash=* ]]; then
+            [[ "$s" =~ $LOCK_HASH_RE ]] || why="a --hash line that is not exactly --hash=sha256:<64 hex>"
+        elif [[ "$s" == -* ]]; then
+            why="a pip option line"
+        elif [[ "$s" == *" @ "* || "$s" == *@* || "$s" == *"://"* ]]; then
+            why="a direct-URL requirement"
+        elif [[ "$s" =~ [[:space:]]- ]]; then
+            why="a pip option on a requirement line"
+        elif [[ ! "$s" =~ $LOCK_REQ_RE ]]; then
+            why="not a name==version requirement"
+        fi
+        if [[ -n "$why" ]]; then
+            err "  REFUSED $lock line $n: $why. A lock may hold only name==version lines and"
+            err "  their --hash=sha256 continuations; regenerate it with installers/lib/lock_requirements.py."
+            return 1
+        fi
+    done < "$lock"
+    return 0
+}
 # install_requirements <venv python> <file in the same folder as the lock> [lock name]
 install_requirements() {
     local venv_py="$1" lock
@@ -294,6 +336,7 @@ install_requirements() {
         err "  $lock is missing; refusing to install unpinned requirements"
         return 1
     fi
+    lock_is_plain "$lock" || return 1
     local probe machine minor
     # "<machine> <minor> <gil|nogil>": a free-threaded build has no wheels here.
     probe="$("$venv_py" -c 'import platform, sys, sysconfig; print(platform.machine(), sys.version_info[1], "nogil" if sysconfig.get_config_var("Py_GIL_DISABLED") else "gil")' 2>/dev/null | tail -1)" || probe=""
@@ -329,7 +372,8 @@ install_requirements() {
     # Only after pip succeeded: a failed install retries in full next time.
     [[ -n "$want" ]] && printf '%s\n' "$want" > "$stamp"
     local extra
-    extra="$("$venv_py" "$(dirname "$lock")/lock_extras.py" "$lock" | tr '\n' ' ')" || true
+    # -I: nothing beside the lock (a planted re.py, say) is imported.
+    extra="$("$venv_py" -I "$(dirname "$lock")/lock_extras.py" "$lock" | tr '\n' ' ')" || true
     if [[ -n "${extra// /}" ]]; then
         warn "  installed but not in $(basename "$lock") (never hash-checked, not audited): $extra"
         warn "  delete $(dirname "$(dirname "$venv_py")") and re-run the installer to clear them"

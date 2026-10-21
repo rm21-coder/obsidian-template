@@ -48,10 +48,29 @@ render_to() {
 #   not-installed  the template exists but this machine never installed it --
 #                  either declined at install time or new upstream. Left alone:
 #                  an update must not add a job the user did not choose.
+#   refused        installed and different, but no installer component names
+#                  the template, so nothing says this agent is the template's
+#                  to rewrite. Left alone, with a warning naming the file.
+#
+# Only templates git tracks are candidates (finding 5278124): a plist dropped
+# into Templates/Scripts beside an installed label is not an upstream change,
+# and installing and loading it would run whatever it names. Untracked
+# templates are reported on stderr and skipped. Outside a git checkout there
+# is nothing to trust, so nothing is planned.
 plan_agents() {
-    local repo="$1" la="$2" tpl label dst tmp state comp
+    local repo="$1" la="$2" tpl label dst tmp state comp rel
+    local tracked
+    if ! tracked="$(git -C "$repo" ls-files -- 'Templates/Scripts/*.plist' 2>/dev/null)"; then
+        err "  $repo is not a git checkout: not planning any job update"
+        return 0
+    fi
     for tpl in "$repo"/Templates/Scripts/*.plist; do
         [[ -f "$tpl" ]] || continue
+        rel="Templates/Scripts/$(basename "$tpl")"
+        if ! grep -qxF -- "$rel" <<<"$tracked"; then
+            warn "  $rel is not tracked by git: ignored (an update installs only shipped job definitions)"
+            continue
+        fi
         label="$(basename "$tpl" .plist)"
         dst="$la/${label}.plist"
         comp="$(component_for_label "$repo" "$label")"
@@ -60,7 +79,15 @@ plan_agents() {
         else
             tmp="$(mktemp -t obsidian_update_plist)"
             render_to "$tpl" "$tmp"
-            if cmp -s "$tmp" "$dst"; then state="unchanged"; else state="changed"; fi
+            if cmp -s "$tmp" "$dst"; then
+                state="unchanged"
+            elif [[ -z "$comp" ]]; then
+                state="refused"
+                warn "  $rel changed, but no installer component installs it: not updating $dst."
+                warn "    Review the template and copy it by hand if you want the change."
+            else
+                state="changed"
+            fi
             rm -f "$tmp"
         fi
         printf '%s %s %s\n' "$state" "$label" "${comp:--}"
