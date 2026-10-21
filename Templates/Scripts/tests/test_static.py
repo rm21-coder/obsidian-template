@@ -90,11 +90,14 @@ class TestPyCompile:
     """Every patched .py file must compile without errors."""
 
     @pytest.mark.parametrize("name", PATCHED_PY)
-    def test_runtime_compiles(self, name: str, scripts_dir: Path) -> None:
+    def test_runtime_compiles(self, name: str, scripts_dir: Path, tmp_path: Path) -> None:
         target = scripts_dir / name
         assert target.exists(), f"missing runtime file: {target}"
-        # raises py_compile.PyCompileError on failure
-        py_compile.compile(str(target), doraise=True)
+        # raises py_compile.PyCompileError on failure. cfile outside the
+        # checkout: the default writes Templates/Scripts/__pycache__ (it
+        # ignores PYTHONDONTWRITEBYTECODE), which the integrity monitor's
+        # own tests then report as drift (5278114).
+        py_compile.compile(str(target), cfile=str(tmp_path / (name + "c")), doraise=True)
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +260,32 @@ class TestPlists:
             plist = plistlib.load(f)
         assert "Label" in plist
         assert "ProgramArguments" in plist
+
+    @pytest.mark.parametrize("name", PLISTS)
+    def test_every_job_runs_under_an_owner_only_umask(
+            self, name: str, scripts_dir: Path) -> None:
+        """5278631: with no Umask, launchd's default (022) left every note,
+        state file and log a job wrote readable by other local accounts."""
+        with (scripts_dir / name).open("rb") as f:
+            plist = plistlib.load(f)
+        assert plist.get("Umask") == 0o077, f"{name}: Umask is {plist.get('Umask')!r}"
+
+    @pytest.mark.parametrize("name", PLISTS)
+    def test_no_job_reads_bytecode_from_the_vault(
+            self, name: str, scripts_dir: Path) -> None:
+        """5278114: an unchecked-hash .pyc planted in Templates/Scripts/
+        __pycache__ ran in place of the reviewed source. Every job either runs
+        isolated from an installed copy outside the vault (the two controls,
+        -I, which ignores PYTHON* variables) or carries both variables."""
+        with (scripts_dir / name).open("rb") as f:
+            plist = plistlib.load(f)
+        if "-I" in plist["ProgramArguments"]:
+            assert not any("/Obsidian/" in a for a in plist["ProgramArguments"])
+            return
+        env = plist.get("EnvironmentVariables", {})
+        assert env.get("PYTHONDONTWRITEBYTECODE") == "1", name
+        assert env.get("PYTHONPYCACHEPREFIX") == (
+            "/Users/YOUR_USERNAME/Library/Caches/obsidian-template/pycache"), name
 
     def test_integrity_watchpaths(self, scripts_dir: Path) -> None:
         with (scripts_dir / "com.obsidian.security.integrity.plist"

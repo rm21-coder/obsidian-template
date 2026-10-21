@@ -26,12 +26,28 @@
     <key>Label</key>
     <string>com.tag-clippings</string>
 
+    <!-- 077: files this job writes (notes, state, logs) are readable by
+         this account only, not by other local accounts. -->
+    <key>Umask</key>
+    <integer>63</integer>
+
     <key>ProgramArguments</key>
     <array>
         <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
         <string>-u</string>
         <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/tag_clippings.py</string>
     </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Bytecode never written into, or read from, the synced vault:
+             a .pyc planted in Templates/Scripts/__pycache__ would
+             otherwise be loaded in place of the reviewed source. -->
+        <key>PYTHONDONTWRITEBYTECODE</key>
+        <string>1</string>
+        <key>PYTHONPYCACHEPREFIX</key>
+        <string>/Users/YOUR_USERNAME/Library/Caches/obsidian-template/pycache</string>
+    </dict>
 
     <!-- Every 30 minutes, on the hour and half-hour (:00 and :30). Clock-aligned
          so the tagger runs at predictable times instead of interrupting editing

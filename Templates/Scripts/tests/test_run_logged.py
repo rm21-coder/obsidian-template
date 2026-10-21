@@ -21,6 +21,14 @@ SCRIPTS = Path(rl.__file__).resolve().parent
 WINDOWS = SCRIPTS / "windows"
 
 
+@pytest.fixture(autouse=True)
+def _restore_bytecode_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """main() points this process's bytecode cache outside the vault; undo it
+    after each test so the rest of the suite is unaffected."""
+    monkeypatch.setattr(sys, "dont_write_bytecode", sys.dont_write_bytecode)
+    monkeypatch.setattr(sys, "pycache_prefix", sys.pycache_prefix)
+
+
 @pytest.fixture
 def localappdata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     base = tmp_path / "AppData" / "Local"
@@ -449,7 +457,10 @@ class TestIsolationIsPassedOn:
         import subprocess
         scripts = Path(rl.__file__).resolve().parent
         prog = f"import sys; sys.path.append({str(scripts)!r}); " + code
-        return subprocess.run([sys.executable, *flags, "-c", prog], capture_output=True,
+        # -B: -I ignores PYTHONDONTWRITEBYTECODE, and the import would
+        # otherwise leave run_logged's .pyc in the checkout's __pycache__,
+        # which the integrity monitor's tests then report as drift.
+        return subprocess.run([sys.executable, "-B", *flags, "-c", prog], capture_output=True,
                               text=True, check=True, timeout=60).stdout.strip()
 
     def test_an_isolated_runner_starts_an_isolated_job(self, allow_subprocess) -> None:
@@ -491,3 +502,93 @@ class TestIsolationIsPassedOn:
         assert "most recent call first" in log           # faulthandler's dump header
         assert "hang.py" in log
         assert "ran past 6s; stopped it and its children" in log
+
+
+class TestBytecodeStaysOutOfTheVault:
+    """5278114: Python reads <script dir>/__pycache__ before the source, and
+    the scripts live in the synced vault. An unchecked-hash .pyc planted
+    there ran in place of the reviewed .py."""
+
+    def test_the_child_neither_writes_nor_reads_beside_the_scripts(
+            self, monkeypatch) -> None:
+        # A prefix pointing back into the vault must not survive.
+        monkeypatch.setenv("PYTHONPYCACHEPREFIX", str(SCRIPTS / "__pycache__"))
+        monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+        env = rl.child_env()
+        assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+        prefix = Path(env["PYTHONPYCACHEPREFIX"])
+        assert prefix == rl.pycache_prefix()
+        assert SCRIPTS not in prefix.parents and prefix != SCRIPTS
+        assert prefix.parts[-2:] == ("obsidian-template", "pycache")
+
+    def test_on_windows_it_is_under_localappdata(self, localappdata, monkeypatch) -> None:
+        monkeypatch.setattr(rl.sys, "platform", "win32")
+        assert rl.pycache_prefix() == localappdata / "obsidian-template" / "pycache"
+
+    def test_keep_bytecode_out_of_the_vault_sets_this_process(self, monkeypatch) -> None:
+        monkeypatch.setattr(sys, "dont_write_bytecode", False)
+        monkeypatch.setattr(sys, "pycache_prefix", None)
+        rl.keep_bytecode_out_of_the_vault()
+        assert sys.dont_write_bytecode is True
+        assert sys.pycache_prefix == str(rl.pycache_prefix())
+
+    def test_the_runner_itself_ignores_a_planted_script_lock_pyc(
+            self, tmp_path, localappdata, allow_subprocess) -> None:
+        """Task Scheduler starts run_logged.py from the vault with no PYTHON*
+        settings, and it imports script_lock from there."""
+        import py_compile
+        import shutil
+        import subprocess as sp
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        for name in ("run_logged.py", "script_lock.py", "job_boot.py"):
+            shutil.copy2(SCRIPTS / name, vault / name)
+        evil = tmp_path / "evil.py"
+        evil.write_text("raise SystemExit(99)\n", encoding="utf-8")
+        tag = sys.implementation.cache_tag
+        py_compile.compile(str(evil), cfile=str(vault / "__pycache__" / f"script_lock.{tag}.pyc"),
+                           doraise=True,
+                           invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+        job = _job(tmp_path, 'print("ok")\n')
+        env = {k: v for k, v in rl.child_env().items() if not k.startswith("PYTHON")}
+        env["LOCALAPPDATA"] = str(localappdata)
+        r = sp.run([sys.executable, str(vault / "run_logged.py"), "demo", job],
+                   env=env, capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, r.stderr
+        assert sorted(p.name for p in (vault / "__pycache__").iterdir()) == [
+            f"script_lock.{tag}.pyc"], "the runner wrote bytecode into the vault"
+
+    def test_a_planted_pyc_is_not_loaded(
+            self, tmp_path, localappdata, monkeypatch, allow_subprocess) -> None:
+        import importlib.util
+        import py_compile
+        import subprocess as sp
+
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        (vault / "helper.py").write_text('WHO = "reviewed source"\n', encoding="utf-8")
+        evil = tmp_path / "evil.py"
+        evil.write_text('WHO = "planted bytecode"\n', encoding="utf-8")
+        # The plant goes where a plain interpreter looks: beside the source
+        # (cache_from_source would honour this process's own prefix).
+        tag = sys.implementation.cache_tag
+        cfile = str(vault / "__pycache__" / f"helper.{tag}.pyc")
+        py_compile.compile(str(evil), cfile=cfile, doraise=True,
+                           invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
+        job = vault / "job.py"
+        job.write_text("import helper\nprint(helper.WHO)\n", encoding="utf-8")
+
+        # Control: without the runner's environment the plant is loaded, so
+        # the assertion below is about the fix and not about a dud plant.
+        plain = {k: v for k, v in rl.child_env().items()
+                 if k not in ("PYTHONDONTWRITEBYTECODE", "PYTHONPYCACHEPREFIX")}
+        out = sp.run([sys.executable, str(job)], env=plain, capture_output=True,
+                     text=True, check=True).stdout
+        assert out.strip() == "planted bytecode"
+
+        monkeypatch.setattr(rl, "pycache_prefix", lambda: tmp_path / "cache")
+        assert rl.run("demo", str(job), []) == 0
+        text = (localappdata / "obsidian-logs" / "demo.log").read_text(encoding="utf-8")
+        assert text.strip() == "reviewed source"
+        assert not (tmp_path / "cache").exists(), "bytecode was written"

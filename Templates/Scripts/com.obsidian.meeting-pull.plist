@@ -41,6 +41,11 @@
     <key>Label</key>
     <string>com.obsidian.meeting-pull</string>
 
+    <!-- 077: files this job writes (notes, state, logs) are readable by
+         this account only, not by other local accounts. -->
+    <key>Umask</key>
+    <integer>63</integer>
+
     <!-- Stdlib-only and free of 3.10+ syntax, so the system interpreter is
          enough here - no dependency on the shared Templates/Scripts/.venv. -->
     <key>ProgramArguments</key>
@@ -49,6 +54,17 @@
         <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/meeting_pull.py</string>
         <string>--skip-if-fresh</string>
     </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Bytecode never written into, or read from, the synced vault:
+             a .pyc planted in Templates/Scripts/__pycache__ would
+             otherwise be loaded in place of the reviewed source. -->
+        <key>PYTHONDONTWRITEBYTECODE</key>
+        <string>1</string>
+        <key>PYTHONPYCACHEPREFIX</key>
+        <string>/Users/YOUR_USERNAME/Library/Caches/obsidian-template/pycache</string>
+    </dict>
 
     <!-- Weekdays at 05:00, then 06:30 and 08:00 as catch-up firings.
          One firing is not enough on a laptop: launchd does run a missed

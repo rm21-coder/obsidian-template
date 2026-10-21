@@ -42,6 +42,11 @@
     <key>Label</key>
     <string>com.obsidian.claude-auth-check</string>
 
+    <!-- 077: files this job writes (notes, state, logs) are readable by
+         this account only, not by other local accounts. -->
+    <key>Umask</key>
+    <integer>63</integer>
+
     <!-- Stdlib only, so the system interpreter is enough; no dependency on
          the shared Templates/Scripts/.venv. -->
     <key>ProgramArguments</key>
@@ -49,6 +54,17 @@
         <string>/usr/bin/python3</string>
         <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/claude_auth_check.py</string>
     </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Bytecode never written into, or read from, the synced vault:
+             a .pyc planted in Templates/Scripts/__pycache__ would
+             otherwise be loaded in place of the reviewed source. -->
+        <key>PYTHONDONTWRITEBYTECODE</key>
+        <string>1</string>
+        <key>PYTHONPYCACHEPREFIX</key>
+        <string>/Users/YOUR_USERNAME/Library/Caches/obsidian-template/pycache</string>
+    </dict>
 
     <key>StartCalendarInterval</key>
     <array>

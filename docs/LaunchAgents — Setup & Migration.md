@@ -22,6 +22,13 @@ This page covers the core macOS LaunchAgents under `Templates/Scripts/` by hand.
 
 Each agent is independent — you can install only the ones you actually use. The tagger, source-mail-pull and voice-cleanup are always-on automation; rag-sync only matters if you've stood up the local LLM stack ([[Local LLM with Obsidian Vault RAG]]). The vault ships other agents too (strip-ads, meeting pull and pre-population, meeting prep, classification, morning dashboard, group photos, vault lint, the security harness); those are documented on their own pages and installed by their own components. One more, the Claude CLI auth check (`com.obsidian.claude-auth-check`), is opt-in and installed by hand; its plist says how.
 
+Two settings every shipped plist carries, and a hand-maintained copy should keep:
+
+- **`Umask` 63 (octal 077).** Without it launchd uses 022, and every note, state file and log a job writes is readable by the other accounts on the Mac. With it they are owner-only. The installer also makes the vault root itself `0700` (`10-vault-bootstrap`).
+- **`PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=/Users/YOUR_USERNAME/Library/Caches/obsidian-template/pycache`** in `EnvironmentVariables`, on every job except the two security controls. The scripts live in the synced vault, and Python loads `Templates/Scripts/__pycache__/*.pyc` before the source; a planted unchecked-hash `.pyc` there would run in place of the reviewed `.py`. With a prefix, Python neither reads nor writes that folder. The two controls run `/usr/bin/python3 -I` from an installed copy outside the vault, and `-I` ignores `PYTHON*` variables, so they carry no environment at all. On Windows, `run_logged.py` sets the same two variables for every task's child (prefix `%LOCALAPPDATA%\obsidian-template\pycache`).
+
+A plist changed in the repo reaches a running job only when it is re-rendered into `~/Library/LaunchAgents/` and reloaded (`./update.sh` does both for the jobs it installed).
+
 ---
 
 ## Prerequisites (install once)

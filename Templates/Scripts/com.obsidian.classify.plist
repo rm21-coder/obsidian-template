@@ -39,6 +39,11 @@
     <key>Label</key>
     <string>com.obsidian.classify</string>
 
+    <!-- 077: files this job writes (notes, state, logs) are readable by
+         this account only, not by other local accounts. -->
+    <key>Umask</key>
+    <integer>63</integer>
+
     <key>ProgramArguments</key>
     <array>
         <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/.venv/bin/python3</string>
@@ -48,6 +53,13 @@
 
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- Bytecode never written into, or read from, the synced vault:
+             a .pyc planted in Templates/Scripts/__pycache__ would
+             otherwise be loaded in place of the reviewed source. -->
+        <key>PYTHONDONTWRITEBYTECODE</key>
+        <string>1</string>
+        <key>PYTHONPYCACHEPREFIX</key>
+        <string>/Users/YOUR_USERNAME/Library/Caches/obsidian-template/pycache</string>
         <key>CLASSIFY_WORKERS</key>
         <string>4</string>
     </dict>

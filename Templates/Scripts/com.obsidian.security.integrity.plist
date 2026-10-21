@@ -30,6 +30,11 @@
     <key>Label</key>
     <string>com.obsidian.security.integrity</string>
 
+    <!-- 077: files this job writes (notes, state, logs) are readable by
+         this account only, not by other local accounts. -->
+    <key>Umask</key>
+    <integer>63</integer>
+
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/python3</string>

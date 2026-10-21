@@ -28,6 +28,10 @@ for the full setup guide.
 - Runtime state: `$env:LOCALAPPDATA\obsidian-*\`.
 - Job logs: `$env:LOCALAPPDATA\obsidian-logs\<task-name>.log`, written by
   `..\run_logged.py`, which every task runs its script through.
+- Bytecode: never beside the scripts. `run_logged.py` gives every job
+  `PYTHONDONTWRITEBYTECODE=1` and `PYTHONPYCACHEPREFIX=
+  $env:LOCALAPPDATA\obsidian-template\pycache`, so a `.pyc` planted in the
+  vault's `Templates\Scripts\__pycache__` is never loaded.
 
 ## Files
 

@@ -33,6 +33,7 @@ History worth knowing, since older commits and notes refer to both:
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # Drop kind -> folder name. Kinds are the authenticated `type` values used by
@@ -60,17 +61,48 @@ def drop_dir(kind: str) -> Path:
     return drop_root() / folder
 
 
+# Where podcast_watch retires a drop (done/, failed/ with a sibling
+# <name>.error.log). Restricted here too, so an install whose folders predate
+# the owner-only modes is brought into line by the next --apply.
+RETIRE_SUBDIRS = ("done", "failed")
+
+
+def _owner_only(path: Path, mode: int) -> None:
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        pass
+
+
 def ensure_dirs() -> list[Path]:
     """Create every drop folder, returning them. Idempotent.
 
     The installers call this (via --apply) before wiring up a watcher, so a
     freshly installed agent has somewhere to watch instead of logging a
     missing-directory error on every tick until the first drop arrives.
+
+    Owner-only (5278632): drops are voice transcripts and podcast audio, and
+    a bare mkdir left them 0755 under the default umask -- readable by every
+    other local account. Existing folders are chmodded, not just new ones;
+    mkdir's mode is masked by the umask and never applies to a folder that
+    already exists.
     """
+    root = drop_root()
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    _owner_only(root, 0o700)
     created = []
     for folder in sorted(DIR_NAMES.values()):
-        path = drop_root() / folder
-        path.mkdir(parents=True, exist_ok=True)
+        path = root / folder
+        path.mkdir(mode=0o700, exist_ok=True)
+        _owner_only(path, 0o700)
+        for sub in RETIRE_SUBDIRS:
+            retired = path / sub
+            if retired.is_symlink() or not retired.is_dir():
+                continue
+            _owner_only(retired, 0o700)
+            for f in retired.iterdir():
+                if f.is_file() and not f.is_symlink():
+                    _owner_only(f, 0o600)
         created.append(path)
     return created
 

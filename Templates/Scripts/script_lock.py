@@ -48,6 +48,7 @@ older copy still excludes a newer one during a partial deploy.
 from __future__ import annotations
 
 import errno
+import os
 import sys
 from pathlib import Path
 from typing import Callable, IO
@@ -87,7 +88,8 @@ def acquire(name: str, *,
     one install across two if the env var is set for some invocations only.
 
     Opened "a+" rather than "w" deliberately; see the module docstring for why
-    truncation breaks the guard on Windows.
+    truncation breaks the guard on Windows. The file is 0600 and its
+    directory 0700 (5278107).
     """
     handle, error = try_acquire(name, dir=dir)
     if error and warn:
@@ -97,6 +99,9 @@ def acquire(name: str, *,
              "single-instance guard")
     return handle
 
+
+_LOCK_FLAGS = (os.O_CREAT | os.O_RDWR | os.O_APPEND
+               | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOINHERIT", 0))
 
 # What msvcrt.locking raises when another process holds the byte: EACCES
 # (and EDEADLOCK, its other spelling). Anything else is not contention.
@@ -117,15 +122,43 @@ def try_acquire(name: str, *, dir: Path | None = None) -> tuple[IO | None, str |
     """
     target = lock_path(name, dir=dir)
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError:
         return None, f"could not create lock directory {target.parent}"
+    # Owner-only (5278107): the default umask left the lock files 0644 in a
+    # 0755 directory, so another local account could open one and hold a
+    # flock on it -- every scheduled run would then report "already
+    # running". mkdir's mode skips an existing directory, hence the chmod;
+    # best effort, since a chmod refused here is no reason to skip the job.
     try:
-        handle = open(target, "a+")
+        os.chmod(target.parent, 0o700)
+    except OSError:
+        pass
+    try:
+        # os.open rather than open(): it is the only way to give a NEW file
+        # 0600 at creation, with no window at the umask's mode. O_APPEND
+        # keeps "a+" semantics (never truncates; see the module docstring).
+        # O_NOFOLLOW: a symlink planted at the lock path is refused rather
+        # than having its target opened and re-moded.
+        fd = os.open(str(target), _LOCK_FLAGS, 0o600)
     except OSError:
         # Can't even open the lock file. Report contention rather than running
         # unguarded: whatever is wrong with the directory won't be fixed by
         # two copies of the job discovering it simultaneously.
+        return None, f"could not open lock file {target}"
+    try:
+        # An existing file keeps its old mode through O_CREAT; fix it on the
+        # descriptor, so it is the file just opened that changes.
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, 0o600)
+        else:
+            os.chmod(target, 0o600)
+    except OSError:
+        pass
+    try:
+        handle = os.fdopen(fd, "a+")
+    except OSError:
+        os.close(fd)
         return None, f"could not open lock file {target}"
 
     if _fcntl is not None:

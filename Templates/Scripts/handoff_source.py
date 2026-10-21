@@ -285,8 +285,13 @@ class DropFolderSource(HandoffSource):
             log.info("DRY-RUN: would archive %s set to %s/",
                      ready_path.name, self.PROCESSED_SUBDIR)
             return
+        # 5278617: the set holds meeting bodies and join URLs. The folders
+        # are this account's alone, each archived file is restricted, and
+        # the archive is pruned rather than kept forever.
         processed = ready_path.parent / self.PROCESSED_SUBDIR
-        processed.mkdir(exist_ok=True)
+        processed.mkdir(mode=0o700, exist_ok=True)
+        _restrict_dir(ready_path.parent)
+        _restrict_dir(processed)
         stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S")
         json_path = ready_path.with_suffix(".json")
         for f in (json_path, ready_path,
@@ -295,7 +300,75 @@ class DropFolderSource(HandoffSource):
             if f.exists():
                 dst = processed / f"{f.stem}.{stamp}{f.suffix}"
                 shutil.move(str(f), str(dst))
+                # A rename keeps the producer's mtime; retention counts
+                # from the archive, so the age is reset here.
+                try:
+                    os.utime(dst)
+                except OSError:
+                    pass
+                _restrict_file(dst)
                 log.info("archived %s -> %s", f.name, dst.name)
+        prune_processed(processed)
+
+
+# How long an archived handoff set stays in _processed/. Long enough to
+# re-run a week's pre-population by hand; not a permanent store of meeting
+# bodies.
+PROCESSED_RETENTION_DAYS = 14
+
+
+def _restrict_file(path: Path) -> None:
+    """Owner-only, through security_common where it is importable (it owns
+    the Windows ACL path), else a plain chmod. Never raises."""
+    try:
+        import security_common
+    except Exception:
+        security_common = None
+    if security_common is not None:
+        security_common.restrict_file(path)
+        return
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
+def _restrict_dir(path: Path) -> None:
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        log.warning("could not restrict %s to its owner", path)
+
+
+def prune_processed(processed: Path, *, days: float | None = None,
+                    now: float | None = None) -> list:
+    """Delete archived handoff files older than `days` (default
+    PROCESSED_RETENTION_DAYS). Only regular files and symlinks directly in
+    `processed` are touched, never followed; returns the names removed."""
+    if days is None:
+        days = PROCESSED_RETENTION_DAYS
+    if now is None:
+        now = dt.datetime.now().timestamp()
+    cutoff = now - days * 86400
+    removed = []
+    try:
+        entries = list(os.scandir(processed))
+    except OSError:
+        return removed
+    for e in entries:
+        try:
+            if e.is_dir(follow_symlinks=False):
+                continue
+            if e.stat(follow_symlinks=False).st_mtime >= cutoff:
+                continue
+            os.unlink(e.path)
+            removed.append(e.name)
+        except OSError as exc:
+            log.warning("could not prune %s: %s", e.name, exc)
+    if removed:
+        log.info("pruned %d archived file(s) older than %g days from %s",
+                 len(removed), days, processed)
+    return sorted(removed)
 
 
 # ---------------------------------------------------------------------------

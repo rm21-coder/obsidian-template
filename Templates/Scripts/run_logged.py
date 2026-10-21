@@ -90,8 +90,42 @@ def rotate(path: Path, max_bytes: int | None = None) -> None:
         pass
 
 
+PYCACHE_DIRNAME = "obsidian-template"
+
+
+def pycache_prefix() -> Path:
+    """Where bytecode is cached instead of beside the scripts (5278114).
+
+    The scripts live in the synced vault, and Python reads
+    Templates/Scripts/__pycache__ before the source: an unchecked-hash .pyc
+    planted there runs in place of the reviewed .py. With a prefix, the
+    interpreter neither reads nor writes that folder. Outside the vault, per
+    platform: %LOCALAPPDATA% on Windows, ~/Library/Caches on macOS (as the
+    LaunchAgents set it), ~/.cache elsewhere.
+    """
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local"))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache"))
+    return base / PYCACHE_DIRNAME / "pycache"
+
+
+def keep_bytecode_out_of_the_vault() -> None:
+    """The same for this process, before it imports script_lock from the
+    vault. Run as a script only (see the __main__ block)."""
+    sys.dont_write_bytecode = True
+    sys.pycache_prefix = str(pycache_prefix())
+
+
 def child_env() -> dict:
     env = dict(os.environ)
+    # Bytecode outside the vault (5278114). Forced, not setdefault: a prefix
+    # pointing back into the vault would re-open the hole. An isolated child
+    # (-I) ignores both, and has no need: it runs from the installed copy.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PYTHONPYCACHEPREFIX"] = str(pycache_prefix())
     # With stdout on a file rather than a console, Windows Python encodes
     # output in the ANSI code page, and one print() of a character outside it
     # (a note title, a model's reply) raises UnicodeEncodeError and kills the
@@ -346,4 +380,7 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
+    # Here rather than in main(): main() is also called in-process (the
+    # dashboard handler's tests), and this changes interpreter-wide state.
+    keep_bytecode_out_of_the_vault()
     sys.exit(main(sys.argv[1:]))

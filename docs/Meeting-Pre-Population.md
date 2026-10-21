@@ -136,7 +136,10 @@ For each export the producer writes a trio into the handoff folder:
   skipped.
 
 After a successful run the trio is moved to a timestamped `_processed/`
-subfolder. Sync-tool conflict copies (e.g. "conflicted copy" filenames) are
+subfolder. The drop folder and `_processed/` are made `0700`, each archived
+file `0600` (the set carries meeting bodies and join URLs), and archived files
+older than 14 days (`handoff_source.PROCESSED_RETENTION_DAYS`, counted from
+archiving) are deleted on each run. Sync-tool conflict copies (e.g. "conflicted copy" filenames) are
 ignored, in case your relay's landing folder is itself synced by something.
 
 ### JSON schema (`schema_version: 1`)

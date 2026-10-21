@@ -249,4 +249,7 @@ the watchers would race for it, each mis-handling the other's input.
 
 `podcast_watch.py` reads only `~/SourceMedia/PodcastInput` — there is no legacy
 or iCloud fallback location. `source_media.py --apply` (run by the installers)
-creates the folders.
+creates the folders, owner-only: `~/SourceMedia/` and each drop folder `0700`,
+and on re-run it also tightens an existing install, including the podcast
+watcher's `done/` and `failed/` folders and the files in them (`.error.log`
+included).

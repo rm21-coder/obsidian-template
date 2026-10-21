@@ -12,12 +12,15 @@ behaviour, so faking it would test nothing that matters.
 """
 from __future__ import annotations
 
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 import script_lock
+from platform_caps import requires_posix_modes, requires_symlinks
 
 
 class TestAcquire:
@@ -102,10 +105,10 @@ class TestAcquire:
         neither running."""
         def boom(*a: Any, **kw: Any) -> None:
             raise OSError("nope")
-        monkeypatch.setattr("builtins.open", boom)
+        monkeypatch.setattr(script_lock.os, "open", boom)
         said: list[str] = []
         assert script_lock.acquire("job", dir=tmp_path, warn=said.append) is None
-        assert said
+        assert any("could not open lock file" in m for m in said), said
 
 
 class TestAcquireOrExit:
@@ -126,3 +129,59 @@ class TestAcquireOrExit:
         handle = script_lock.acquire_or_exit("job", dir=tmp_path)
         assert handle is not None
         handle.close()
+
+
+@pytest.fixture
+def loose_umask():
+    """The default umask a LaunchAgent without Umask runs under: 022."""
+    old = os.umask(0o022)
+    try:
+        yield
+    finally:
+        os.umask(old)
+
+
+@requires_posix_modes
+class TestOwnerOnly:
+    """5278107: lock files were 0644 in a 0755 directory, so another local
+    account could open one and hold the flock -- every scheduled run would
+    then read "already running" and exit 0, doing nothing."""
+
+    def test_a_new_lock_file_is_0600_in_a_0700_directory(
+            self, tmp_path: Path, loose_umask) -> None:
+        locks = tmp_path / ".locks"
+        handle = script_lock.acquire("job", dir=locks)
+        assert handle is not None
+        handle.close()
+        assert stat.S_IMODE((locks / "job.lock").stat().st_mode) == 0o600
+        assert stat.S_IMODE(locks.stat().st_mode) == 0o700
+
+    def test_an_existing_install_is_tightened(
+            self, tmp_path: Path, loose_umask) -> None:
+        locks = tmp_path / ".locks"
+        locks.mkdir(mode=0o755)
+        os.chmod(locks, 0o755)
+        (locks / "job.lock").write_text("sentinel\n", encoding="utf-8")
+        os.chmod(locks / "job.lock", 0o644)
+        handle = script_lock.acquire("job", dir=locks)
+        assert handle is not None
+        handle.close()
+        assert stat.S_IMODE((locks / "job.lock").stat().st_mode) == 0o600
+        assert stat.S_IMODE(locks.stat().st_mode) == 0o700
+        # Still never truncated.
+        assert (locks / "job.lock").read_text(encoding="utf-8") == "sentinel\n"
+
+    @requires_symlinks
+    def test_a_symlink_planted_at_the_lock_path_is_refused(
+            self, tmp_path: Path) -> None:
+        victim = tmp_path / "victim.txt"
+        victim.write_text("keep\n", encoding="utf-8")
+        os.chmod(victim, 0o644)
+        locks = tmp_path / ".locks"
+        locks.mkdir()
+        (locks / "job.lock").symlink_to(victim)
+        handle, error = script_lock.try_acquire("job", dir=locks)
+        assert handle is None
+        assert error is not None and error.startswith("could not open lock file"), error
+        assert stat.S_IMODE(victim.stat().st_mode) == 0o644
+        assert victim.read_text(encoding="utf-8") == "keep\n"

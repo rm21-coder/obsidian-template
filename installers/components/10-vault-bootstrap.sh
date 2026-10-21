@@ -14,12 +14,25 @@ set -euo pipefail
 VAULT="$HOME/Obsidian"
 
 info "Verifying vault location..."
-if [[ "$REPO_ROOT" != "$VAULT" ]]; then
+# Resolved, not string-compared: ~/Obsidian is often a symlink to the clone
+# (the same test update.sh makes; see vault_is_repo in installers/lib/update.sh).
+if [[ "$REPO_ROOT" == "$VAULT" || ( -d "$VAULT" && "$REPO_ROOT" -ef "$VAULT" ) ]]; then
+    ok "  vault at $VAULT"
+elif [[ -e "$VAULT" && ! -L "$VAULT" ]]; then
+    # A real folder (or file) that is not this repo. `ln -sfn` would not
+    # replace it: it would put a link to the repo INSIDE it, as
+    # ~/Obsidian/<repo-name>, and every agent would then run against the
+    # wrong tree. Refuse, and leave the user's folder exactly as it is.
+    err "  $VAULT already exists and is not this repo ($REPO_ROOT)."
+    err "  Not linking over it: move it aside, or clone the repo into $VAULT."
+    exit 1
+else
     warn "  This repo is at $REPO_ROOT, but agents expect the vault at $VAULT."
     warn "  Either re-clone into ~/Obsidian/, or symlink:"
     warn "    ln -s '$REPO_ROOT' '$VAULT'"
     if [[ "${INTERACTIVE:-1}" -eq 1 ]]; then
         if confirm "Create the symlink now?" Y; then
+            # -n: an existing symlink at $VAULT is replaced, not descended.
             ln -sfn "$REPO_ROOT" "$VAULT"
             ok "  symlinked $VAULT -> $REPO_ROOT"
         else
@@ -30,9 +43,16 @@ if [[ "$REPO_ROOT" != "$VAULT" ]]; then
         err "  vault not at $VAULT; pass --interactive or fix manually"
         exit 1
     fi
-else
-    ok "  vault at $VAULT"
 fi
+
+# Owner-only (5278631). The vault holds every note, the venv, the lock files
+# and the jobs' working state; under the default umask a fresh clone is 0755,
+# readable by every other account on the Mac. The trailing slash makes chmod
+# act on the directory a symlinked ~/Obsidian points to, not on the link.
+# Only the root: 0700 there closes the whole tree without rewriting the mode
+# of every tracked file.
+chmod 700 "$VAULT/"
+ok "  vault restricted to its owner (0700)"
 
 info "Verifying required vault folders..."
 REQUIRED=(Actions Categories Clippings Creations Daily Groups Knowledge Meetings Notes People Templates Topics Z_archive Z_attachments)
