@@ -81,8 +81,10 @@ def dropper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("OBSIDIAN_VAULT", str(HERE.parent.parent))
     monkeypatch.delitem(sys.modules, "markitdown_dropper", raising=False)
     mod = importlib.import_module("markitdown_dropper")
-    assert ENGINE in mod._CHILD_CODE
-    monkeypatch.setattr(mod, "_CHILD_CODE", mod._CHILD_CODE.replace(ENGINE, FAKE_ENGINE))
+    # The engine lives in markitdown_bounded, shared with markitdown_convert.
+    import markitdown_bounded as mb
+    assert ENGINE in mb._CHILD_CODE
+    monkeypatch.setattr(mb, "_CHILD_CODE", mb._CHILD_CODE.replace(ENGINE, FAKE_ENGINE))
     yield mod
     sys.modules.pop("markitdown_dropper", None)
 
@@ -158,7 +160,9 @@ def test_a_child_that_dies_is_reported_and_replaced(
 
 
 def test_the_child_runs_isolated(dropper) -> None:
-    compile(dropper._CHILD_CODE, "<child>", "exec")
+    import markitdown_bounded as mb
+    compile(mb._CHILD_CODE, "<child>", "exec")
+    engine_src = (HERE / "markitdown_bounded.py").read_text(encoding="utf-8")
+    assert '[sys.executable, "-I", "-c", _CHILD_CODE]' in engine_src
     src = (HERE / "markitdown_dropper.py").read_text(encoding="utf-8")
-    assert '[sys.executable, "-I", "-c", _CHILD_CODE]' in src
     assert "self.md = BoundedMarkItDown()" in src

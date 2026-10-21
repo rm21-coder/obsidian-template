@@ -18,7 +18,9 @@ A zip container (.zip/.docx/.xlsx/.pptx) is checked by archive_limits.py
 BEFORE MarkItDown opens it, and refused when its declared member sizes or
 count are over the limits: MarkItDown reads members whole, so a
 small-but-inflating archive would otherwise exhaust memory inside convert().
-Other formats are not size-checked.
+Every file is also refused over markitdown_bounded.MAX_SOURCE_BYTES, and each
+conversion runs in a child process stopped after CONVERT_TIMEOUT_SEC, the
+same bounds as the dropper (finding 5278110).
 """
 from __future__ import annotations
 
@@ -28,11 +30,11 @@ import sys
 import templater_guard  # noqa: E402  -- outside text must not run as Templater code
 import output_sanitizer  # noqa: E402  -- nor load remote images, HTML or other schemes on open
 import archive_limits  # noqa: E402  -- refuse an inflating archive before convert()
+import markitdown_bounded  # noqa: E402  -- size cap and time limit on convert() (5278110)
 
 from datetime import datetime
 from pathlib import Path
 
-from markitdown import MarkItDown
 
 try:
     from markitdown_cleanup import clean as cleanup_clean
@@ -56,13 +58,15 @@ def _embed_names(summary: dict) -> list:
             + list(summary.get("source_images") or [])]
 
 
-def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, str]:
+def convert_one(md, src_path: str, dest_dir: Path) -> tuple[bool, str]:
+    """Convert one file. `md` is anything with MarkItDown's convert(path);
+    main() passes a markitdown_bounded.BoundedMarkItDown."""
     src = Path(src_path)
     if not src.exists():
         return False, f"not found: {src}"
     if src.is_dir():
         return False, f"skipped folder: {src.name}"
-    refused = archive_limits.refusal(src)
+    refused = archive_limits.refusal(src) or markitdown_bounded.size_refusal(src)
     if refused:
         return False, f"{src.name}: {refused}"
 
@@ -110,7 +114,8 @@ def main(argv: list[str]) -> int:
     args = p.parse_args(argv)
 
     dest = Path(os.path.expanduser(args.out)).resolve()
-    md = MarkItDown()
+    # A hostile document cannot hold the run or exhaust memory (5278110).
+    md = markitdown_bounded.BoundedMarkItDown()
     rc = 0
     for f in args.files:
         ok, msg = convert_one(md, f, dest)
