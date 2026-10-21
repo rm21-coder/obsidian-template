@@ -112,7 +112,28 @@ and the watchers read only the local `~/SourceMedia/` drop folders.
 .\Templates\Scripts\windows\install.ps1 -Profile ours            # pre-answer the prompts from a profile
 .\Templates\Scripts\windows\install.ps1 -ListProfiles             # what's available here
 .\Templates\Scripts\windows\install.ps1 -Profile ours -Force      # let the profile overwrite existing .env values
+.\Templates\Scripts\windows\install.ps1 -AllowLocalChanges        # run over your own edits to installer code (logged)
+.\Templates\Scripts\windows\install.ps1 -StrictTree               # refuse a tree that is not a git checkout
 ```
+
+### The tree gate, and the Sync setting it depends on
+
+Before it loads anything else, `install.ps1` (and `update.ps1`) runs
+`installers\lib\tree_gate.ps1`. It refuses when git reports a modified,
+untracked or hidden file under `installers\`, `Templates\Scripts\` or the
+root scripts. The vault is synced, so another device could have written it
+(findings 5278120 / 5278133). The refusal lists the paths and the
+`git status` / `git diff` commands to inspect them. `-AllowLocalChanges` is
+for a maintainer's own edits; it is logged to
+`%LOCALAPPDATA%\obsidian-template\tree-gate.log`. A tree that is not a git
+checkout gets a warning and the install continues. Details are in
+[Security Harness](Security-Harness.md#the-tree-gate-installers-refuse-code-git-does-not-vouch-for).
+
+The gate cannot check `install.ps1` itself. The install therefore ends with a
+**required step**: in Obsidian on every device that syncs this vault, open
+Settings > Sync and turn off **Sync all other types** (at least, don't sync
+code file types). On this machine, add `Templates/Scripts` and `installers`
+to **Excluded folders**.
 
 ### Install profiles
 
@@ -228,6 +249,15 @@ records property types, so this is safe:
 ```powershell
 git -C $env:USERPROFILE\Obsidian checkout -- .obsidian/types.json
 ```
+
+**"TREE GATE: REFUSED. The installer code in this tree differs from the git
+checkout."** Git reports a changed, untracked or hidden file under
+`installers\`, `Templates\Scripts\` or the root scripts, and nothing has run.
+Look at each listed path with `git status --untracked-files=all` and
+`git diff` before doing anything else. If you didn't make the change, treat it
+as a security event: another device that syncs the vault may have written it.
+Restore a changed file with `git checkout -- <path>` and delete an untracked
+one. Pass `-AllowLocalChanges` only for edits you made yourself.
 
 **"Update INCOMPLETE" with a FAILED list.** Windows refused to replace some
 tasks. This usually means they were first registered from an elevated prompt.

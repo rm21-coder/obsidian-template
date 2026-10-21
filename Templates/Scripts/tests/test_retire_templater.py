@@ -310,7 +310,7 @@ def test_updaters_refuse_while_obsidian_is_open() -> None:
     upd = (REPO / "update.sh").read_text(encoding="utf-8")
     pull = upd[upd.index('info "== 1/6 pull =="'):]
     assert pull.index("obsidian_running") < pull.index('git -C "$REPO_ROOT" pull --ff-only')
-    assert pull.index("obsidian_running") < pull.index("dirty=")
+    assert pull.index("obsidian_running") < pull.index('tree_gate_check "$REPO_ROOT" update')
     ps = (SCRIPTS / "windows" / "update.ps1").read_text(encoding="utf-8")
     first = ps[ps.index("if (-not $AfterPull) {"):]
     assert first.index("Get-Process -Name Obsidian") < first.index("git -C $vault pull --ff-only")

@@ -54,12 +54,40 @@
 #   ./uninstall.sh --vault PATH    operate on a vault other than ~/Obsidian
 #   ./uninstall.sh --llm --secrets remove those extras too
 #   ./uninstall.sh --demo --dry-run  list the demo notes that would be deleted
+#   ./uninstall.sh --allow-local-changes  run although installer code differs
+#                                  from git (refused otherwise; logged)
+#   ./uninstall.sh --strict-tree   refuse a tree that is not a git checkout
 #   ./uninstall.sh -h | --help
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export REPO_ROOT="$SCRIPT_DIR"
+
+# ---- tree gate (findings 5278120 / 5278133) --------------------------------
+# Before anything else under installers/ is sourced: tree_gate.sh refuses
+# installer code git does not vouch for (this teardown runs rm -rf over paths
+# its libraries compute). These lines check tree_gate.sh itself against HEAD
+# first. Nothing can check THIS file (see tree_gate.sh).
+TG_ALLOW=0
+TG_STRICT=0
+for _tg_arg in "$@"; do
+    case "$_tg_arg" in
+        --allow-local-changes) TG_ALLOW=1 ;;
+        --strict-tree)         TG_STRICT=1 ;;
+    esac
+done
+if [[ "$TG_ALLOW" -eq 0 && -e "$REPO_ROOT/.git" ]] && command -v git >/dev/null 2>&1 \
+   && { [[ -L "$REPO_ROOT/installers/lib/tree_gate.sh" ]] \
+        || [[ "$(git -C "$REPO_ROOT" hash-object -- installers/lib/tree_gate.sh 2>/dev/null)" \
+              != "$(git -C "$REPO_ROOT" rev-parse -q --verify HEAD:installers/lib/tree_gate.sh 2>/dev/null)" ]]; }; then
+    echo "TREE GATE: REFUSED. installers/lib/tree_gate.sh differs from HEAD; not sourcing it." >&2
+    echo "  Inspect: git -C \"$REPO_ROOT\" status --untracked-files=all; git -C \"$REPO_ROOT\" diff" >&2
+    exit 1
+fi
+# shellcheck source=installers/lib/tree_gate.sh
+source "$REPO_ROOT/installers/lib/tree_gate.sh"
+tree_gate_check "$REPO_ROOT" uninstall "$TG_ALLOW" "$TG_STRICT" || exit 1
 
 # Reuse the installer's logging/confirm/run helpers.
 # shellcheck source=installers/lib/common.sh
@@ -97,6 +125,7 @@ while [[ $# -gt 0 ]]; do
         --demo)       DO_DEMO=1 ;;
         --all)        DO_LLM=1; DO_SECRETS=1; DO_NEWSYSLOG=1; DO_PLUGINS=1; DO_DEMO=1 ;;
         --vault)      shift; VAULT="${1:?--vault needs a path}" ;;
+        --allow-local-changes|--strict-tree) ;;   # read by the tree gate above
         -h|--help)    usage; exit 0 ;;
         *)            err "Unknown argument: $1"; echo; usage; exit 2 ;;
     esac

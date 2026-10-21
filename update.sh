@@ -3,7 +3,9 @@
 #
 # What it does, in order
 # ----------------------
-#   1. git pull --ff-only     refuses first if a tracked file has local changes
+#   1. git pull --ff-only     refuses first if a tracked file has local changes,
+#                             or installer code is modified, untracked or hidden
+#                             (the tree gate: installers/lib/tree_gate.sh)
 #   2. requirements           the same pip step 10-vault-bootstrap runs
 #   3. scheduled jobs         re-render and reload the LaunchAgents THIS machine
 #                             already has, where the template changed
@@ -29,6 +31,9 @@
 # -----
 #   ./update.sh              update
 #   ./update.sh --dry-run    say what would change, change nothing (no pull)
+#   ./update.sh --allow-local-changes
+#                            run over your own edits to installer code (a
+#                            maintainer); logged, and passed to every step
 #
 # The repo must be the vault: ~/Obsidian is this clone, or a symlink to it.
 
@@ -38,7 +43,7 @@ set -euo pipefail
 # it executes, and step 1 can rewrite this very file; inside a function the whole
 # body is parsed before anything runs.
 main() {
-    local REPO_ROOT DRY_RUN=0 AFTER_PULL=0 FROM=""
+    local REPO_ROOT DRY_RUN=0 AFTER_PULL=0 FROM="" TG_ALLOW=0
     REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     export REPO_ROOT
 
@@ -47,11 +52,34 @@ main() {
             --dry-run)    DRY_RUN=1 ;;
             --after-pull) AFTER_PULL=1 ;;
             --from)       shift; FROM="${1:-}" ;;
+            --allow-local-changes) TG_ALLOW=1 ;;
             -h|--help)    sed -n '/^# /s/^# //p' "$0"; return 0 ;;
             *)            echo "Unknown argument: $1" >&2; return 2 ;;
         esac
         shift
     done
+
+    # ---- tree gate (findings 5278120 / 5278133) ----------------------------
+    # Before anything else under installers/ is sourced: tree_gate.sh refuses
+    # installer code git does not vouch for, and these lines check tree_gate.sh
+    # itself against HEAD first. Nothing can check THIS file (see tree_gate.sh).
+    # Both passes run it: the --after-pull pass sources the libraries too.
+    if [[ "$TG_ALLOW" -eq 0 && -e "$REPO_ROOT/.git" ]] && command -v git >/dev/null 2>&1 \
+       && { [[ -L "$REPO_ROOT/installers/lib/tree_gate.sh" ]] \
+            || [[ "$(git -C "$REPO_ROOT" hash-object -- installers/lib/tree_gate.sh 2>/dev/null)" \
+                  != "$(git -C "$REPO_ROOT" rev-parse -q --verify HEAD:installers/lib/tree_gate.sh 2>/dev/null)" ]]; }; then
+        echo "TREE GATE: REFUSED. installers/lib/tree_gate.sh differs from HEAD; not sourcing it." >&2
+        echo "  Inspect: git -C \"$REPO_ROOT\" status --untracked-files=all; git -C \"$REPO_ROOT\" diff" >&2
+        return 1
+    fi
+    # shellcheck source=installers/lib/tree_gate.sh
+    source "$REPO_ROOT/installers/lib/tree_gate.sh"
+    # update.sh only runs on a git checkout (it pulls), so a tree git cannot
+    # read is refused here rather than warned about.
+    tree_gate_check "$REPO_ROOT" install "$TG_ALLOW" 1 || return 1
+    # Passed on to the install.sh steps below and to the --after-pull pass.
+    local -a gate_args=()
+    [[ "$TG_ALLOW" -eq 1 ]] && gate_args=(--allow-local-changes)
 
     # shellcheck source=installers/lib/common.sh
     source "$REPO_ROOT/installers/lib/common.sh"
@@ -93,27 +121,18 @@ main() {
                 return 1
             fi
         fi
-        local dirty
-        dirty="$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)"
-        if [[ -n "$dirty" ]]; then
-            err "Local changes to tracked files; not updating:"
-            printf '%s\n' "$dirty" | sed 's/^/  /'
-            if [[ "$dirty" =~ ^\ ?M\ \.obsidian/types\.json$ ]]; then
-                info ""
-                info "Obsidian rewrites .obsidian/types.json when it sees new note properties."
-                info "It only records property types, so taking the upstream copy is safe:"
-                info "  git -C \"$REPO_ROOT\" checkout -- .obsidian/types.json"
-                info "Then run this update again."
-            fi
-            return 1
-        fi
+        # The one tree check, in update mode: installer code (modified,
+        # untracked or hidden) as at the top, plus any tracked change anywhere,
+        # which a pull must not run over. After the Obsidian check, because an
+        # open Obsidian is what usually dirties a tracked settings file.
+        tree_gate_check "$REPO_ROOT" update "$TG_ALLOW" 1 || return 1
         FROM="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
         if [[ "$DRY_RUN" -eq 1 ]]; then
             info "  dry run: not pulling; reporting against the current checkout ($FROM)."
         else
             git -C "$REPO_ROOT" pull --ff-only
             # Continue from the copy just pulled, so steps 2-6 are the new code.
-            exec /bin/bash "$REPO_ROOT/update.sh" --after-pull --from "$FROM"
+            exec /bin/bash "$REPO_ROOT/update.sh" --after-pull --from "$FROM" ${gate_args[@]+"${gate_args[@]}"}
         fi
     fi
     local TO
@@ -220,7 +239,7 @@ main() {
             # (a reinstall brings back the unpatched bundle), the retired-plugin
             # removal, permissions and the control report all still run, and
             # the update ends INCOMPLETE instead.
-            if ! "$REPO_ROOT/install.sh" --auto --only 30-plugins; then
+            if ! "$REPO_ROOT/install.sh" --auto --only 30-plugins ${gate_args[@]+"${gate_args[@]}"}; then
                 plugins_failed=1
                 err "  Plugins NOT updated (see the lines above)."
             elif [[ "$plugin_reason" == "the plugin pins changed" ]]; then
@@ -238,10 +257,10 @@ main() {
     # back the unpatched bundle, and QuickAdd's patched main.js is exempt from
     # the drift check -- so a patch that failed once is retried here.
     if [[ "$DRY_RUN" -ne 1 ]]; then
-        "$REPO_ROOT/install.sh" --auto --only 31-quickadd-patch || warn "  QuickAdd patch step failed"
+        "$REPO_ROOT/install.sh" --auto --only 31-quickadd-patch ${gate_args[@]+"${gate_args[@]}"} || warn "  QuickAdd patch step failed"
         # Every update too: a clone made before this step existed has no
         # ignore list, and the plugin then stamps the docs this pull changed.
-        "$REPO_ROOT/install.sh" --auto --only 32-timestamp-ignores || warn "  timestamp-ignores step failed"
+        "$REPO_ROOT/install.sh" --auto --only 32-timestamp-ignores ${gate_args[@]+"${gate_args[@]}"} || warn "  timestamp-ignores step failed"
     fi
     retire_plugins "$VAULT" "${backup:-$HOME/Library/Logs/obsidian-template-update/$(date +%Y%m%d-%H%M%S)}" "$DRY_RUN"
 
@@ -250,7 +269,7 @@ main() {
     if [[ "$DRY_RUN" -eq 1 ]]; then
         info "  dry run: would run ./install.sh --auto --only 56-script-permissions"
     else
-        "$REPO_ROOT/install.sh" --auto --only 56-script-permissions
+        "$REPO_ROOT/install.sh" --auto --only 56-script-permissions ${gate_args[@]+"${gate_args[@]}"}
     fi
 
     # Local RAG stack, report only, where a container exists: the binding

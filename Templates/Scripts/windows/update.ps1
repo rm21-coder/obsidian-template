@@ -23,8 +23,10 @@
   version just pulled (the -AfterPull pass). Without that, steps 2 and 3 would
   run as written in the OLD copy of this file.
 
-  The update stops before pulling if a tracked file has local changes, and it
-  never re-baselines a security control. If this machine has an integrity
+  The update stops before pulling if a tracked file has local changes, or if
+  git reports a modified, untracked or hidden file under installers\,
+  Templates\Scripts\ or the root scripts (the tree gate,
+  installers\lib\tree_gate.ps1), and it never re-baselines a security control. If this machine has an integrity
   baseline, the update is expected to show up as drift. The final step says
   how to confirm that the drift is only the update before adopting it.
 
@@ -33,10 +35,42 @@
 
 .PARAMETER AfterPull  Internal: run steps 2 and 3 (set by the first pass).
 .PARAMETER From       Internal: the commit the update started from.
+.PARAMETER AllowLocalChanges  Run over your own edits to installer code (a
+                      maintainer). Logged to
+                      %LOCALAPPDATA%\obsidian-template\tree-gate.log.
 .EXAMPLE   powershell -ExecutionPolicy Bypass -File .\Templates\Scripts\windows\update.ps1
 #>
-[CmdletBinding()] param([switch]$AfterPull, [string]$From)
+[CmdletBinding()] param([switch]$AfterPull, [string]$From, [switch]$AllowLocalChanges)
 $ErrorActionPreference = 'Stop'
+
+# ---- tree gate (findings 5278120 / 5278133) --------------------------------
+# Before common.ps1 or anything else in the tree is dot-sourced: tree_gate.ps1
+# refuses installer code git does not vouch for, and these lines check
+# tree_gate.ps1 itself against HEAD first. Nothing can check THIS file (see
+# tree_gate.ps1). Both passes run it: -AfterPull dot-sources common.ps1 too.
+# An update always needs git, so a tree git cannot read is refused (-Strict).
+$treeRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$treeGate = Join-Path $treeRoot 'installers\lib\tree_gate.ps1'
+if (-not $AllowLocalChanges -and (Test-Path -LiteralPath (Join-Path $treeRoot '.git')) -and
+    (Get-Command git -ErrorAction SilentlyContinue)) {
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        $gateWant = "$(& git -C $treeRoot rev-parse -q --verify 'HEAD:installers/lib/tree_gate.ps1' 2>$null)"
+        $gateHave = "$(& git -C $treeRoot hash-object -- 'installers/lib/tree_gate.ps1' 2>$null)"
+    } finally { $ErrorActionPreference = $prevEAP }
+    $gateItem = Get-Item -LiteralPath $treeGate -Force -ErrorAction SilentlyContinue
+    if (-not $gateWant -or $gateWant -ne $gateHave -or
+        ($gateItem -and ($gateItem.Attributes -band [IO.FileAttributes]::ReparsePoint))) {
+        Write-Host 'TREE GATE: REFUSED. installers/lib/tree_gate.ps1 differs from HEAD; not loading it.' -ForegroundColor Red
+        Write-Host "  Inspect: git -C `"$treeRoot`" status --untracked-files=all; git -C `"$treeRoot`" diff"
+        exit 1
+    }
+}
+. $treeGate
+if (-not (Test-TreeGate -Root $treeRoot -Mode install -AllowLocalChanges:$AllowLocalChanges -Strict)) {
+    exit 1
+}
+
 . "$PSScriptRoot\common.ps1"
 
 $vault      = Get-VaultRoot
@@ -54,20 +88,12 @@ if (-not $AfterPull) {
         Write-Host 'writes its own copy of the settings back over the updated ones.'
         exit 1
     }
-    # Tracked changes only: notes in the content folders are untracked and fine.
-    $dirty = Invoke-Native -ErrorMessage 'git status failed' {
-        git -C $vault status --porcelain --untracked-files=no
-    }
-    if ($dirty) {
-        Write-Host 'Local changes to tracked files; not updating:' -ForegroundColor Red
-        $dirty | ForEach-Object { Write-Host "  $_" }
-        if (@($dirty).Count -eq 1 -and "$dirty" -match '\.obsidian/types\.json$') {
-            Write-Host ''
-            Write-Host 'Obsidian rewrites .obsidian/types.json when it sees new note properties.'
-            Write-Host 'It only records property types, so taking the upstream copy is safe:'
-            Write-Host "  git -C `"$vault`" checkout -- .obsidian/types.json"
-            Write-Host 'Then run this update again.'
-        }
+    # The one tree check, in update mode: installer code (modified, untracked
+    # or hidden) as at the top, plus any tracked change anywhere, which a pull
+    # must not run over. Notes in the content folders are untracked and fine.
+    # After the Obsidian check: an open Obsidian is what usually dirties a
+    # tracked settings file.
+    if (-not (Test-TreeGate -Root $treeRoot -Mode update -AllowLocalChanges:$AllowLocalChanges -Strict)) {
         exit 1
     }
     $from = (Invoke-Native -ErrorMessage 'git rev-parse failed' {
@@ -80,7 +106,11 @@ if (-not $AfterPull) {
     # path, as security_common.py does, so a `powershell` earlier on PATH
     # cannot stand in for it.
     $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    & $ps -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -AfterPull -From $from
+    if ($AllowLocalChanges) {
+        & $ps -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -AfterPull -From $from -AllowLocalChanges
+    } else {
+        & $ps -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -AfterPull -From $from
+    }
     exit $LASTEXITCODE
 }
 

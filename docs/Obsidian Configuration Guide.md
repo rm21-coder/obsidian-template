@@ -49,7 +49,7 @@ The following core plugins are enabled (beyond Kepano defaults):
 
 **Bases:** Enables .base files for database-like views of vault content.
 
-**Sync:** Obsidian Sync for cross-device synchronization.
+**Sync:** Obsidian Sync for cross-device synchronization. Two settings are required: Selective sync → "Sync all other types" off on every device, and `Templates/Scripts` and `installers` in Excluded folders on the machine that runs the jobs. Without them a paired device could change the scripts the jobs run; see [ONBOARDING.md](../ONBOARDING.md#if-you-use-obsidian-sync-two-required-settings).
 
 **Page Preview:** Hover preview of linked notes.
 

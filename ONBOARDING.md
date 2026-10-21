@@ -116,6 +116,38 @@ The installer detects this, skips the buttons, and prints the command to run
 from a Start-menu PowerShell. Claude can still read logs and explain errors
 from its own terminal.
 
+## If you use Obsidian Sync: two required settings
+
+The automation's code lives inside the vault, in `Templates/Scripts/`, and on
+a template install the installer is in the vault too. Obsidian Sync can
+replicate any file in the vault, so without these settings a compromised
+phone or tablet paired to the vault could change the code your scheduled jobs
+run, or that the next install runs. In Obsidian under Settings → Sync:
+
+1. **Selective sync: turn off "Sync all other types"**, on every device that
+   syncs this vault. Notes, images, audio, video and PDFs still sync. Scripts, locks, LaunchAgent and installer files
+   (`.py`, `.sh`, `.lock`, `.plist`, `.js`, `.yaml`, `.ps1`) then never arrive
+   from another device.
+2. **Excluded folders: add `Templates/Scripts` and `installers`**, on the
+   machine that runs the jobs. The two settings overlap on purpose: the
+   exclusion also covers anything in those folders Sync does carry, such as a
+   JSON settings file.
+
+Both are per device and live in Obsidian, not in the vault, so nothing here
+can set or check them for you. Re-check them after reinstalling Obsidian or
+re-pairing a device. The installer prints the same reminder when it finishes.
+
+If an install, update or uninstall stops with **`TREE GATE: REFUSED`**, the
+installer code in the vault differs from the commit you cloned: a file is
+changed, untracked, or hidden from git. Nothing has run. Don't override it:
+run `git status --untracked-files=all` and `git diff`, and treat a change you
+can't explain as a security event. `--allow-local-changes` (Windows:
+`-AllowLocalChanges`) exists for a maintainer running over their own edits,
+and every use is logged. A profile must sit in `installers/profiles/` or
+outside the vault.
+They do not affect `.obsidian/plugins`, which syncs under its own toggle and
+which the plugin integrity check watches.
+
 ## First run — check it actually works
 
 Do these in order. The first two are safe to re-run anytime. Run them from

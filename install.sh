@@ -55,6 +55,16 @@
 #   ./install.sh --rebaseline          force security controls to re-baseline
 #   ./install.sh --force               overwrite scripts at ~/Obsidian/Templates/Scripts even if newer
 #   ./install.sh --list                print component list and exit
+#   ./install.sh --allow-local-changes run although installer code differs from
+#                                      git (a maintainer's own edits; logged)
+#   ./install.sh --strict-tree         refuse a tree that is not a git checkout
+#
+# Tree gate
+# ---------
+# Before anything else runs, installers/lib/tree_gate.sh refuses when git
+# reports a modified, untracked or hidden file under installers/,
+# Templates/Scripts/ or the root scripts: the vault is synced, so another
+# device could have written it. See docs/Security-Harness.md.
 #
 # Profiles
 # --------
@@ -80,6 +90,32 @@ set -euo pipefail
 # Resolve repo root (the directory this script lives in)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export REPO_ROOT="$SCRIPT_DIR"
+
+# ---- tree gate (findings 5278120 / 5278133) --------------------------------
+# First, before anything else under installers/ is sourced. The vault is this
+# checkout and is synced, so another device can write into it; tree_gate.sh
+# refuses installer code git does not vouch for. These lines check tree_gate.sh
+# itself against HEAD before sourcing it. Nothing can check THIS file: an
+# edited install.sh runs whatever it was edited to run (see tree_gate.sh).
+TG_ALLOW=0
+TG_STRICT=0
+for _tg_arg in "$@"; do
+    case "$_tg_arg" in
+        --allow-local-changes) TG_ALLOW=1 ;;
+        --strict-tree)         TG_STRICT=1 ;;
+    esac
+done
+if [[ "$TG_ALLOW" -eq 0 && -e "$REPO_ROOT/.git" ]] && command -v git >/dev/null 2>&1 \
+   && { [[ -L "$REPO_ROOT/installers/lib/tree_gate.sh" ]] \
+        || [[ "$(git -C "$REPO_ROOT" hash-object -- installers/lib/tree_gate.sh 2>/dev/null)" \
+              != "$(git -C "$REPO_ROOT" rev-parse -q --verify HEAD:installers/lib/tree_gate.sh 2>/dev/null)" ]]; }; then
+    echo "TREE GATE: REFUSED. installers/lib/tree_gate.sh differs from HEAD; not sourcing it." >&2
+    echo "  Inspect: git -C \"$REPO_ROOT\" status --untracked-files=all; git -C \"$REPO_ROOT\" diff" >&2
+    exit 1
+fi
+# shellcheck source=installers/lib/tree_gate.sh
+source "$REPO_ROOT/installers/lib/tree_gate.sh"
+tree_gate_check "$REPO_ROOT" install "$TG_ALLOW" "$TG_STRICT" || exit 1
 
 # Load shared helpers
 # shellcheck source=installers/lib/common.sh
@@ -113,6 +149,7 @@ while [[ $# -gt 0 ]]; do
         --only)              shift; ONLY="$1" ;;
         --skip)              shift; SKIP_LIST+=("$1") ;;
         --list)              LIST_ONLY=1 ;;
+        --allow-local-changes|--strict-tree) ;;   # read by the tree gate above
         -h|--help)           sed -n '/^# /s/^# //p' "$0"; exit 0 ;;
         *)                   err "Unknown argument: $1"; exit 2 ;;
     esac
@@ -182,6 +219,9 @@ load_profile() {
         list_profiles
         exit 2
     fi
+    # Sourced as code: say which file and its hash, and refuse one in the
+    # synced vault outside installers/profiles/ (findings 5278120 / 5278133).
+    tree_gate_profile "$REPO_ROOT" "$file" || exit 1
     set -a
     # shellcheck disable=SC1090  # path is chosen by the operator at runtime
     source "$file"
@@ -357,4 +397,6 @@ else
     info "log: $LOG_FILE"
     info "Open Obsidian to vault: $HOME/Obsidian"
     info "On first launch, click 'Trust author and enable plugins' when prompted."
+    # A full install only: update.sh re-runs single components with --only.
+    if [[ -z "$ONLY" ]]; then tree_gate_sync_notice; fi
 fi

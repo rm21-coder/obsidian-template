@@ -66,6 +66,15 @@
                        %USERPROFILE%\dev\secrets\.env. Without this an
                        existing non-empty value is left alone and reported
                        (matching the macOS installer's --force).
+.PARAMETER AllowLocalChanges
+                       Run although git reports modified, untracked or hidden
+                       files under installers\, Templates\Scripts\ or the root
+                       scripts (the tree gate refuses that by default: the
+                       vault is synced, so another device could have written
+                       them). For a maintainer's own edits; logged to
+                       %LOCALAPPDATA%\obsidian-template\tree-gate.log.
+.PARAMETER StrictTree  Refuse a tree that is not a git checkout (by default it
+                       is warned about and the install continues).
 #>
 [CmdletBinding()] param(
     [switch]$SkipTasks,
@@ -78,9 +87,41 @@
     # action-at-a-distance that surfaces as an unrelated bug much later.
     [Alias('Profile')][string]$InstallProfile,
     [switch]$ListProfiles,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$AllowLocalChanges,
+    [switch]$StrictTree
 )
 $ErrorActionPreference = 'Stop'
+
+# ---- tree gate (findings 5278120 / 5278133) --------------------------------
+# First, before common.ps1 or anything else in the tree is dot-sourced. The
+# vault is this checkout and is synced, so another device can write into it;
+# installers\lib\tree_gate.ps1 refuses installer code git does not vouch for.
+# These lines check tree_gate.ps1 itself against HEAD before dot-sourcing it.
+# Nothing can check THIS file: an edited install.ps1 runs whatever it was
+# edited to run (see tree_gate.ps1).
+$treeRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$treeGate = Join-Path $treeRoot 'installers\lib\tree_gate.ps1'
+if (-not $AllowLocalChanges -and (Test-Path -LiteralPath (Join-Path $treeRoot '.git')) -and
+    (Get-Command git -ErrorAction SilentlyContinue)) {
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        $gateWant = "$(& git -C $treeRoot rev-parse -q --verify 'HEAD:installers/lib/tree_gate.ps1' 2>$null)"
+        $gateHave = "$(& git -C $treeRoot hash-object -- 'installers/lib/tree_gate.ps1' 2>$null)"
+    } finally { $ErrorActionPreference = $prevEAP }
+    $gateItem = Get-Item -LiteralPath $treeGate -Force -ErrorAction SilentlyContinue
+    if (-not $gateWant -or $gateWant -ne $gateHave -or
+        ($gateItem -and ($gateItem.Attributes -band [IO.FileAttributes]::ReparsePoint))) {
+        Write-Host 'TREE GATE: REFUSED. installers/lib/tree_gate.ps1 differs from HEAD; not loading it.' -ForegroundColor Red
+        Write-Host "  Inspect: git -C `"$treeRoot`" status --untracked-files=all; git -C `"$treeRoot`" diff"
+        exit 1
+    }
+}
+. $treeGate
+if (-not (Test-TreeGate -Root $treeRoot -Mode install -AllowLocalChanges:$AllowLocalChanges -Strict:$StrictTree)) {
+    exit 1
+}
+
 . "$PSScriptRoot\common.ps1"
 
 if ($ListProfiles) { Show-InstallProfiles; exit 0 }
@@ -91,6 +132,10 @@ if ($ListProfiles) { Show-InstallProfiles; exit 0 }
 $prof = $null
 if ($InstallProfile) {
     Write-Host '== 01 install profile =='
+    # Which file, its hash, and not one in the synced vault outside
+    # installers\profiles\ (findings 5278120 / 5278133).
+    $profPath = Resolve-InstallProfilePath -Spec $InstallProfile
+    if ($profPath -and -not (Test-TreeGateProfile -Root $treeRoot -Path $profPath)) { exit 1 }
     $prof = Import-InstallProfile -Spec $InstallProfile
     $profGateway = Get-ProfileRaw $prof 'LLM_BASE_URL'
     if ($profGateway) { Write-Host "    Claude calls route through: $profGateway" }
@@ -682,3 +727,4 @@ if ($SkipTasks) {
     Write-Host "  Enable-ScheduledTask -TaskName source-mail-pull -TaskPath '\Obsidian\'"
 }
 Write-Host 'See docs/Windows Setup.md for the full guide.'
+Show-TreeGateSyncNotice

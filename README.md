@@ -92,6 +92,8 @@ When it finishes, three one-time manual steps:
 ./install.sh --without-podcast   # skip the podcast-transcribe component
 ./install.sh --list              # print the component list and exit
 ./install.sh --rebaseline        # force security controls to re-baseline
+./install.sh --allow-local-changes  # maintainer: run over your own installer edits (logged)
+./install.sh --strict-tree       # refuse a tree that is not a git checkout
 ./install.sh --force             # let secrets prompts overwrite existing values
 ```
 
@@ -111,7 +113,7 @@ that answers those prompts:
 
 ```bash
 ./install.sh --profile ours              # installers/profiles/ours.env
-./install.sh --profile ~/ours.env        # a file someone handed you
+./install.sh --profile ~/ours.env        # a file someone handed you (outside the vault, or in installers/profiles/)
 ./install.sh --auto --profile ours       # unattended; the profile is the consent
 ./install.sh --profile ours --dry-run    # what it would turn on, changes nothing
 ```
@@ -262,7 +264,7 @@ This repo supports both **macOS** and **Windows** — pick the platform section 
 **macOS, optional:**
 
 - **Docker Desktop** — installed automatically by `install.sh` if you keep the LLM RAG component in scope
-- **Obsidian Sync subscription** — to replicate the vault end-to-end encrypted across iPhone / iPad / other Macs
+- **Obsidian Sync subscription** — to replicate the vault end-to-end encrypted across iPhone / iPad / other Macs. If you use it, two settings are **required**: "Sync all other types" off on every device, and `Templates/Scripts` and `installers` in Excluded folders on the machine that runs the jobs, so a paired device cannot change the code the jobs run ([ONBOARDING.md](ONBOARDING.md#if-you-use-obsidian-sync-two-required-settings))
 
 **Windows, required:**
 

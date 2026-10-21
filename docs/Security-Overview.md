@@ -39,6 +39,15 @@ in [What this does not do](#what-this-does-not-do).
 - **A malicious or compromised Obsidian plugin or Python dependency.** An
   upstream release swapped behind the same version, a hijacked repository, or
   a dependency that changes under a pin.
+- **A compromised device paired to the vault.** With Obsidian Sync, a phone
+  or tablet can write any file the sync settings carry. On a template install
+  the scheduled jobs' code and the installer live in the vault, so a paired
+  device that can write them could change what the jobs or the next install
+  run. The control is a required setting on the machine that runs the jobs
+  ("Sync all other types" off, `Templates/Scripts` and `installers` excluded; see
+  [ONBOARDING.md](../ONBOARDING.md#if-you-use-obsidian-sync-two-required-settings)),
+  backed by the integrity monitor's scripts and installers scopes and by the
+  installers refusing a tree that differs from its git commit.
 - **Mistakes that would publish private data.** A real note, a colleague's
   name, an internal hostname or a credential committed to this public
   repository, or a confidential note exported to a wider audience than it is
@@ -471,6 +480,15 @@ a push.
   between updates. Ollama's own API has no authentication; it is
   bound to loopback, and on Windows setup and every update warn if it listens
   beyond the machine, but nothing stops a user who widens it deliberately.
+- **The installer cannot verify itself.** `install.sh`, `update.sh`,
+  `uninstall.sh` and the Windows installers refuse to run, before sourcing
+  anything else, when git reports installer code under `installers/`,
+  `Templates/Scripts/` or the root scripts as modified, untracked or hidden by
+  an ignore rule, and they stop every Python they start from reading bytecode
+  in the tree. That check lives in the entry script, so it cannot catch an
+  edit to the entry script itself, and it trusts git's own `.git/` folder. The control for that case is the Sync requirement
+  above; a release that keeps code outside the vault would remove it, and is
+  not planned.
 - **Hooks can be bypassed.** `--no-verify` skips both hooks. The recipient-side
   classification audit at install, and the push gates that read every pushed
   commit, are the backstops.

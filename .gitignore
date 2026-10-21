@@ -7,9 +7,11 @@ voice_cleanup_config.yaml
 # Templates (*.env.example) are tracked; profiles are not. `git add -f` if you
 # decide a given profile is publishable.
 installers/profiles/*.env
-# ...and one dropped at the vault root, which is the simplest place to tell a
-# colleague to put it. The checkout IS the vault, so an unignored profile here
-# is one `git add -A` away from publishing internal endpoints.
+# ...and one dropped at the vault root by mistake. The checkout IS the vault,
+# so an unignored profile here is one `git add -A` away from publishing
+# internal endpoints. The installers refuse to source one from here (it is
+# synced and invisible to git): keep a profile in installers/profiles/ or
+# outside the vault, e.g. ~/Downloads.
 /*.env
 
 # macOS noise

@@ -115,7 +115,9 @@ def scratch(tmp_path):
     machinery and plist templates, a stand-in venv, and two installed jobs."""
     home = tmp_path / "home"
     vault = home / "Obsidian"
-    for rel in ("update.sh", "install.sh"):
+    # .gitignore too: without it the tree gate sees the stand-in venv as an
+    # untracked file under Templates/Scripts and refuses.
+    for rel in ("update.sh", "install.sh", ".gitignore"):
         (vault / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / rel, vault / rel)
     shutil.copytree(REPO / "installers" / "lib", vault / "installers" / "lib")
@@ -218,6 +220,27 @@ def test_local_changes_stop_the_update_before_the_pull(scratch, allow_subprocess
     assert "Local changes to tracked files; not updating:" in out
     assert "checkout -- .obsidian/types.json" in out
     assert "== 2/6" not in out
+
+
+@macos_only
+def test_an_untracked_installer_file_stops_the_update_unless_overridden(scratch, allow_subprocess):
+    """5278120 / 5278133: the old check ignored untracked files, and an
+    untracked component or lib file is exactly what a synced device plants."""
+    home, vault, la, env = scratch
+    (vault / "installers" / "components" / "99-planted.sh").write_text("echo planted\n")
+    r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--dry-run"],
+                       capture_output=True, text=True, env=env)
+    out = r.stdout + r.stderr
+    assert r.returncode == 1
+    assert "TREE GATE: REFUSED. The installer code in this tree differs from the git checkout." in out
+    assert "?? installers/components/99-planted.sh" in out
+    assert "== 2/6" not in out
+    r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--dry-run", "--allow-local-changes"],
+                       capture_output=True, text=True, env=env)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    assert "TREE GATE OVERRIDE: --allow-local-changes given. Running update" in out
+    assert "OVERRIDE update" in (home / "Library" / "Logs" / "obsidian-template-tree-gate.log").read_text()
 
 
 @macos_only
@@ -329,7 +352,10 @@ def test_an_update_installs_the_security_controls_before_reloading_their_agent(
     scripts = vault / "Templates" / "Scripts"
     for name in ("integrity_monitor.py", "plugin_integrity_check.py", "security_common.py"):
         shutil.copy2(REPO / "Templates" / "Scripts" / name, scripts / name)
-    old = _render("com.obsidian.security.integrity").replace(
+    # Committed: an untracked script under Templates/Scripts is refused by the tree gate.
+    subprocess.run(["git", "add", "-A"], cwd=vault, check=True, env=env)
+    subprocess.run(["git", "commit", "-qm", "controls"], cwd=vault, check=True, env=env)
+    old =_render("com.obsidian.security.integrity").replace(
         "/Users/tester/.local/share/obsidian-security/bin/", "/Users/tester/Obsidian/Templates/Scripts/")
     (la / "com.obsidian.security.integrity.plist").write_text(old, encoding="utf-8")
     stubs = tmp_path / "stubs"
@@ -391,9 +417,11 @@ def test_a_plugin_reinstall_always_patches_and_retires_and_a_failure_ends_incomp
                        f'echo "venv-python $*" >> "{calls}"\n')
     venv_py.chmod(0o755)
     fail = "1" if plugins_fail else "0"
-    (vault / "install.sh").write_text(        # --after-pull does not re-check the tree
+    (vault / "install.sh").write_text(
         f'#!/bin/bash\necho "install.sh $*" >> "{calls}"\n'
         f'[[ "$*" == *30-plugins* && "{fail}" == 1 ]] && exit 1\nexit 0\n')
+    # Committed: the tree gate runs in the --after-pull pass too.
+    subprocess.run(["git", "commit", "-qam", "stub install.sh"], cwd=vault, check=True, env=env)
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=vault,
                           capture_output=True, text=True).stdout.strip()
     r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--after-pull", "--from", head],
@@ -432,6 +460,8 @@ def test_the_quickadd_patch_runs_on_every_update(scratch, tmp_path, allow_subpro
     venv_py.write_text('#!/bin/sh\nif [ "$1" = "-c" ]; then echo "arm64 13 gil"; exit 0; fi\n')
     venv_py.chmod(0o755)
     (vault / "install.sh").write_text(f'#!/bin/bash\necho "install.sh $*" >> "{calls}"\nexit 0\n')
+    # Committed: the tree gate runs in the --after-pull pass too.
+    subprocess.run(["git", "commit", "-qam", "stub install.sh"], cwd=vault, check=True, env=env)
     head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=vault,
                           capture_output=True, text=True).stdout.strip()
     r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--after-pull", "--from", head],

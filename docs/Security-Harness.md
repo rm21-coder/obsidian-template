@@ -316,6 +316,64 @@ watched, by decision:
   to rewrite both, as you, is the EDR's to catch.
 - **On Windows**, the secrets file's ACL is not checked.
 
+## The tree gate: installers refuse code git does not vouch for
+
+The installers scope above reports a planted installer file the morning after.
+The tree gate refuses it before it runs (findings 5278120 / 5278133). In the
+documented install the vault is the git checkout and Obsidian Sync syncs it,
+so a paired device that is compromised can write into `installers/` or
+`Templates/Scripts/`, and the next install or update would source what it
+wrote.
+
+`install.sh`, `update.sh` and `uninstall.sh` (and on Windows `install.ps1`
+and `update.ps1`) run the gate first, before anything else under
+`installers/` is sourced. It lives in `installers/lib/tree_gate.sh` and
+`tree_gate.ps1`. The entry script checks that file's blob against `HEAD`
+before loading it. When the tree is a git checkout, the gate refuses if:
+
+- `git status --porcelain --untracked-files=all` reports any modified,
+  deleted, added or untracked path under `installers/`, `Templates/Scripts/`,
+  the three root scripts, `.gitignore` or `.gitattributes`. Gitignored paths
+  are not in that list: the venv, the jobs' logs and state, user profiles.
+- an ignored file could be hiding code: a nested `.gitignore` (one with `*`
+  ignores itself, and with it everything plain `git status` would show), any
+  ignored file under `installers/` other than profiles, `__pycache__` and the
+  identity-gate `.local` lists, or an ignored script (`.sh`, `.py`, `.plist`,
+  `.ps1`, ...) anywhere in the gated paths.
+- in update mode (the updaters' pull step), any tracked change anywhere. This
+  replaces the updaters' own dirty-tree check, which ignored untracked files.
+
+The refusal lists the paths, with `git status --untracked-files=all` and
+`git diff` to look at them. A maintainer running their own edits passes
+`--allow-local-changes` (`-AllowLocalChanges`). The run then prints a banner
+listing every change, and the override is appended to
+`~/Library/Logs/obsidian-template-tree-gate.log`
+(`%LOCALAPPDATA%\obsidian-template\tree-gate.log`). `update.sh` passes the
+flag on to the `install.sh` steps it runs and to its post-pull pass.
+
+A tree that is not a git checkout, such as a release zip, cannot be verified.
+The install prints a warning and continues. `--strict-tree` (`-StrictTree`)
+refuses instead. The updaters always refuse, because they pull.
+
+**Profiles.** `installers/profiles/*.env` is gitignored by design, so git
+cannot vouch for a profile. The macOS installer sources it as shell code;
+Windows parses it as data. The gate prints the file it uses and its SHA-256,
+to compare with the hash its sender gave you. It allows a profile in
+`installers/profiles/` or outside the vault, where Obsidian Sync cannot reach
+it. It refuses one anywhere else in the vault: the vault root, for example,
+where the file is both synced and invisible to the gate.
+
+**What it cannot stop.** An edit to the entry script itself. An edited
+`install.sh` runs whatever it was edited to run, gate or no gate. Git's own
+`.git/` (configuration, index flags such as `skip-worktree`) is trusted too;
+Obsidian Sync does not sync dot-folders. What keeps a paired device out of the
+entry scripts is the Sync setting that every install now ends by printing:
+
+- on **every** device that syncs the vault, Settings > Sync: turn off
+  **Sync all other types**, or at least don't sync code file types.
+- on the machine that runs the jobs, Settings > Sync > **Excluded folders**:
+  add `Templates/Scripts` and `installers`.
+
 ## Where alerts go
 
 - **Alert log (append-only):** `~/.local/share/obsidian-security/alerts.log` —
