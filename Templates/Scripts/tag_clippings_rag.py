@@ -222,10 +222,20 @@ def set_tags_in_text(text: str, new_tags: list[str]):
     return open_ + "\n".join(block + lines) + close + body
 
 
+# How much of a body clean_body() looks at. The patterns below ran over the
+# whole note before the result was cut to MAX_CONTENT_CHARS, and with `[^\]]*`
+# and `[^)]*` each "[" or "](" rescanned to the end of an unclosed run:
+# quadratic in the note (finding 5277567). The body is now cut first, with
+# room for the markup the patterns remove, and the classes stop at a bracket
+# of either kind.
+CLEAN_SCAN_CHARS = MAX_CONTENT_CHARS * 4
+
+
 def clean_body(body: str) -> str:
-    body = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", body)   # images
-    body = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", body)    # inline links incl. anchor text
-    body = re.sub(r"https?://\S+", " ", body)            # bare urls
+    body = body[:CLEAN_SCAN_CHARS]
+    body = re.sub(r"!\[[^\[\]]*\]\([^()]*\)", " ", body)   # images
+    body = re.sub(r"\[[^\[\]]*\]\([^()]*\)", " ", body)    # inline links incl. anchor text
+    body = re.sub(r"https?://\S+", " ", body)              # bare urls
     return body[:MAX_CONTENT_CHARS]
 
 

@@ -50,7 +50,6 @@ import socket
 import threading
 import time
 from pathlib import Path
-import re
 from typing import Callable
 from urllib.parse import urljoin, urlparse
 
@@ -83,7 +82,18 @@ SAFE_DOWNLOAD_DEADLINE_SECONDS = 30 * 60   # a 150 MB episode at ~0.7 Mbit/s
 MAX_DOWNLOAD_BYTES = 500 * 1024 * 1024
 
 
-_USERINFO_IN_PATH = re.compile(r"[^/]*@")
+def _redact_path_userinfo(path: str) -> str:
+    """Each "/"-segment's text up to its last "@" becomes "<redacted>".
+
+    This was `re.sub(r"[^/]*@", "<redacted>@", path)`, which rescanned every
+    segment from each of its characters: quadratic in a long segment without
+    an "@" (finding 5278630). Same result, one pass.
+    """
+    segments = path.split("/")
+    for i, seg in enumerate(segments):
+        if "@" in seg:
+            segments[i] = "<redacted>@" + seg.rpartition("@")[2]
+    return "/".join(segments)
 
 
 def redact_url(url: str) -> str:
@@ -111,7 +121,7 @@ def redact_url(url: str) -> str:
     # Malformed forms put the userinfo in the PATH: "http:user:pass@host/p"
     # and "http:///user:pass@host/p" both parse with an empty netloc. Drop
     # anything before an "@" in any segment, wherever it landed.
-    path = _USERINFO_IN_PATH.sub("<redacted>@", parts.path)
+    path = _redact_path_userinfo(parts.path)
     query = "?…" if parts.query else ""
     return f"{parts.scheme}://{host}{path}{query}"
 SAFE_DOWNLOAD_TIMEOUT_SECONDS = 120

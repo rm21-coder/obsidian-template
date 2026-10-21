@@ -17,7 +17,7 @@ This is **optional**. The vault works fine without it — you can paste content 
 
 ## What it does
 
-Drag any supported file (Word, Excel, PowerPoint, PDF, HTML, audio, image, etc.) onto the drop zone. The file is converted to Markdown in-process, run through the [cleanup pass](#cleanup-pass), and written to `~/Obsidian/Creations/<original-name>.md`. Extracted images land in `~/Obsidian/Z_attachments/`. Originals are not touched. If a file with the same name already exists in `Creations/`, a timestamp is appended so nothing gets overwritten.
+Drag any supported file (Word, Excel, PowerPoint, PDF, HTML, audio, image, etc.) onto the drop zone. The file is converted to Markdown by a time-limited converter process the dropper keeps running, run through the [cleanup pass](#cleanup-pass), and written to `~/Obsidian/Creations/<original-name>.md`. Extracted images land in `~/Obsidian/Z_attachments/`. Originals are not touched. If a file with the same name already exists in `Creations/`, a timestamp is appended so nothing gets overwritten.
 
 ## Files
 
@@ -38,7 +38,7 @@ After Markitdown converts a file, the dropper imports `markitdown_cleanup.py` fr
 
    Both steps are bounded, because a dropped file usually came from someone else: at most 200 inline images and 100 MB decoded per document (any past that become an "Embedded image omitted" placeholder), and from an archive at most 500 media members, 25 MB per decompressed image and 200 MB in total (anything over is skipped, so its stub gets the placeholder). Sizes are counted while streaming, not taken from the archive's own header. If a member turns out to be damaged partway through, the images already recovered from that archive are removed again rather than left orphaned in `Z_attachments/`.
 
-   Those limits apply to the cleanup pass only. MarkItDown itself reads zip members whole (and recurses into nested zips), so before conversion a zip container (`.zip`, `.docx`, `.xlsx`, `.pptx`) is checked by `archive_limits.py`. It is refused, with a "refused: archive …; not converted" line in the log, if it has more than 5,000 members, any member that inflates past 100 MB, more than 500 MB inflated in total, or zips nested more than two deep. Other formats are not size-checked.
+   Those limits apply to the cleanup pass only. MarkItDown itself reads zip members whole (and recurses into nested zips), so before conversion a zip container (`.zip`, `.docx`, `.xlsx`, `.pptx`) is checked by `archive_limits.py`. It is refused, with a "refused: archive …; not converted" line in the log, if it has more than 5,000 members, any member that inflates past 100 MB, more than 500 MB inflated in total, or zips nested more than two deep. Any file over 100 MB (`MAX_SOURCE_BYTES`), a PDF included, is refused before conversion with a "refused: … bytes is over the … limit; not converted" line, and every conversion is time-limited (see [Design notes](#design-notes)).
 3. **Normalizes bullet markers** — converts Outlook/Word's `•`, `○`, `▪`, `▸`, `▹`, `‣`, `◦`, `●`, `⁃` to standard `-`. Tab indentation becomes two-space indentation while preserving nesting depth.
 4. **Promotes two strict heading patterns to `##`** — used because RAG chunkers (Open WebUI's Markdown Header Splitter, etc.) need header anchors:
     - `N. **Heading text**` on its own line (numbered + entirely bold)
@@ -121,10 +121,10 @@ Python caches imported modules at process start, so changes to `~/Obsidian/Templ
 ## Design notes
 
 - **PySide6 instead of tkinter.** The first build used `tkinterdnd2`, but its prebuilt `tkdnd` binary fails to load on Apple Silicon (`tkdnd_Init` symbol not found). PySide6 ships native arm64 wheels with first-class drag-and-drop support.
-- **In-process markitdown, not subprocess.** Each `markitdown` CLI invocation reloads magika's ONNX model from scratch, which adds 10–30 seconds per file. Calling the Python API in-process amortizes that cost over the lifetime of the app.
+- **One long-lived converter process, not one per file and not in-process.** Each `markitdown` CLI invocation reloads magika's ONNX model from scratch (about a second warm, ten or more cold), so the dropper starts one child process running the Python API on the first drop and reuses it. It is a child rather than in-process because a conversion can then be stopped: a file that is still converting after 10 minutes (`CONVERT_TIMEOUT_SEC`) has its child killed, the log shows `conversion took longer than 600 s and was stopped`, and the next file starts a fresh child. A thread in the app itself cannot be stopped, so before 2026-10 one hostile PDF could keep pdfminer, and the dropper, busy indefinitely (finding 5278110).
 - **Python 3.13 specifically.** The venv is pinned to 3.13 because some markitdown dependencies don't yet ship 3.14 wheels and need to compile from source on Python 3.14.
 - **Cleanup is fail-loud.** If the cleanup pass raises an exception, the file is NOT written — you'll see `cleanup failed: <ErrorType>: <message>` in the dropper log. This is deliberate: better than getting a half-cleaned file and not knowing.
-- **Cleanup is import-optional.** If `markitdown_cleanup.py` can't be imported for any reason, the dropper still works — files just land without the cleanup pass and you'll see no `[cleaned: ...]` annotation in the log.
+- **Cleanup is required.** If `markitdown_cleanup.py` can't be imported for any reason, each file is refused with `not converted: markitdown_cleanup is unavailable` rather than written raw: the cleanup pass is what gives the note the pipeline's frontmatter and tier.
 
 ## Known quirks
 

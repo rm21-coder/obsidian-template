@@ -166,6 +166,17 @@ def _obj(value) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _text(obj: dict, key: str, where: str | None = None) -> str | None:
+    """A string field, or None when absent. Any other type makes the event
+    bad (finding 5268565): these values are copied into the handoff, and a
+    list `display` or a dict `subject` raised in the consumer instead of here,
+    where one event is skipped with a warning and the rest of the day kept."""
+    value = obj.get(key)
+    if value is None or isinstance(value, str):
+        return value
+    raise TypeError(f"{where or key} is {type(value).__name__}, not a string")
+
+
 def _event_time(ev: dict, key: str) -> dict:
     """start/end as a dict; a present but non-object value makes the event bad
     (unlike organizer, a meeting without a usable time cannot be placed)."""
@@ -196,6 +207,27 @@ def _build_meeting(ev: dict, user_email: str, tenant_domains: frozenset,
     attendees = []
     n_req_human = n_optional = n_declined = n_resources = n_external = 0
 
+    org_pre = _obj(ev.get("organizer"))
+    # Every copied string field is type-checked up front, so a wrong-typed
+    # one rejects this event here rather than travelling into the handoff.
+    for key in ("id", "subject", "bodyPreview", "sensitivity",
+                "createdDateTime", "lastModifiedDateTime"):
+        _text(ev, key)
+    for key in ("name", "address"):
+        _text(org_pre, key, f"organizer.{key}")
+    categories = ev.get("categories") or []
+    if not isinstance(categories, list) or not all(
+            isinstance(c, str) for c in categories):
+        raise TypeError("categories is not a list of strings")
+    loc = ev.get("location") or {}
+    if isinstance(loc, dict):
+        loc_display = _text(loc, "displayName", "location.displayName")
+    elif isinstance(loc, str):
+        loc_display = loc
+    else:
+        raise TypeError(f"location is {type(loc).__name__}, "
+                        f"not an object or a string")
+
     # Decided before the attendee loop because the counters below need it.
     # On a departmental-mailbox blast the coordinator is the lone
     # `required` attendee and everyone else, the user included, is
@@ -204,12 +236,13 @@ def _build_meeting(ev: dict, user_email: str, tenant_domains: frozenset,
     # attendees on these invites (and only these) keeps the hint honest.
     # The consumer applies the identical rule in classify(); the two must
     # agree or the note's `type:` and `people:` disagree.
-    org_pre = _obj(ev.get("organizer"))
     org_is_group = is_group_mailbox(org_pre.get("name") or "",
                                     lc(org_pre.get("address")))
 
     for a in raw_attendees:
         a = _obj(a)
+        for key in ("name", "address", "type", "responseStatus"):
+            _text(a, key, f"attendee.{key}")
         email = lc(a.get("address"))
         name = a.get("name") or ""
         if not email:
@@ -302,8 +335,6 @@ def _build_meeting(ev: dict, user_email: str, tenant_domains: frozenset,
                 my_resp = a["response_status"]
                 break
 
-    loc = ev.get("location") or {}
-    loc_display = loc.get("displayName") if isinstance(loc, dict) else loc
     is_video, join_url = extract_video(loc_display, ev.get("bodyPreview"))
 
     recurrence = ev.get("recurrence")
@@ -324,7 +355,7 @@ def _build_meeting(ev: dict, user_email: str, tenant_domains: frozenset,
         },
         "location": {"display": loc_display, "is_teams_meeting": is_video, "teams_join_url": join_url},
         "body_preview": body_preview, "body_format": "text",
-        "categories": ev.get("categories") or [], "sensitivity": sensitivity,
+        "categories": categories, "sensitivity": sensitivity,
         "is_cancelled": bool(ev.get("isCancelled")),
         "is_private_appointment": sensitivity == "private",
         "created_at": ev.get("createdDateTime"), "last_modified_at": ev.get("lastModifiedDateTime"),

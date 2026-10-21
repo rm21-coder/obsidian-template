@@ -66,20 +66,59 @@ SKIP_LINK = re.compile(r"^\[SKIP ADVERTISEMENT\]\([^)]*\)\s*$", re.IGNORECASE)
 
 # An <iframe> tag that advertises itself as advertising. Three signals,
 # any one is sufficient: title="3rd party ad content", title="Advertisement",
-# or aria-label="Advertisement". `[^>]*?` keeps the attribute scan inside
-# the opening tag; `.*?</iframe>` (DOTALL) handles iframes that span lines.
-AD_IFRAME = re.compile(
-    r'<iframe\b[^>]*?'
-    r'(?:title="3rd party ad content"|title="Advertisement"|aria-label="Advertisement")'
-    r'[^>]*?>.*?</iframe>',
-    re.IGNORECASE | re.DOTALL,
-)
+# or aria-label="Advertisement", inside the opening tag (up to its first
+# ">"); the element runs to the first "</iframe>" after it, across lines.
+#
+# These were one regex each, `<iframe\b[^>]*?(signal)[^>]*?>.*?</iframe>`,
+# which rescanned from every "<iframe" to the end of an unclosed tag or
+# element: cubic, 8.2 s at 20k (finding 5268415). _AdElement does the same
+# match with str.find-style steps that never revisit text.
+AD_IFRAME_SIGNAL = re.compile(
+    r'title="3rd party ad content"|title="Advertisement"|aria-label="Advertisement"',
+    re.IGNORECASE)
 
 # A <video> tag tagged as an advertisement (e.g. golf.com ad pre-rolls).
-AD_VIDEO = re.compile(
-    r'<video\b[^>]*?title="Advertisement"[^>]*?>.*?</video>',
-    re.IGNORECASE | re.DOTALL,
-)
+AD_VIDEO_SIGNAL = re.compile(r'title="Advertisement"', re.IGNORECASE)
+
+
+class _AdElement:
+    """`<tag ...signal...>...</tag>` removal, matching what the regex
+    `<tag\\b[^>]*?(signal)[^>]*?>.*?</tag>` (IGNORECASE, DOTALL) matched."""
+
+    def __init__(self, tag: str, signal: re.Pattern) -> None:
+        self._open = re.compile(rf"<{tag}\b", re.IGNORECASE)
+        self._close = re.compile(rf"</{tag}>", re.IGNORECASE)
+        self._signal = signal
+
+    def subn(self, repl: str, text: str) -> tuple[str, int]:
+        out: list[str] = []
+        pos = n = 0
+        while True:
+            start = self._open.search(text, pos)
+            if not start:
+                break
+            gt = text.find(">", start.end())
+            if gt < 0:
+                break            # no later tag has a ">" either
+            if not self._signal.search(text, start.end(), gt):
+                # Every "<tag" up to this ">" ends its opening tag here too,
+                # and so lacks the signal as well.
+                out.append(text[pos:gt + 1])
+                pos = gt + 1
+                continue
+            close = self._close.search(text, gt + 1)
+            if not close:
+                break            # no later element is closed either
+            out.append(text[pos:start.start()])
+            out.append(repl)
+            pos = close.end()
+            n += 1
+        out.append(text[pos:])
+        return "".join(out), n
+
+
+AD_IFRAME = _AdElement("iframe", AD_IFRAME_SIGNAL)
+AD_VIDEO = _AdElement("video", AD_VIDEO_SIGNAL)
 
 # Collapse runs of 3+ consecutive blank lines down to a single blank line.
 EXTRA_BLANKS = re.compile(r"\n{3,}")

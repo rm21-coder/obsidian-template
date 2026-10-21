@@ -247,3 +247,22 @@ def test_rag_tagger_withholds_a_restricted_note(rag_tagger, monkeypatch, tmp_pat
     p.write_text(RESTRICTED, encoding="utf-8")
     assert rag_tagger.process(p, None, [], None, False, False, 3) is None
     assert "withheld (restricted)" in capsys.readouterr().out
+
+
+# 5277567: clean_body ran its link patterns over the whole note before
+# cutting to MAX_CONTENT_CHARS, and `[^\]]*` / `[^)]*` rescanned from every
+# "[" to the end of an unclosed run.
+@pytest.mark.parametrize("body", ["[" * 500_000, "[](" * 200_000,
+                                  "![" * 250_000])
+def test_rag_clean_body_is_bounded(rag_tagger, body):
+    import time
+    t = time.perf_counter()
+    out = rag_tagger.clean_body(body)
+    assert time.perf_counter() - t < 1.0
+    assert len(out) <= rag_tagger.MAX_CONTENT_CHARS
+
+
+def test_rag_clean_body_still_strips_images_links_and_urls(rag_tagger):
+    body = ("See ![chart](https://img.example/c.png) and [the plan](https://x.example/p) "
+            "or https://y.example/q for more.")
+    assert rag_tagger.clean_body(body).split() == ["See", "and", "or", "for", "more."]

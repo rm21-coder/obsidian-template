@@ -135,3 +135,62 @@ def test_producer_rejections_become_a_warning_note():
         "The producer dropped 1 event(s) the calendar tools did not return "
         "(possible prompt injection): 'victim-id' (id not returned by the "
         "calendar tools).")
+
+
+# 5268565: fields the transform copied into the handoff untyped. A list
+# location display reached the consumer, raised there, and the handoff's ack
+# was withheld on every run. Now the one event is skipped here with a warning.
+@pytest.mark.parametrize("override, reason", [
+    ({"location": {"displayName": ["Room 1", "Room 2"]}},
+     "TypeError: location.displayName is list, not a string"),
+    ({"location": ["Room 1"]},
+     "TypeError: location is list, not an object or a string"),
+    ({"bodyPreview": {"text": "agenda"}},
+     "TypeError: bodyPreview is dict, not a string"),
+    ({"subject": ["Budget"]}, "TypeError: subject is list, not a string"),
+    ({"id": 42}, "TypeError: id is int, not a string"),
+    ({"sensitivity": ["private"]},
+     "TypeError: sensitivity is list, not a string"),
+    ({"categories": "Red"}, "TypeError: categories is not a list of strings"),
+    ({"categories": [{"name": "Red"}]},
+     "TypeError: categories is not a list of strings"),
+    ({"organizer": {"name": ["Bob"], "address": "bob@example.edu"}},
+     "TypeError: organizer.name is list, not a string"),
+    ({"organizer": {"name": "Bob", "address": 7}},
+     "TypeError: organizer.address is int, not a string"),
+    ({"createdDateTime": 20261005},
+     "TypeError: createdDateTime is int, not a string"),
+])
+def test_wrong_typed_copied_field_rejects_only_that_event(override, reason, capsys):
+    label = "'42'" if "id" in override else "'bad-1'"
+    payload = mt.build_handoff([_bad(**override), copy.deepcopy(GOOD)],
+                               USER, WEEK, DOMAINS)
+
+    assert [m["uid"] for m in payload["meetings"]] == ["good-1"]
+    text = _warning(payload)
+    assert label in text and reason in text, text
+    assert "WARNING: skipped malformed event" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("key", ["name", "address", "type", "responseStatus"])
+def test_wrong_typed_attendee_field_rejects_the_event(key):
+    bad = _bad()
+    bad["attendees"][0][key] = ["x"]
+    payload = mt.build_handoff([bad, copy.deepcopy(GOOD)], USER, WEEK, DOMAINS)
+
+    assert [m["uid"] for m in payload["meetings"]] == ["good-1"]
+    assert f"TypeError: attendee.{key} is list, not a string" in _warning(payload)
+    assert "eve@example.edu" not in {c["email"] for c in payload["contacts"]}
+
+
+def test_well_typed_location_and_categories_pass_through():
+    ev = copy.deepcopy(GOOD)
+    ev["location"] = {"displayName": "Room 4"}
+    ev["categories"] = ["Red", "Blue"]
+    (meeting,) = mt.build_handoff([ev], USER, WEEK, DOMAINS)["meetings"]
+    assert meeting["location"]["display"] == "Room 4"
+    assert meeting["categories"] == ["Red", "Blue"]
+
+    ev["location"] = "Room 5"
+    (meeting,) = mt.build_handoff([ev], USER, WEEK, DOMAINS)["meetings"]
+    assert meeting["location"]["display"] == "Room 5"

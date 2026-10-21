@@ -751,3 +751,39 @@ class TestSubjectCannotForgeLogLines:
         lines = self._pull(raw, monkeypatch, tmp_path, caplog)
         assert ("REJECT [voice drop]: sender 'stranger@example.net' "
                 "not in allowlist") in lines
+
+
+class TestNonAsciiHmacIsARefusedDrop:
+    """5268412: hmac.compare_digest(str, str) raises TypeError when either
+    side holds a non-ASCII character. verify() ran outside the per-message
+    try, so one drop with a non-ASCII hmac field aborted the whole drain on
+    every run. It must be refused like any other bad drop."""
+
+    BAD = "é" + "0" * 63
+
+    def test_verify_refuses_a_non_ascii_hmac(self) -> None:
+        fields = _signed()
+        fields["hmac"] = self.BAD
+        assert smp.verify(fields, key=KEY) == (False, "hmac is not ASCII hex")
+
+    def test_a_valid_hmac_with_upper_case_and_padding_still_verifies(self) -> None:
+        fields = _signed()
+        fields["hmac"] = "  " + fields["hmac"].upper() + " "
+        assert smp.verify(fields, key=KEY) == (True, "")
+
+    def test_drain_logs_the_refusal_and_continues(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+            caplog) -> None:
+        bad = _signed()
+        bad["hmac"] = self.BAD
+        fake = _FakeIMAP([_raw_drop(bad), _raw_drop(_signed(
+            payload="https://example.com/after.mp3"))])
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", fake)
+        with caplog.at_level("WARNING", logger="source_mail_pull"):
+            a, r = smp.process_mailbox(
+                user="u", password="p", key=KEY,
+                allowed=["phone@example.com"], root=tmp_path, dry_run=False)
+        assert (a, r) == (1, 1)
+        assert (b"1", "\\Seen") in fake.stored
+        assert any("hmac is not ASCII hex" in rec.getMessage()
+                   for rec in caplog.records)

@@ -287,9 +287,16 @@ def verify(fields: dict[str, str], *, key: str) -> tuple[bool, str]:
     supplied = fields.get("hmac", "")
     if not supplied:
         return False, "no hmac"
+    supplied = supplied.strip().lower()
+    # compare_digest raises TypeError on a str holding a non-ASCII character,
+    # which escaped this function and aborted the whole drain. A genuine
+    # digest is hex, so anything non-ASCII is refused here as a bad drop.
+    if not supplied.isascii():
+        return False, "hmac is not ASCII hex"
     expected = compute_hmac(key, msg_type, ts, payload)
     # Constant-time: a byte-wise early return would leak the correct prefix.
-    if not hmac.compare_digest(expected, supplied.strip().lower()):
+    if not hmac.compare_digest(expected.encode("ascii"),
+                               supplied.encode("ascii")):
         return False, "hmac mismatch"
     return True, ""
 

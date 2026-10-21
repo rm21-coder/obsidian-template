@@ -52,7 +52,9 @@ Defences, layered so no single failure is fatal:
    `hmac.compare_digest`. This is the real control. **The token is never
    transmitted** — sending it would leave a long-lived secret sitting in
    Gmail's storage forever; an HMAC proves knowledge of it without disclosing
-   it.
+   it. A `hmac:` field holding anything but ASCII is refused as `hmac is not
+   ASCII hex` before the comparison (which raises on non-ASCII text, and until
+   2026-10 stopped the whole run on every pass; finding 5268412).
 4. **The routing type comes from inside the MAC**, never from the Subject line,
    so an authentic podcast drop can't be retargeted at the voice pipeline.
 5. **A timestamp inside the MAC** bounds a drop's age to 7 days, and one more

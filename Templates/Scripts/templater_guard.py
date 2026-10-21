@@ -91,7 +91,12 @@ _TRIM = " \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006" \
 # CR as well -- so "x\flanguage-tasks" or "x&#10;language-tasks" adds a second
 # class, "language-tasks", which is what plugins look up.
 _CLASS_SPLIT = re.compile(r"[\n\r\f]")
-_INLINE = re.compile(r"(`+)(?=[\s\ufeff]*(?:\$?=|(?:INPUT|VIEW|BUTTON)\[))", re.I)
+# Only a whole backtick run can open inline code, and every start inside one
+# saw the same text after it, so the lookarounds pin the match to whole runs.
+# Without them each start backtracked through the rest of the run: quadratic,
+# 10.7 s at 20k (finding 5268418). The matches are the same.
+_INLINE = re.compile(
+    r"(?<!`)(`+)(?!`)(?=[\s\ufeff]*(?:\$?=|(?:INPUT|VIEW|BUTTON)\[))", re.I)
 # Dataview also runs `=` queries found inside code blocks (its default), on the
 # block's text after JS trim(). A code block can start almost anywhere -- after
 # a fence, after a heading or a rule, inside a list item or a quote -- so any
@@ -112,10 +117,69 @@ _HTML_CODE = re.compile(r"<(?=code(?![\w-]))", re.I)
 # a flow mapping or after "? ", so any double-quoted key holding a backslash
 # is defused too. Values are left alone: titles with escaped quotes are common.
 _EXCALIDRAW_KEY = re.compile(r"(excalidraw)(?=-|\\)", re.I)
-_QUOTED = r'(?:[^"\\\r\n]|\\.)*' 
-_ESCAPED_KEY = re.compile(
-    rf'(")(?!\u200b)(?={_QUOTED}\\{_QUOTED}"[ \t]*:)'                # "k\x": v, {"k\x": v}
-    rf'|(?:^|(?<=[\n\r]))([ \t]*\?[ \t]*")(?!\u200b)(?={_QUOTED}\\)')  # ? "k\x"
+#
+# Two forms, both found by _escaped_key_quotes():
+#   "k\x": v, {"k\x": v}  -- a quote opening text of plain characters and
+#       backslash pairs, with at least one backslash, then `"`, blanks, `:`.
+#       As a regex lookahead, (?=Q\\Q"[ \t]*:) with Q = (?:[^"\\\r\n]|\\.)*,
+#       it backtracked through every split of the escapes and was retried at
+#       every quote: 10.7 s at 20k (finding 5268418). It is now decided for
+#       every quote of a line in one right-to-left pass that tracks the same
+#       pattern's states, so the quotes defused are exactly the same.
+#   ? "k\x"  -- a complex-key line whose quoted key holds a backslash before
+#       any quote or line end: _ESCAPED_QKEY below.
+_ESCAPED_QKEY = re.compile(
+    r'(?:^|(?<=[\n\r]))[ \t]*\?[ \t]*"(?!\u200b)(?=[^"\\\r\n]*\\)')
+_KEY_LINE_HINT = re.compile(r'"[ \t]*:')
+
+
+def _escaped_key_line(line: str, base: int, found: set) -> None:
+    """Add to `found` the index (offset by `base`) of every quote in `line`
+    (no LF in it) that opens a "k\\x": key.
+
+    State flags after reading line[i:], for the pattern
+    A=(plain|\\.)* , then a bare "\\", B=(plain|\\.)* , then `"` [ \\t]* `:`:
+    a/ap: in A, at a token start / after a pair's backslash;
+    b/bp: the same in B; c: after the closing quote. Each flag is True when
+    the rest of the line from that state can complete the pattern.
+    """
+    a = ap = b = bp = c = False
+    for i in range(len(line) - 1, -1, -1):
+        ch = line[i]
+        plain = ch not in '"\\\r'
+        n_c = ch == ":" or (ch in " \t" and c)
+        n_bp = b
+        n_b = (plain and b) or (ch == "\\" and bp) or (ch == '"' and c)
+        n_ap = a
+        n_a = (plain and a) or (ch == "\\" and (ap or b))
+        if ch == '"' and a and line[i + 1:i + 2] != ZWSP:
+            found.add(base + i)
+        a, ap, b, bp, c = n_a, n_ap, n_b, n_bp, n_c
+
+
+def _escaped_key_quotes(text: str) -> set:
+    found = {m.end() - 1 for m in _ESCAPED_QKEY.finditer(text)}
+    if "\\" not in text:
+        return found
+    base = 0
+    for line in text.split("\n"):
+        if "\\" in line and _KEY_LINE_HINT.search(line):
+            _escaped_key_line(line, base, found)
+        base += len(line) + 1
+    return found
+
+
+def _defuse_escaped_keys(text: str) -> str:
+    found = _escaped_key_quotes(text)
+    if not found:
+        return text
+    out, last = [], 0
+    for q in sorted(found):
+        out.append(text[last:q + 1])
+        out.append(ZWSP)
+        last = q + 1
+    out.append(text[last:])
+    return "".join(out)
 
 
 def _decoded(info: str) -> str:
@@ -149,7 +213,7 @@ def neutralize(text: str) -> str:
     text = _INLINE.sub(lambda m: m.group(1) + ZWSP, text)
     text = _BLOCK_QUERY.sub(lambda m: m.group(1) + ZWSP, text)
     text = _EXCALIDRAW_KEY.sub(lambda m: m.group(1) + ZWSP, text)
-    text = _ESCAPED_KEY.sub(lambda m: (m.group(1) or m.group(2)) + ZWSP, text)
+    text = _defuse_escaped_keys(text)
     return _HTML_CODE.sub("<" + ZWSP, text)
 
 

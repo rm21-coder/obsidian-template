@@ -96,7 +96,12 @@ TODO_EXCLUDE_DIRS = {
 # Open-status checkboxes: `[ ]` = Todo, `[/]` = In Progress. Both are
 # considered "not done" by the Obsidian Tasks plugin and should surface
 # on the dashboard. `[x]` (Done) and `[-]` (Cancelled) are excluded.
-TODO_RE = re.compile(r"^[ \t]*[-*+]\s*\[[ /]\]\s*(.+?)\s*$")
+#
+# The capture is written as "first to last non-space character" (or, for an
+# all-space remainder, its last character, as the old lazy form gave) rather
+# than `(.+?)\s*$`: that pair is quadratic on a long run of inner spaces,
+# 8.6 s for one 50k line (finding 5268409). The groups are identical.
+TODO_RE = re.compile(r"^[ \t]*[-*+]\s*\[[ /]\]\s*(\S(?:.*\S)?|[^\S\n])\s*$")
 
 # Required tag for an item to count. Matches the Obsidian Tasks plugin's
 # `globalFilter: "#task"` setting in this vault. Without this filter we

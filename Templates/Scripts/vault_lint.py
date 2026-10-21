@@ -180,11 +180,26 @@ SCAFFOLD_TAGS = {
 
 DUP_BODY_SIMILARITY = 0.90  # Jaccard over body tokens, above which two notes are "the same note"
 
-_FM_SPLIT = re.compile(r"^(---\s*\n)(.*?)(\n---\s*\n?)(.*)$", re.DOTALL)
+# Finding 5268562: three patterns here were quadratic on one long line (12.9 s
+# at 50k). Each is rewritten to give the same result in linear time:
+#
+# * the frontmatter split was `^(---\s*\n)(.*?)(\n---\s*\n?)(.*)$`; its `\s*`
+#   ran across newlines, so a lone "---" over a run of blank lines retried the
+#   lazy scan once per newline. split_frontmatter() now finds the same pieces
+#   with two anchored matches and str.find.
+# * a list item's capture is "first to last non-space character" (or, for an
+#   all-space remainder, its last character, as `(.+?)\s*$` gave) instead of
+#   a lazy group followed by `\s*$`.
+# * a wikilink's text cannot hold "]", so every "[[" up to the next "]" ends
+#   at the same place; the second alternative consumes such a run when it is
+#   not a link, instead of rescanning it from each "[[". Use _wikilinks() and
+#   skip matches whose group 2 is None.
+_FM_OPEN = re.compile(r"---(?:[^\S\n]*\n)+")
+_FM_CLOSE_TAIL = re.compile(r"\s*")
 _TAGS_BLOCK = re.compile(r"^tags:\s*$")
 _TAGS_INLINE = re.compile(r"^tags:\s*\[(.*)\]\s*$")
-_LIST_ITEM = re.compile(r"^\s*-\s+(.+?)\s*$")
-_WIKILINK = re.compile(r"(!?)\[\[([^\]\n]+)\]\]")
+_LIST_ITEM = re.compile(r"^\s*-\s+(\S(?:.*\S)?|[^\S\n])\s*$")
+_WIKILINK = re.compile(r"(!?)\[\[([^\]\n]+)\]\]|\[\[[^\]\n]*")
 _ATTACHMENT_EXT = re.compile(r"\.(png|jpe?g|gif|svg|webp|bmp|pdf|mp4|mov|m4a|mp3|wav|base|canvas)$", re.I)
 
 CHECKS = ["dup-tags", "bad-tags", "dup-notes", "taxonomy", "script-drift", "schema", "links"]
@@ -194,9 +209,31 @@ FIXABLE = {"dup-tags", "bad-tags"}
 # ---------- frontmatter -------------------------------------------------------
 
 def split_frontmatter(text):
-    """(open, fm, close, body) or None if the note has no frontmatter."""
-    m = _FM_SPLIT.match(text)
-    return m.groups() if m else None
+    """(open, fm, close, body) or None if the note has no frontmatter.
+
+    open is "---" and the whitespace after it through its last newline; fm
+    runs to the first "\\n---" after that; close is that "\\n---" and all the
+    whitespace after it. As in the regex this replaced, an opening "---"
+    followed by two or more newlines and then "---" closes on the last of
+    them when nothing later does.
+    """
+    m = _FM_OPEN.match(text)
+    if not m:
+        return None
+    p = m.end()
+    q = text.find("\n---", p)
+    if q < 0:
+        if m.group(0).count("\n") < 2 or not text.startswith("---", p):
+            return None
+        q = p - 1
+        p = text.rfind("\n", 0, q) + 1
+    end = _FM_CLOSE_TAIL.match(text, q + 4).end()
+    return text[:p], text[p:q], text[q:end], text[end:]
+
+
+def _wikilinks(line):
+    """The wikilink matches in `line` (see _WIKILINK for the skipped runs)."""
+    return [m for m in _WIKILINK.finditer(line) if m.group(2) is not None]
 
 
 def read_tags(fm):
@@ -753,15 +790,15 @@ def _links_by_field(text):
             m = re.match(r"^([A-Za-z_][\w\- ]*):", line)
             if m:
                 key = m.group(1)
-            for _embed, raw in _WIKILINK.findall(line):
-                out.append((key, raw, False))
+            for lm in _wikilinks(line):
+                out.append((key, lm.group(2), False))
         body = parts[3]
         offset = len(text) - len(body)
     else:
         body, offset = text, 0
     fenced, spans = _protected_spans(body)
     for i, line in enumerate(body.split("\n")):
-        for m in _WIKILINK.finditer(line):
+        for m in _wikilinks(line):
             in_code = i in fenced or any(s <= m.start() < e for s, e in spans.get(i, []))
             out.append((None, m.group(2), in_code))
     return out
@@ -873,6 +910,8 @@ def fix_links(notes, broken):
 
             def replace(m):
                 raw = m.group(2)
+                if raw is None:          # a skipped run, not a link
+                    return m.group(0)
                 target = raw.split("|")[0].split("#")[0].split("^")[0].strip()
                 if target not in targets_here:
                     return m.group(0)

@@ -90,7 +90,30 @@ import templater_guard  # noqa: E402  -- outside text must not run as Templater 
 
 # ─── Frontmatter ─────────────────────────────────────────────────────────────
 
-FRONTMATTER_RE = re.compile(r"\A(---\s*\n.*?\n---\s*\n)", re.DOTALL)
+# The block was matched by `\A(---\s*\n.*?\n---\s*\n)` (DOTALL). Its `\s*`
+# ran across newlines, so a lone "---" over a run of blank lines retried the
+# lazy scan once per newline: 7.4 s at 50k (finding 5278104).
+# _frontmatter_end() finds the same span in linear time: the opening through
+# the last newline of the whitespace after it, then the first "\n---" closing
+# line after that, through the last newline of its own trailing whitespace.
+_FM_OPEN = re.compile(r"---(?:[^\S\n]*\n)+")
+_FM_CLOSE = re.compile(r"\n---(?:[^\S\n]*\n)+")
+
+
+def _frontmatter_end(text: str) -> int | None:
+    opening = _FM_OPEN.match(text)
+    if not opening:
+        return None
+    closing = _FM_CLOSE.search(text, opening.end())
+    if closing:
+        return closing.end()
+    # As the regex did when nothing later closes: an opening followed by two
+    # or more newlines may close on the last of them.
+    if opening.group(0).count("\n") >= 2:
+        closing = _FM_CLOSE.match(text, opening.end() - 1)
+        if closing:
+            return closing.end()
+    return None
 
 
 def split_frontmatter(content: str) -> tuple[str, str]:
@@ -99,9 +122,9 @@ def split_frontmatter(content: str) -> tuple[str, str]:
     Leading byte-order marks are ignored, as Obsidian ignores them.
     """
     stripped = content.lstrip("\ufeff")
-    m = FRONTMATTER_RE.match(stripped)
-    if m:
-        return m.group(1), stripped[m.end():]
+    end = _frontmatter_end(stripped)
+    if end is not None:
+        return stripped[:end], stripped[end:]
     return "", content
 
 
@@ -194,9 +217,15 @@ OMITTED_TEXT = "*[Embedded image omitted — over the per-document image limit]*
 # ─── Inline base64 image extraction ──────────────────────────────────────────
 
 # Matches ![any alt text](data:image/<ext>;base64,<data>)
+#
+# Neither the alt text nor the data may hold a bracket or parenthesis of the
+# other kind it is delimited by: with `[^\]]*` and `[^)]+` every "![" (or
+# every data URL) rescanned to the end of an unclosed run, quadratic in the
+# body (finding 5278104; 3.4 s at 50k for the stub form). An image whose alt
+# text holds an unbalanced "[" is no longer extracted; base64 never holds "(".
 B64_IMAGE_RE = re.compile(
-    r"!\[(?P<alt>[^\]]*)\]"
-    r"\(data:image/(?P<ext>png|jpe?g|gif|webp);base64,(?P<data>[^)]+)\)"
+    r"!\[(?P<alt>[^\[\]]*)\]"
+    r"\(data:image/(?P<ext>png|jpe?g|gif|webp);base64,(?P<data>[^()]+)\)"
 )
 
 
@@ -253,10 +282,11 @@ def extract_base64_images(
 
 # Matches Markitdown's truncated/stub form (`;base64...)` with no real data,
 # or any other malformed data URL the prior decode pass failed on).
+# Bracket classes as in B64_IMAGE_RE, and for the same reason.
 STUB_IMAGE_RE = re.compile(
-    r"!\[(?P<alt>[^\]]*)\]"
+    r"!\[(?P<alt>[^\[\]]*)\]"
     r"\(data:image/(?P<ext>png|jpe?g|gif|webp|bmp|svg)"
-    r"(?:;[a-z0-9-]+)*;base64[^,)][^)]*\)",
+    r"(?:;[a-z0-9-]+)*;base64[^,)][^()]*\)",
     re.IGNORECASE,
 )
 
