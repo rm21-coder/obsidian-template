@@ -19,7 +19,15 @@ Now each backend asks this module for a local directory:
     the pins is refused;
   * a model that is not pinned is refused, unless the operator passes
     --allow-unpinned-model, which is logged;
-  * a local directory the operator names explicitly is theirs and is used as-is.
+  * a local directory is used as-is only when the caller passes
+    allow_local_dir=True AND the name is a path, not a repo id: absolute, or
+    starting with ./ (or a backslash form on Windows). No shipped job
+    passes it.
+
+The pins are checked first (finding 5277573). The local-directory test used
+to come first, so a directory in the current working directory named like a
+pinned repo ("openai/whisper-small" is a valid relative path) was loaded
+unverified in place of the pinned download.
 """
 from __future__ import annotations
 
@@ -88,19 +96,29 @@ def verify(repo: str, local_dir: Path, patterns: list[str]) -> list[str]:
     return wanted
 
 
+def _is_explicit_path(model: str) -> bool:
+    """A name that can only be a path: absolute, or ./-prefixed. A bare
+    "org/name" is a repo id even when a directory of that name exists."""
+    prefixes = ("./", "../") + ((".\\", "..\\") if sys.platform == "win32" else ())
+    return model.startswith(prefixes) or Path(model).expanduser().is_absolute()
+
+
 def fetch(model: str, *, allow_patterns: list[str], cache_dir: str | None = None,
-          allow_unpinned: bool = False, log=None) -> Path:
+          allow_unpinned: bool = False, allow_local_dir: bool = False,
+          log=None) -> Path:
     """Local directory holding `model`, downloaded at its pin and verified."""
     log = log or (lambda msg: print(msg, file=sys.stderr, flush=True))
-    local = Path(model).expanduser()
-    if local.is_dir():
-        log(f"using the local model directory the operator named: {local}")
-        return local
+    pin = PINS.get(model)
+    if pin is None and allow_local_dir and _is_explicit_path(model):
+        local = Path(model).expanduser()
+        if local.is_dir():
+            log(f"using the local model directory the operator named: {local} "
+                "(unverified)")
+            return local
     try:
         from huggingface_hub import snapshot_download
     except ImportError as exc:
         raise RuntimeError("huggingface-hub is required to fetch the model") from exc
-    pin = PINS.get(model)
     if pin is None:
         if not allow_unpinned:
             raise UnpinnedModel(

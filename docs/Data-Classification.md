@@ -309,12 +309,19 @@ G=~/Obsidian/Templates/Scripts/disclosure_check.py
 
 $V $G check NOTE... --audience public
 $V $G export NOTE... --to DIR --audience internal
-$V $G export DIR --to OUT --audience public --skip-blocked   # + WITHHELD.md
+$V $G export DIR --to OUT --audience public --skip-blocked   # withheld list kept by you
 $V $G check NOTE --audience public --override "reason"        # logged
 ```
 
 Exit codes: `0` clear, `1` blocked, `2` usage error — so it composes into other
 scripts.
+
+With `--skip-blocked`, the destination gets a `WITHHELD.md` that gives only a
+count. The list of withheld notes and the reasons, which would tell the
+recipient what exists and at what tier, is written owner-only to
+`disclosure-withheld/` in the security state directory
+(`~/.local/share/obsidian-security/`, `%LOCALAPPDATA%\obsidian-security\` on
+Windows), beside the audit log that records the same decision.
 
 **Transclusion closure is the point.** An embed `![[Note]]` pulls that note's
 body into the exporting file, so exporting A discloses everything A embeds
@@ -325,7 +332,9 @@ reported for information only.
 
 What counts as "renders into the note" is deliberately broad: `![[wiki]]`
 embeds (including the `\|` alias form tables need), Markdown `![](Note.md)`
-embeds, the file and text nodes of a `.canvas`, and every link inside an
+embeds, raw HTML carrying the `internal-embed` class (attributes in any order,
+quoted or not, entities decoded; a mention of that class the gate cannot read
+as a tag with a `src` blocks as "could not evaluate"), the file and text nodes of a `.canvas`, and every link inside an
 Excalidraw drawing. A reference that could mean several notes — a duplicate
 name, a relative or partial path — brings **all** of them into the closure,
 so the gate never has to guess which one Obsidian would pick.

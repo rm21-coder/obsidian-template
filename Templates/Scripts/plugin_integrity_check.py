@@ -726,13 +726,30 @@ def save_allowlist(allowlist: dict[str, dict]) -> None:
 def _settings_changes(old: dict, cur: dict) -> dict:
     """{key: {"from": state, "to": state}} for watched settings that differ,
     plus "(file)" when data.json itself went absent/unreadable/readable."""
+    # Compared on the FULL digest, shortened only for display (finding
+    # 5277568: a 12-hex prefix match let a crafted value pass as unchanged).
+    # The allowlist has always stored the full digest; a shorter stored one
+    # (hand-edited or legacy) still matches by prefix, never under 12 hex,
+    # and the next adopt writes the full value.
     def state(rec, k):
         if rec.get("file") != "ok":
             return rec.get("file")
         v = rec.get("keys", {}).get(k)
         if not v or not v.get("set"):
             return "not set"
-        return "set:" + v.get("sha256", "")[:12]
+        return "set:" + str(v.get("sha256", ""))
+
+    def same(a, b):
+        if a == b:
+            return True
+        if not (isinstance(a, str) and isinstance(b, str)
+                and a.startswith("set:") and b.startswith("set:")):
+            return False
+        old_d, cur_d = a[4:], b[4:]
+        return 12 <= len(old_d) < 64 and len(cur_d) == 64 and cur_d.startswith(old_d)
+
+    def shown(v):
+        return v[:16] if isinstance(v, str) and v.startswith("set:") else v
     changed = {}
     if old.get("file") != cur.get("file"):
         changed["(file)"] = {"from": old.get("file"), "to": cur.get("file")}
@@ -745,8 +762,8 @@ def _settings_changes(old: dict, cur: dict) -> dict:
                                             "to": cur_refs.get(f, "absent")}
     for k in sorted(set(old.get("keys", {})) | set(cur.get("keys", {}))):
         a, b = state(old, k), state(cur, k)
-        if a != b:
-            changed[k] = {"from": a, "to": b}
+        if not same(a, b):
+            changed[k] = {"from": shown(a), "to": shown(b)}
     return changed
 
 

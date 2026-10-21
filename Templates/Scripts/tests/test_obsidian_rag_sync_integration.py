@@ -661,3 +661,66 @@ def test_permanent_failures_cannot_starve_a_newer_pending_purge(sync, monkeypatc
         "the newer entry was never retried behind permanent failures")
     assert set(pending) == {"file-1", "file-2", "file-3"}
     assert all(pending[f]["last_attempt"] > "2026" for f in ("file-1", "file-2"))
+
+
+# ---------------------------------------------------------------------------
+# Mythos review 2026-10-20: 5268413 (one sync at a time), 5278612 (the run
+# report carries the highest tier among the paths it lists).
+# ---------------------------------------------------------------------------
+
+def test_overlapping_run_exits_without_touching_state(sync, monkeypatch, tmp_path, caplog):
+    import script_lock
+    monkeypatch.setattr(script_lock, "LOCK_DIR", tmp_path / ".locks")
+    sync.note("Meetings/one.md")
+    server = FakeWebUI("test-collection")
+    held = script_lock.acquire("obsidian-rag-sync")
+    assert held is not None
+    try:
+        with pytest.raises(SystemExit) as exc:
+            sync.run(server)
+        assert exc.value.code == 0
+        assert "another obsidian-rag-sync instance is running" in caplog.text
+        assert server.calls == []
+        assert not sync.module.STATE_FILE.exists()
+    finally:
+        held.close()
+    assert sync.run(server) == 0          # released: the next run proceeds
+    assert BODY in server.contents()
+
+
+def _report_classification(sync) -> str:
+    text = _latest_report(sync)
+    line = next(l for l in text.splitlines() if l.startswith("classification:"))
+    return line.split(":", 1)[1].strip()
+
+
+def test_run_report_inherits_the_highest_listed_tier(sync):
+    sync.note("Meetings/raised.md", body=RESTRICTED)
+    server = FakeWebUI("test-collection")
+    fid = server.seed("the note while it was still internal")
+    sync.state({"Meetings/raised.md": {"hash": "h", "file_id": fid,
+                                       "classification": "internal-use-only"}})
+    assert sync.run(server) == 0
+    assert "Meetings/raised.md" in _latest_report(sync)
+    assert _report_classification(sync) == "restricted"
+
+
+def test_run_report_of_confidential_adds_is_confidential(sync):
+    sync.note("Meetings/c.md", body="---\nclassification: confidential\n---\n" + BODY)
+    sync.note("Meetings/p.md", body="---\nclassification: public\n---\n" + BODY)
+    assert sync.run(FakeWebUI("test-collection")) == 0
+    assert _report_classification(sync) == "confidential"
+
+
+def test_run_report_with_nothing_listed_has_the_floor_tier(sync):
+    assert sync.run(FakeWebUI("test-collection")) == 0
+    assert _report_classification(sync) == "internal-use-only"
+
+
+def test_report_tier_fails_closed_on_a_path_of_unknown_tier(sync):
+    rt = sync.module.report_tier
+    assert rt({"path_tiers": {}, "deleted_fs_paths": ["gone.md"]}) == "restricted"
+    assert rt({"path_tiers": {"a.md": "public"},
+               "added_paths": ["a.md"]}) == "internal-use-only"
+    assert rt({"path_tiers": {"a.md": "confidential"},
+               "add_failures": [("a.md", "boom")]}) == "confidential"

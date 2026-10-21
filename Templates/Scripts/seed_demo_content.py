@@ -2036,18 +2036,27 @@ def remove(dry_run: bool) -> int:
     if not targets:
         print("no demo content found.")
         return 0
+    # Moved to the vault's .trash/ (Obsidian's own trash), not unlinked
+    # (finding 5268563): the marker is what makes a file a candidate, so a
+    # note of yours that carried one by mistake -- copied from a demo note,
+    # say -- is recoverable rather than gone. One folder per teardown, the
+    # vault layout kept inside it, so nothing collides.
+    bin_dir = VAULT / ".trash" / f"demo-seed-{dt.datetime.now():%Y%m%d-%H%M%S-%f}"
     for p, marker in targets:
         rel = p.relative_to(VAULT)
         print(f"  {'would remove' if dry_run else 'removed'}  {rel}")
         if not dry_run:
-            p.unlink()
+            dest = bin_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(p, dest)
     # Prune Meetings/Series only. The seed creates that folder itself, so
     # removing it when empty restores the tree exactly. Every other content
     # folder ships with the repo (each carries a .gitkeep) and must survive a
     # teardown -- clearing the demo data still leaves the vault structure.
     if not dry_run and SERIES_DIR.is_dir() and not any(SERIES_DIR.iterdir()):
         SERIES_DIR.rmdir()
-    print(f"\n{len(targets)} file(s) {'would be ' if dry_run else ''}removed.")
+    print(f"\n{len(targets)} file(s) {'would be ' if dry_run else ''}removed"
+          + ("." if dry_run else f" to {bin_dir.relative_to(VAULT)}/."))
     return 0
 
 

@@ -421,6 +421,27 @@ class TestNotify:
         monkeypatch.setattr(sc.subprocess, "run", boom)
         sc.notify("title", "message")  # must not raise
 
+    def test_windows_toast_text_travels_in_the_environment_not_argv(
+            self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Finding 5278108: powershell.exe -File re-splits its command line,
+        so a quoted message could become extra parameters."""
+        seen: list = []
+        monkeypatch.setattr(sc.sys, "platform", "win32")
+        monkeypatch.setattr(sc.subprocess, "run",
+                            lambda argv, **kw: seen.append((argv, kw)))
+        title = 'Integrity "drift"'
+        message = 'a.md" -Title "x\x00y' + "z" * 9000
+        sc.notify(title, message)
+        assert len(seen) == 1
+        argv, kw = seen[0]
+        assert argv[-2] == "-File" and argv[-1].endswith("Send-Notification.ps1")
+        assert not any("drift" in a or "a.md" in a for a in argv)
+        assert "-Title" not in argv and "-Message" not in argv
+        assert kw["env"][sc.NOTIFY_TITLE_ENV] == title
+        sent = kw["env"][sc.NOTIFY_MESSAGE_ENV]
+        assert "\x00" not in sent and sent.startswith('a.md" -Title "xy')
+        assert len(sent) == 4000
+
     def test_is_a_noop_on_unsupported_platforms(
             self, monkeypatch: pytest.MonkeyPatch) -> None:
         called: list[object] = []

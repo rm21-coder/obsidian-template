@@ -36,7 +36,8 @@ Usage:
     python3 disclosure_check.py check NOTE... --audience public
 
     # copy what is allowed to a destination, refusing the whole export if
-    # anything is blocked (add --skip-blocked to export the rest with a manifest)
+    # anything is blocked (add --skip-blocked to export the rest; the withheld
+    # list goes beside the audit log, only a count into DIR)
     python3 disclosure_check.py export NOTE... --to DIR --audience internal
 
     # deliberate exception — always logged, never available for `restricted`
@@ -128,8 +129,27 @@ _MEDIA_EXT = re.compile(
 # Obsidian, which is the safe side.
 _QUERY_FENCE_RE = re.compile(
     r"(`{3,}|~{3,})[ \t]*(dataview|dataviewjs|tasks|base|query|bases)\b", re.I)
-_HTML_EMBED_RE = re.compile(
-    r"<[^>]*\binternal-embed\b[^>]*\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.I)
+# Raw-HTML embeds (`<span class="internal-embed" src="Note">`). The old
+# single regex missed the attributes in the other order or an unquoted src
+# (finding 5278117) and was cubic on "<internal-embed " repeated (5268561).
+# Now: markdown-it's own open-tag grammar (what Obsidian treats as an inline
+# HTML tag), with every quantifier bounded so a failed attempt stays local,
+# attributes read in any order, quoted or not, entity-decoded. And fail
+# closed: every mention of the class token must be accounted for by a tag
+# with a readable src, or the note is "could not evaluate" -- a form the
+# grammar does not cover (an HTML block the browser parses more loosely, say)
+# cannot slip through as plain text. html.parser was tried first and is
+# quadratic on an unterminated tag under Python 3.9.
+_EMBED_CLASS_TOKEN = "internal-embed"
+_TAG_ATTR = (r"[a-zA-Z_:][a-zA-Z0-9:._-]{0,100}"
+             r"(?:[ \t\r\n]{0,100}=[ \t\r\n]{0,100}"
+             r"(?:[^\"'=<>`\x00-\x20]{1,4000}|'[^']{0,4000}'|\"[^\"]{0,4000}\"))?")
+_OPEN_TAG_RE = re.compile(
+    r"<[A-Za-z][A-Za-z0-9-]{0,100}((?:[ \t\r\n]{1,100}" + _TAG_ATTR + r"){0,200})"
+    r"[ \t\r\n]{0,100}/?>")
+_ATTR_RE = re.compile(
+    r"([a-zA-Z_:][a-zA-Z0-9:._-]*)(?:[ \t\r\n]*=[ \t\r\n]*"
+    r"(?:([^\"'=<>`\x00-\x20]+)|'([^']*)'|\"([^\"]*)\"))?")
 _QUOTED_RE = re.compile(r"\"([^\"\n]{1,300})\"|'([^'\n]{1,300})'")
 _QUERY_TOKEN_RE = re.compile(r"\b(?:file|path)\s*:\s*(\"[^\"\n]+\"|\S+)", re.I)
 _INLINE_QUERY_RE = re.compile(r"`\$?=[^`\n]+`")
@@ -552,13 +572,47 @@ def _is_drawing(path: Path, text: str) -> bool:
             or "# Excalidraw Data" in text or "```compressed-json" in text)
 
 
+def _html_embeds(text: str) -> tuple[list[str], int]:
+    """(src values of tags whose class carries the internal-embed token,
+    count of token mentions not accounted for by such a tag with a src)."""
+    token = _EMBED_CLASS_TOKEN
+    mentions = html.unescape(text).lower().count(token)
+    if not mentions:
+        return [], 0
+    srcs: list[str] = []
+    accounted = 0
+    for m in _OPEN_TAG_RE.finditer(text):
+        attrs = m.group(1)
+        if token not in html.unescape(attrs).lower():
+            continue
+        cls, tag_srcs = "", []
+        for a in _ATTR_RE.finditer(attrs):
+            name = a.group(1).lower()
+            value = html.unescape(a.group(2) or a.group(3) or a.group(4) or "")
+            if name == "class":
+                cls += " " + value.lower()
+            elif name == "src" and value.strip():
+                tag_srcs.append(value.strip())
+        # Substring, not an exact class token: stricter than Obsidian
+        # ("x-internal-embed" is judged too), which is the safe side.
+        if token in cls and tag_srcs:
+            srcs.extend(tag_srcs)
+            accounted += html.unescape(m.group(0)).lower().count(token)
+    return srcs, max(0, mentions - accounted)
+
+
 def references(path: Path, text: str) -> tuple[list[str], list[str]]:
     """(targets whose content renders into this note, dynamic constructs --
     queries -- whose rendered content the gate cannot evaluate)."""
     targets = [_wiki_target(m) for m in _WIKI_EMBED_RE.findall(text)]
     # Raw HTML Obsidian's reading view turns into an embed. Uncertain whether
-    # the sanitiser keeps src on a span; treated as an embed regardless.
-    targets += [_wiki_target(m) for m in _HTML_EMBED_RE.findall(text)]
+    # the sanitiser keeps src on a span; treated as an embed regardless. A
+    # mention of the class that is not a tag with a readable src fails closed.
+    html_srcs, html_unreadable = _html_embeds(text)
+    targets += [_wiki_target(m) for m in html_srcs]
+    if html_unreadable:
+        targets.append("\x00incomplete:an internal-embed HTML tag (or a "
+                       "mention of that class) whose src could not be read")
     for dest in _md_destinations(text):
         if _URL_SCHEME_RE.match(dest):
             continue                       # remote resource, not vault content
@@ -621,6 +675,9 @@ def embed_closure(path: Path, index: VaultIndex, canvases: list | None = None
     def reach(target: str, source: Path, depth: int) -> None:
         if target.startswith("\x00dynamic:"):
             dynamic.append(target[len("\x00dynamic:"):])
+            return
+        if target.startswith("\x00incomplete:"):
+            incomplete.append(source.name + ": " + target[len("\x00incomplete:"):])
             return
         if target.startswith("\x00query:"):
             # Named inside a query or base: judged as a leaf dependency (its
@@ -922,7 +979,8 @@ def main() -> int:
     parser.add_argument("--to", type=str, help="Destination directory (export mode)")
     parser.add_argument("--skip-blocked", action="store_true",
                         help="Export what is allowed instead of refusing entirely; "
-                             "withheld files are listed in WITHHELD.md")
+                             "the destination's WITHHELD.md gives only a count; "
+                             "the list is written beside the security audit log")
     parser.add_argument("--override", type=str, metavar="REASON",
                         help="Proceed despite the ceiling. Logged. Never lifts the "
                              "bar on `restricted`.")
@@ -996,7 +1054,7 @@ def main() -> int:
     # override; silently withholding those exact files anyway (the pre-fix
     # behavior) made the tool lie about what it did. The exception stays
     # visible: reported here, flagged in the audit record, absent from
-    # WITHHELD.md because it genuinely shipped.
+    # the withheld manifest because it genuinely shipped.
     overridden_paths = {r["path"] for r in overridden}
     allowed = [r for r in results
                if not r["blocked"] or r["path"] in overridden_paths]
@@ -1011,19 +1069,56 @@ def main() -> int:
 
     withheld = [r for r in results
                 if r["blocked"] and r["path"] not in overridden_paths]
+    manifest = write_withheld_manifest(withheld, args.audience, ceiling, dest)
     if withheld:
-        lines = ["# Withheld from this export", "",
-                 f"Audience `{args.audience}` · ceiling `{ceiling}`", ""]
-        for r in withheld:
-            lines.append(f"- `{_rel(r['path'])}`")
-            lines += [f"    - {reason}" for reason in r["reasons"]]
-        (dest / "WITHHELD.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # Counts only in the destination: the recipient learns that something
+        # was withheld, not which notes or at what tier (finding 5268560 --
+        # the old WITHHELD.md listed every withheld path and its reasons).
+        (dest / "WITHHELD.md").write_text(
+            "# Withheld from this export\n\n"
+            f"{len(withheld)} note(s) were withheld under audience "
+            f"`{args.audience}`. The exporter holds the list.\n",
+            encoding="utf-8")
 
     print(f"Exported {len(allowed)} note(s) to {dest}")
     if withheld:
-        print(f"Withheld {len(withheld)} — see {dest / 'WITHHELD.md'}")
+        where = manifest if manifest else "the security audit log"
+        print(f"Withheld {len(withheld)} — list in {where}")
     audit("export:done", args.audience, results, args.override)
     return 0
+
+
+def write_withheld_manifest(withheld: list[dict], audience: str, ceiling: str,
+                            dest: Path) -> Path | None:
+    """The full withheld list (paths, reasons) beside the security audit log,
+    outside the export, owner-only. None when nothing was withheld or the
+    file could not be written; the audit record carries the same detail."""
+    if not withheld:
+        return None
+    import datetime as _dt
+    try:
+        import security_common
+        folder = security_common.state_dir() / "disclosure-withheld"
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(folder, 0o700)
+        except OSError:
+            pass
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        path = folder / f"withheld-{stamp}.md"
+        lines = ["# Withheld from an export", "",
+                 f"Destination `{dest}`", f"Audience `{audience}` · ceiling `{ceiling}`", ""]
+        for r in withheld:
+            lines.append(f"- `{_rel(r['path'])}`")
+            lines += [f"    - {reason}" for reason in r["reasons"]]
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        security_common.restrict_file(path)
+        return path
+    except Exception as exc:
+        print(f"  Warning: withheld manifest not written: {exc}", file=sys.stderr)
+        return None
 
 
 if __name__ == "__main__":

@@ -903,3 +903,78 @@ def test_a_folder_query_over_many_notes_stays_fast(mb_vault: Path):
     t0 = time.monotonic()
     _gate(mb_vault, host)
     assert time.monotonic() - t0 < 15
+
+
+# ---------------------------------------------------------------------------
+# Raw-HTML internal embeds (findings 5278117, 5268561) and the withheld
+# manifest (5268560), Mythos review 2026-10-20.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("body", [
+    '<span src="Secret" class="internal-embed"></span>',     # attributes reversed
+    '<span class=internal-embed src=Secret></span>',          # unquoted
+    "<span src=Secret class='foo internal-embed'>",           # several class tokens
+    '<span class="internal&#45;embed" src="S&#101;cret">',    # entities
+    '<div\nclass="INTERNAL-EMBED"\nsrc="Secret|alias"/>',     # newlines, case, alias
+    '<span title="a>b" class=internal-embed src=Secret>',     # '>' inside a value
+])
+def test_html_internal_embed_any_attribute_form_is_judged(vault: Path, body: str):
+    _restricted(vault, "Secret")
+    host = note(vault, "Host", body=body, tier="public")
+    res = D.evaluate([host], "public")[0]
+    _assert_restricted_blocks(res)
+    assert "embeds `restricted` note `Knowledge/Secret.md`" in res["reasons"]
+
+
+@pytest.mark.parametrize("body", [
+    '<span class="internal-embed"></span>',
+    '<span class="internal-embed" src="  "></span>',
+    '<span class="internal-embed" src></span>',
+    '<span class="internal-embed" src="Secret',               # unterminated tag
+    'a mention of internal-embed in prose',                   # unaccounted token
+])
+def test_html_internal_embed_without_src_fails_closed(vault: Path, body: str):
+    host = note(vault, "Host", body=body, tier="public")
+    res = D.evaluate([host], "public")[0]
+    _assert_restricted_blocks(res)
+    assert any("whose src could not be read" in r
+               for r in res["reasons"]), res["reasons"]
+
+
+def test_html_without_embed_class_is_not_an_embed(vault: Path):
+    host = note(vault, "Host", body='<span class="x" src="Missing"></span>', tier="public")
+    assert not D.evaluate([host], "public")[0]["blocked"]
+
+
+@pytest.mark.parametrize("pump", ["<internal-embed " * 3125,
+                                  "<span class=internal-embed " * 2000,
+                                  '<span class="internal-embed ' * 2000,
+                                  "<" * 50000])
+def test_html_embed_scan_is_linear(pump: str):
+    import time
+    t = time.perf_counter()
+    D._html_embeds(pump)
+    assert time.perf_counter() - t < 1.0
+
+
+def test_withheld_manifest_is_outside_dest_and_dest_has_counts_only(
+        vault: Path, tmp_path: Path, monkeypatch, capsys):
+    import security_common
+    state = tmp_path / "sec-state"
+    monkeypatch.setattr(security_common, "state_dir", lambda: state)
+    ok_note = note(vault, "Open", tier="public")
+    hot = note(vault, "Hot Secret Name", tier="confidential")
+    dest = tmp_path / "out"
+    rc = _run_main(monkeypatch, ["export", "--audience", "public", "--skip-blocked",
+                                 "--to", str(dest), str(ok_note), str(hot)])
+    assert rc == 0
+    shipped = (dest / "WITHHELD.md").read_text(encoding="utf-8")
+    assert "1 note(s) were withheld" in shipped
+    assert "Hot Secret Name" not in shipped and "confidential" not in shipped
+    manifests = list((state / "disclosure-withheld").glob("withheld-*.md"))
+    assert len(manifests) == 1
+    full = manifests[0].read_text(encoding="utf-8")
+    assert "Knowledge/Hot Secret Name.md" in full and "`confidential`" in full
+    if os.name != "nt":
+        assert (manifests[0].stat().st_mode & 0o777) == 0o600
+    assert str(manifests[0]) in capsys.readouterr().out

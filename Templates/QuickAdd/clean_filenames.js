@@ -40,7 +40,9 @@ function cleanName(name) {
   out = out.replace(/[\\/:*?"<>|]/g, "");
   out = out.replace(/  +/g, " ").trim();
   // A leading dot would hide the note in Obsidian and in Finder/Explorer.
-  return out.replace(/^\.+/, "").trim();
+  // Dots and spaces together: "?. .hidden" became ". .hidden", and stripping
+  // only the dots then trimming left ".hidden" (finding 5268414).
+  return out.replace(/^[.\s]+/, "").trim();
 }
 
 module.exports = async (params) => {

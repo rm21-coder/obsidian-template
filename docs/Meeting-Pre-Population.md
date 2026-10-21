@@ -285,6 +285,19 @@ every attendee email you want resolved to a rich People note.
   banner; if the meeting is later un-cancelled, the banner and status are
   taken back out. Before 2026-10-20 the note was unlinked outright, prep
   included (finding 5277583).
+- **People matching trusts addresses only where they are vouched for.** An
+  invite's display names and addresses are whatever its sender typed. An
+  attendee matched to an existing People note by name gets an empty email
+  field filled ("organic backfill") only when the address's domain is one of
+  your org domains (`tenant_domains`, or your own) or already on the note,
+  never a shared free-mail domain, and only when the local part plausibly
+  belongs to that person: it contains the surname or a 5+-letter prefix of it
+  (`pquinn`, `pat.quinn`, `quinnp`), or is the first name exactly (`pat`).
+  Anything else is skipped and logged. A new stub whose address is not on an
+  org domain is written with `email_verified: false`; its address is not used
+  for email matching (the note still matches by name) until you delete that
+  line, which is how you promote it once you know the address is that
+  person's.
 - **Idempotence.** Every write is fenced with HTML comments and keyed by `uid`,
   so re-running over the same week does not duplicate content or clobber your
   hand-written notes.

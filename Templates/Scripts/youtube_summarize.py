@@ -179,7 +179,7 @@ _PLAYLIST_KEYS = ("list", "index")
 def youtube_url(url: object, *, single: bool = False) -> tuple[str | None, str]:
     """(url fit to hand to yt-dlp, "") or (None, reason).
 
-    The scheme and host are lowercased: yt-dlp's URL patterns are
+    The scheme is always https, and the host is lowercased: yt-dlp's URL patterns are
     case-sensitive, so "WWW.YouTube.com" passed this check and then matched
     no extractor. With single=True the list=/index= parameters are dropped,
     so a video shared from inside a playlist is still a video.
@@ -212,7 +212,11 @@ def youtube_url(url: object, *, single: bool = False) -> tuple[str | None, str]:
     if single:
         query = "&".join(kv for kv in query.split("&")
                          if kv and kv.split("=", 1)[0] not in _PLAYLIST_KEYS)
-    return urlunsplit((parts.scheme.lower(), host, parts.path, query, "")), ""
+    # Always https: an http:// link is accepted (feeds and pastes carry them)
+    # but never fetched in the clear, where anyone on the path could answer
+    # in YouTube's place (finding 5277577). Every YOUTUBE_HOSTS host serves
+    # https.
+    return urlunsplit(("https", host, parts.path, query, "")), ""
 
 
 # ---------- Logging ----------------------------------------------------------

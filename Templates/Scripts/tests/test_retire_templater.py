@@ -225,13 +225,15 @@ def test_clean_filenames_renames_keeps_the_title_and_skips_collisions(tmp_path, 
 @needs_node
 def test_clean_filenames_edge_cases(tmp_path, allow_subprocess) -> None:
     out = _run(tmp_path, "clean_filenames.js", {
-        "folders": {"Clippings": ["No props—here.md", "??.md", "?.env.md", "Bad•yaml.md"]},
+        "folders": {"Clippings": ["No props—here.md", "??.md", "?.env.md", "Bad•yaml.md",
+                                  "?. .hidden.md"]},
         "broken": ["Bad•yaml.md"]})
     assert ["No props—here.md", "Clippings/No props-here.md"] in out["renamed"]
     assert "No props—here.md" not in out["frontmatter"]           # no properties: none added
     assert ["?.env.md", "Clippings/env.md"] in out["renamed"]           # no leading dot
+    assert ["?. .hidden.md", "Clippings/hidden.md"] in out["renamed"]   # dots and spaces (5268414)
     assert all(r[0] != "Bad•yaml.md" for r in out["renamed"])
-    assert out["notices"] == ["Cleaned 2 filenames, 0 already clean, "
+    assert out["notices"] == ["Cleaned 3 filenames, 0 already clean, "
                               "1 skipped (nothing would be left of the name), 1 could not be renamed"]
 
 

@@ -552,7 +552,9 @@ class TestPlaylistEntries:
         # Round 2, item 2: scheme and host normalised (yt-dlp's patterns are
         # case-sensitive); the path, which carries IDs, is left alone.
         ("HTTPS://WWW.YouTube.com/watch?v=AbC", "https://www.youtube.com/watch?v=AbC"),
-        ("http://WWW.YouTube.com/playlist?list=PL1", "http://www.youtube.com/playlist?list=PL1"),
+        # Finding 5277577: http is rewritten to https, never fetched in the clear.
+        ("http://WWW.YouTube.com/playlist?list=PL1", "https://www.youtube.com/playlist?list=PL1"),
+        ("http://youtu.be/abc", "https://youtu.be/abc"),
     ])
     def test_youtube_urls_are_accepted(self, url: str, cleaned: str) -> None:
         assert ys.youtube_url(url) == (cleaned, "")

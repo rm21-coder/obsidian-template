@@ -873,3 +873,33 @@ def test_the_agent_reruns_when_a_watched_settings_file_changes() -> None:
     assert f"<string>{base}/community-plugins.json</string>" in plist
     for pid in pic.SECURITY_SETTINGS:
         assert f"<string>{base}/plugins/{pid}/data.json</string>" in plist, pid
+
+
+# ---------------------------------------------------------------------------
+# Finding 5277568 (Mythos review 2026-10-20): watched settings compare on the
+# full digest; only the display is shortened.
+# ---------------------------------------------------------------------------
+
+def _rec(digest: str) -> dict:
+    return {"file": "ok", "keys": {"enableJs": {"set": True, "sha256": digest}}}
+
+
+def test_settings_digest_differing_after_12_hex_is_a_change():
+    old = "a" * 12 + "0" * 52
+    new = "a" * 12 + "1" * 52
+    changed = pic._settings_changes(_rec(old), _rec(new))
+    assert "enableJs" in changed
+    assert changed["enableJs"] == {"from": "set:" + "a" * 12, "to": "set:" + "a" * 12}
+
+
+def test_identical_full_digest_is_not_a_change():
+    d = "b" * 64
+    assert pic._settings_changes(_rec(d), _rec(d)) == {}
+
+
+def test_legacy_short_stored_digest_matches_by_prefix_only():
+    full = "c" * 12 + "d" * 52
+    assert pic._settings_changes(_rec("c" * 12), _rec(full)) == {}
+    assert "enableJs" in pic._settings_changes(_rec("c" * 12), _rec("e" * 64))
+    # Under 12 hex is never accepted as a prefix.
+    assert "enableJs" in pic._settings_changes(_rec("c" * 8), _rec(full))

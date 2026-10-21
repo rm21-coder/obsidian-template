@@ -92,7 +92,7 @@ Two folder-specific rules:
 
 ## 4. (Optional) Hard allowlist via Tag Taxonomy.md
 
-By default the script's allowlist comes from a fallback vault scan — every tag currently in use anywhere in the vault becomes a candidate. That works fine when you start out, but the tag space drifts over time (case variants, near-synonyms, one-off typos).
+By default the script's allowlist comes from a fallback vault scan — every tag currently in use in the vault becomes a candidate, except tags in `Clippings/` (outside text: a clipped page's author chose them) and anything not of the canonical tag shape (a letter, then letters, digits, `_`, `-` or `/`). That works fine when you start out, but the tag space drifts over time (case variants, near-synonyms, one-off typos).
 
 To lock the taxonomy down, create `Knowledge/Tag Taxonomy.md`. The script reads it as the canonical allowlist whenever the file exists:
 

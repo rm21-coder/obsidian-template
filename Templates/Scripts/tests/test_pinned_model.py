@@ -118,8 +118,41 @@ def test_the_override_is_explicit_and_logged(fake_hub) -> None:
 
 def test_an_operator_named_directory_is_used_as_is(tmp_path, fake_hub) -> None:
     d = tmp_path / "my-model"; d.mkdir()
-    assert pm.fetch(str(d), allow_patterns=["*"], log=lambda m: None) == d
+    assert pm.fetch(str(d), allow_patterns=["*"], allow_local_dir=True,
+                    log=lambda m: None) == d
     assert fake_hub == []
+
+
+# --- finding 5277573: pins before local directories ---------------------------
+
+def test_a_local_directory_needs_the_explicit_flag(tmp_path, fake_hub) -> None:
+    d = tmp_path / "my-model"; d.mkdir()
+    with pytest.raises(pm.UnpinnedModel, match="is not a pinned model"):
+        pm.fetch(str(d), allow_patterns=["*"], log=lambda m: None)
+    assert fake_hub == []
+
+
+def test_a_cwd_directory_named_like_a_pinned_repo_is_not_loaded(
+        tmp_path, monkeypatch, fake_hub) -> None:
+    _pin_dir(tmp_path, monkeypatch)
+    planted = tmp_path / "cwd" / REPO
+    planted.mkdir(parents=True)
+    monkeypatch.chdir(tmp_path / "cwd")
+    out = pm.fetch(REPO, allow_patterns=PATTERNS, allow_local_dir=True,
+                   log=lambda m: None)
+    assert out == tmp_path / "snap"                     # the verified download
+    assert fake_hub and fake_hub[0]["revision"] == "a" * 40
+
+
+def test_a_bare_relative_directory_is_a_repo_id_even_with_the_flag(
+        tmp_path, monkeypatch, fake_hub) -> None:
+    (tmp_path / "someone" / "whisper-x").mkdir(parents=True)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(pm.UnpinnedModel):
+        pm.fetch("someone/whisper-x", allow_patterns=["*"], allow_local_dir=True,
+                 log=lambda m: None)
+    assert pm.fetch("./someone/whisper-x", allow_patterns=["*"], allow_local_dir=True,
+                    log=lambda m: None) == Path("./someone/whisper-x")
 
 
 # --- the real pin table ------------------------------------------------------

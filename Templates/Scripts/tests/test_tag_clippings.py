@@ -59,9 +59,9 @@ def test_collect_all_tags_survives_a_deeply_nested_note(tagger, tmp_path):
     """The fallback path (no Tag Taxonomy.md) had no handler: one bad note
     stopped the tagger on every run."""
     vault = tmp_path / "vault"
-    (vault / "Clippings").mkdir(parents=True)
-    (vault / "Clippings" / "converted.md").write_text(DEEP, encoding="utf-8")
-    (vault / "Clippings" / "fine.md").write_text(ORDINARY, encoding="utf-8")
+    (vault / "Notes").mkdir(parents=True)
+    (vault / "Notes" / "converted.md").write_text(DEEP, encoding="utf-8")
+    (vault / "Notes" / "fine.md").write_text(ORDINARY, encoding="utf-8")
 
     assert tagger.collect_all_tags(vault) == ["AI", "Strategy"]
 
@@ -137,9 +137,9 @@ def test_collect_all_tags_does_not_expand_aliases(tagger, tmp_path):
         lines.append(f"l{i}: &l{i} {{{refs}}}")
     doc = "---\ntitle: x\n" + "\n".join(lines) + "\ntags: [*l3]\n---\nbody\n"
     vault = tmp_path / "vault"
-    (vault / "Clippings").mkdir(parents=True)
-    (vault / "Clippings" / "laughs.md").write_text(doc, encoding="utf-8")
-    (vault / "Clippings" / "fine.md").write_text(ORDINARY, encoding="utf-8")
+    (vault / "Notes").mkdir(parents=True)
+    (vault / "Notes" / "laughs.md").write_text(doc, encoding="utf-8")
+    (vault / "Notes" / "fine.md").write_text(ORDINARY, encoding="utf-8")
 
     assert tagger.collect_all_tags(vault) == ["AI", "Strategy"]
 
@@ -266,3 +266,19 @@ def test_rag_clean_body_still_strips_images_links_and_urls(rag_tagger):
     body = ("See ![chart](https://img.example/c.png) and [the plan](https://x.example/p) "
             "or https://y.example/q for more.")
     assert rag_tagger.clean_body(body).split() == ["See", "and", "or", "for", "more."]
+
+
+def test_fallback_taxonomy_takes_only_canonical_tags_and_skips_clippings(tagger, tmp_path):
+    """Finding 5268568 (Mythos review 2026-10-20): the vault-scan fallback is
+    the allowlist on a fresh install; it took any string from any folder."""
+    vault = tmp_path / "vault"
+    (vault / "Notes").mkdir(parents=True)
+    (vault / "Clippings" / "Sub").mkdir(parents=True)
+    (vault / "Notes" / "mine.md").write_text(
+        "---\ntags:\n  - Strategy\n  - \"<img src=x>\"\n  - \"two words\"\n"
+        "  - 9Lives\n  - AI/LLM\n---\nbody\n", encoding="utf-8")
+    (vault / "Clippings" / "page.md").write_text(
+        "---\ntags:\n  - PlantedByAuthor\n---\nbody\n", encoding="utf-8")
+    (vault / "Clippings" / "Sub" / "deep.md").write_text(
+        "---\ntags:\n  - AlsoPlanted\n---\nbody\n", encoding="utf-8")
+    assert tagger.collect_all_tags(vault) == ["AI/LLM", "Strategy"]

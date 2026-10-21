@@ -12,11 +12,18 @@ go to the log file and nowhere else. The direct path needs no module: Windows
 PowerShell 5.1 (which security_common.py launches by absolute path) can load
 the WinRT notification types itself. A failure to show the toast is logged,
 never thrown -- the caller treats notification as best effort.
+
+security_common.py passes the text in OBSIDIAN_NOTIFY_TITLE and
+OBSIDIAN_NOTIFY_MESSAGE rather than as -Title/-Message: powershell.exe -File
+re-parses its command line, so quotes inside a message could split it into
+extra arguments. The parameters remain for running the script by hand.
 #>
 param(
-    [Parameter(Mandatory)] [string]$Title,
-    [Parameter(Mandatory)] [string]$Message
+    [string]$Title = $env:OBSIDIAN_NOTIFY_TITLE,
+    [string]$Message = $env:OBSIDIAN_NOTIFY_MESSAGE
 )
+if (-not $Title) { $Title = 'Obsidian automation' }
+if ($null -eq $Message) { $Message = '' }
 $logDir = Join-Path $env:LOCALAPPDATA 'obsidian-automation\logs'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir 'notifications.log'

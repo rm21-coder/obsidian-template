@@ -35,11 +35,17 @@ from pathlib import Path
 
 VAULT = Path(os.path.expanduser("~/Obsidian"))
 MEETINGS = VAULT / "Meetings"
-# Clippings/ is excluded because nothing in it is the user's own follow-up:
-# converted documents (markitdown), podcast transcripts and caption summaries
-# all land there, so a `- [ ] [[Person]]` line in it was written by an
-# outsider. The morning dashboard's to-do scan excludes it for the same reason.
-EXCLUDE_DIRS = {".obsidian", ".trash", "Clippings", "Z_archive", "Z_attachments"}
+# Clippings/ and Creations/ are excluded because what lands there is mostly
+# outside text, not the user's own follow-ups: web clippings, YouTube caption
+# summaries and markitdown_convert.py output go to Clippings/; documents
+# converted by the Markitdown Dropper, cleaned voice notes and the RAG sync's
+# run reports go to Creations/. A `- [ ] [[Person]]` line in a converted
+# document was written by its author, not the user (finding 5278118:
+# Creations/ was missing). The morning dashboard's to-do scan is a different
+# rule -- it needs a `#task` tag and excludes only .obsidian, .trash and
+# Templates.
+EXCLUDE_DIRS = {".obsidian", ".trash", "Clippings", "Creations", "Z_archive",
+                "Z_attachments"}
 
 BEGIN_MARK = "<!-- BEGIN: AUTO-INSERTED OPEN FOLLOW-UPS -->"
 END_MARK = "<!-- END: AUTO-INSERTED OPEN FOLLOW-UPS -->"

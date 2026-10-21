@@ -79,6 +79,12 @@ Creations/RAG-Sync-YYYY-MM-DD_HHMMSS.md — scan counts, the new/modified/
 deleted/deindexed diff, warnings, and any failures. Report filenames use
 REPORT_FILENAME_PREFIX, which is also in EXCLUDE_FILENAME_PREFIXES so a
 report never gets indexed back into its own collection on the next run.
+A report carries `classification:` -- the highest tier among the paths it
+lists, `restricted` for a listed path of unknown tier -- because the list of
+deindexed notes is itself an index of the vault's most sensitive ones.
+
+One run at a time: a second, overlapping run (a dashboard "sync now" during
+the nightly job) finds the script_lock held, logs it and exits 0.
 
 ------------------------------------------------------------
 CONFIGURATION
@@ -122,6 +128,7 @@ import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import classification_tier  # noqa: E402
+import script_lock  # noqa: E402
 import templater_guard  # noqa: E402
 
 try:
@@ -620,6 +627,35 @@ def _fmt_error_list(items: list, limit: int = REPORT_LIST_LIMIT) -> str:
     return out
 
 
+# Every summary key whose paths the report prints. A file name is itself
+# disclosure: the report inherits the highest tier among the paths it lists.
+_REPORT_PATH_KEYS = (
+    "added_paths", "updated_paths", "deleted_fs_paths", "deindexed_by_class_paths",
+    "purge_retried_paths", "new_quarantine_entries", "new_dry_run",
+    "modified_dry_run", "deleted_fs_dry_run", "deindexed_by_class_dry_run",
+    "quarantined_skip_dry_run", "update_failures", "add_failures", "purge_failures",
+)
+REPORT_TIER_FLOOR = "internal-use-only"
+
+
+def report_tier(summary: dict) -> str:
+    """The highest tier among the paths the report lists (finding 5278612),
+    as classify_notes does for its review report. A listed path whose tier is
+    unknown or unrecognised counts as restricted: fail closed."""
+    tiers = summary.get("path_tiers") or {}
+    rank = classification_tier.TIER_RANK
+    best = REPORT_TIER_FLOOR
+    for key in _REPORT_PATH_KEYS:
+        for item in summary.get(key) or []:
+            path = item[0] if isinstance(item, (tuple, list)) else item
+            tier = str(tiers.get(str(path), "")).strip().lower()
+            if tier not in rank:
+                return "restricted"
+            if rank[tier] > rank[best]:
+                best = tier
+    return best
+
+
 def write_run_report(start_time: datetime, summary: dict, dry_run: bool) -> Path | None:
     """Write a per-run human-readable status report into the vault.
 
@@ -655,6 +691,7 @@ def write_run_report(start_time: datetime, summary: dict, dry_run: bool) -> Path
         lines.append("---")
         lines.append(f"title: RAG Sync Report — {ts_human}")
         lines.append(f"date: {ts_human}")
+        lines.append(f"classification: {report_tier(summary)}")
         lines.append("tags:")
         lines.append("  - rag-sync")
         lines.append("  - system-log")
@@ -829,6 +866,14 @@ def main() -> int:
         "reset_quarantine_count": 0,
     }
 
+    # One sync at a time (finding 5268413). Two overlapping runs -- the
+    # nightly job and a dashboard "sync now", say -- each read the same state,
+    # each pushed, and the later save dropped the other's file_ids, leaving
+    # copies in the collection that no state entry pointed at and no deindex
+    # would ever purge. Held until the process exits; a second run logs and
+    # exits 0 (the guard doing its job, not a failed sync).
+    _lock = script_lock.acquire_or_exit("obsidian-rag-sync", warn=log.warning)  # noqa: F841
+
     state = load_state()
     if args.reset_quarantine:
         n = len(state.get("quarantine", {}))
@@ -848,6 +893,19 @@ def main() -> int:
     previous_count = len(previous)
 
     all_files, excluded_by_class = scan_vault()
+    # Every path's tier, for the run report's own classification: taken
+    # before any removal pops a path out of `previous`.
+    path_tiers: dict[str, str] = {}
+    for entry in pending_purge.values():
+        if isinstance(entry, dict) and entry.get("path") and entry.get("classification"):
+            path_tiers[str(entry["path"])] = str(entry["classification"])
+    for p_, entry in previous.items():
+        if isinstance(entry, dict) and entry.get("classification"):
+            path_tiers[p_] = str(entry["classification"])
+    for p_, d_ in all_files.items():
+        path_tiers[p_] = d_.get("classification") or "internal-use-only"
+    path_tiers.update(excluded_by_class)
+    summary["path_tiers"] = path_tiers
     indexable = {p: d for p, d in all_files.items() if d["indexable"]}
     log.info(
         f"scanned {len(all_files) + len(excluded_by_class)} markdown files "
@@ -1004,6 +1062,9 @@ def main() -> int:
             "first_failed": prior.get("first_failed", datetime.now().isoformat()),
             "last_attempt": datetime.now().isoformat(),
             "last_error": detail[:200],
+            # So a later run's report can still state its tier once the
+            # note itself is gone.
+            "classification": prior.get("classification") or path_tiers.get(path, ""),
         }
         errors += 1
         summary["purge_failures"].append((path, detail[:200]))

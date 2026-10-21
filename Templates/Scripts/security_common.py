@@ -277,6 +277,15 @@ ICACLS_EXE = str(_SYSTEM32 / "icacls.exe")
 OSASCRIPT_BIN = "/usr/bin/osascript"
 
 
+NOTIFY_TITLE_ENV = "OBSIDIAN_NOTIFY_TITLE"
+NOTIFY_MESSAGE_ENV = "OBSIDIAN_NOTIFY_MESSAGE"
+
+
+def _env_safe(text, limit: int) -> str:
+    """One environment value: no NUL (which ends it), bounded length."""
+    return str(text).replace("\x00", "")[:limit]
+
+
 def notify(title: str, message: str) -> None:
     """Best-effort desktop notification. Never raises."""
     try:
@@ -290,10 +299,19 @@ def notify(title: str, message: str) -> None:
         elif sys.platform == "win32":
             ps1 = Path(__file__).resolve().parent / "windows" / "Send-Notification.ps1"
             if ps1.exists():
+                # Title and message go in the environment, not argv (finding
+                # 5278108). Windows PowerShell 5.1 re-splits a -File
+                # command line by its own quoting rules, so a message
+                # carrying quotes -- from a note name or a log line -- could
+                # end the -Message argument early and bind the rest as
+                # further parameters. An environment value arrives whole.
+                env = dict(os.environ)
+                env[NOTIFY_TITLE_ENV] = _env_safe(title, 256)
+                env[NOTIFY_MESSAGE_ENV] = _env_safe(message, 4000)
                 subprocess.run(
                     [POWERSHELL_EXE, "-NoProfile", "-NonInteractive",
-                     "-ExecutionPolicy", "Bypass", "-File", str(ps1),
-                     "-Title", title, "-Message", message],
+                     "-ExecutionPolicy", "Bypass", "-File", str(ps1)],
+                    env=env,
                     check=False, capture_output=True, timeout=15,
                     # No console window: from a dashboard click (pythonw, no
                     # console to inherit) each toast flashed two PowerShell

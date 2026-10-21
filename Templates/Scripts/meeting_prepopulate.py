@@ -143,8 +143,13 @@ VIDEO_PATTERNS = [
 EMAIL_RE = re.compile(r'\b[\w.+-]+@[\w-]+\.[\w.-]+\b')
 
 # Cleanliness regexes for name normalization (Pre-Pop Spec §8.2)
-PAREN_STRIP_RE = re.compile(r'\s*\([^)]*\)\s*')
-EMBEDDED_EMAIL_STRIP_RE = re.compile(r'\s*<[^>]*@[^>]*>\s*')
+# No surrounding \s*: _strip_clean collapses whitespace afterwards anyway,
+# and a leading \s* made both patterns quadratic on a run of spaces (4.5 s
+# at 50k). The email pattern excludes '<' and '@' from its first class so a
+# failed attempt stays local: '<[^>]*@[^>]*>' was cubic on "<@" repeated
+# (finding 5278624, >30 s at 20k). An address cannot contain '<' or '>'.
+PAREN_STRIP_RE = re.compile(r'\([^)]*\)')
+EMBEDDED_EMAIL_STRIP_RE = re.compile(r'<[^<>@]*@[^<>]*>')
 CREDENTIAL_SUFFIX_RE = re.compile(
     r',\s*(MD|PhD|Ph\.D\.|MBA|RN|MPH|DO|DDS|JD|EdD|MS|MA)'
     r'(\s+(MD|PhD|Ph\.D\.|MBA|RN|MPH|DO|DDS|JD|EdD|MS|MA))*\s*$',
@@ -447,7 +452,11 @@ def classify(m: dict, user_email: str, groups_idx: 'GroupsIndex',
 
 def _strip_clean(s: str) -> str:
     s = EMBEDDED_EMAIL_STRIP_RE.sub(' ', s)
-    s = PAREN_STRIP_RE.sub(' ', s)
+    # Only up to the last ')': a '(' with no ')' after it can never match,
+    # and each one used to rescan to the end of the string (quadratic).
+    last = s.rfind(')')
+    if last >= 0:
+        s = PAREN_STRIP_RE.sub(' ', s[:last + 1]) + s[last + 1:]
     s = CREDENTIAL_SUFFIX_RE.sub('', s)
     s = s.replace("'", '').replace('"', '')
     s = re.sub(r'\s+', ' ', s).strip()
@@ -705,6 +714,7 @@ class PeopleIndex:
         if PEOPLE_UNRESOLVED_DIR.is_dir():
             candidate_paths.extend(PEOPLE_UNRESOLVED_DIR.glob('*.md'))
         n_aliases = 0
+        n_unverified = 0
         for p in candidate_paths:
             try:
                 text = p.read_text(encoding='utf-8', errors='replace')
@@ -717,12 +727,16 @@ class PeopleIndex:
             fm = '\n'.join(fm_lines)
 
             empties: set[str] = set()
+            vm = _fm_field_re(EMAIL_UNVERIFIED_KEY).search(fm)
+            unverified = bool(vm) and vm.group(1).strip().strip('"\'').lower() == 'false'
+            if unverified:
+                n_unverified += 1
             for key in PEOPLE_EMAIL_FIELDS:
                 m = _fm_field_re(key).search(fm)
                 if not m:
                     continue
                 val = m.group(1).strip()
-                if val:
+                if val and not unverified:
                     self.email_to_stem[val.lower()] = stem
                 elif key in BACKFILL_EMAIL_FIELDS:
                     empties.add(key)
@@ -752,12 +766,14 @@ class PeopleIndex:
                 self.name_to_stem[normalize_name_for_match(pref)] = stem
 
         log.info('PeopleIndex: %d files, %d email keys, %d name keys '
-                 '(%d from aliases), %d files with empty email fields',
+                 '(%d from aliases), %d files with empty email fields, '
+                 '%d unverified stub(s) not email-indexed',
                  len(candidate_paths),
                  len(self.email_to_stem),
                  len(self.name_to_stem),
                  n_aliases,
-                 len(self.stem_to_emptyfields))
+                 len(self.stem_to_emptyfields),
+                 n_unverified)
         self._loaded = True
 
     @staticmethod
@@ -1057,6 +1073,58 @@ def _email_domain(value: str) -> str:
     return v.rsplit('@', 1)[1] if '@' in v else ''
 
 
+def _ascii_letters(s: str) -> str:
+    """Lower-case ASCII letters only, accents folded (Jos\u00e9 -> jose)."""
+    import unicodedata
+    folded = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode()
+    return re.sub(r'[^a-z]', '', folded.lower())
+
+
+def local_part_matches_name(stem: str, email: str) -> bool:
+    """Does the address's local part plausibly belong to the person `stem`
+    names? Conservative on purpose (finding 5278620): organic backfill binds
+    an address to a note found by NAME, so a vouched domain alone let any
+    mailbox there -- a shared one, a colleague's -- be written onto whoever
+    the invite's display name matched.
+
+    The rule: the local part, letters only and without a +tag, must contain
+    the surname -- or a prefix of it at least five letters long, since
+    directories truncate (smith, jsmith, john.smith, smithj, jsmit2) -- and
+    whatever letters are left over must be empty, the first name, or begin
+    or end with the first initial. A local part that is exactly the first
+    name (pat@, as small organisations do) also matches. `stem` is "Last,
+    First" or "First Last";
+    a trailing collision number (" 2") is ignored. A one-word stem matches
+    only when the local part is that word. Anything else is skipped and
+    logged; the field stays empty for the user to fill.
+    """
+    local = email.strip().lower().rsplit('@', 1)[0].split('+', 1)[0]
+    letters = _ascii_letters(local)
+    name = re.sub(r'\s+\d+$', '', stem).strip()
+    if ',' in name:
+        last_raw, first_raw = name.split(',', 1)
+    else:
+        words = name.split()
+        if len(words) < 2:
+            return bool(letters) and letters == _ascii_letters(name)
+        first_raw, last_raw = words[0], words[-1]
+    first = _ascii_letters(first_raw.split()[0] if first_raw.split() else '')
+    last_words = [_ascii_letters(w) for w in re.split(r'[\s-]+', last_raw)]
+    candidates = {_ascii_letters(last_raw)} | {w for w in last_words if len(w) >= 3}
+    if len(first) >= 2 and letters == first:
+        return True
+    for last in sorted((c for c in candidates if len(c) >= 2), key=len, reverse=True):
+        for n in range(len(last), min(len(last), 5) - 1, -1):
+            idx = letters.find(last[:n])
+            if idx < 0:
+                continue
+            rest = letters[:idx] + letters[idx + n:]
+            if not rest or (first and (rest == first or rest[0] == first[0]
+                                       or rest[-1] == first[0])):
+                return True
+    return False
+
+
 def organic_email_backfill(stem: str, email: str, dry_run: bool,
                            is_personal: bool,
                            org_domains: frozenset[str] = frozenset()) -> bool:
@@ -1070,7 +1138,9 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
     never when it is a shared free-mail domain (PERSONAL_DOMAINS);
     otherwise "Pat Quinn <pat@attacker.example>" would plant the attacker's
     address on the real Pat Quinn, and every later invite from it would
-    email-match to that note."""
+    email-match to that note. And the local part must plausibly be this
+    person's (local_part_matches_name): a vouched domain alone let
+    "Pat Quinn <frontdesk@org.example>" bind the front desk to Pat."""
     target_field = 'Email-Personal' if is_personal else 'Email-Work'
     path = PEOPLE_DIR / f'{stem}.md'
     if not path.exists():
@@ -1105,6 +1175,10 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
                  'mail, or neither an org domain nor already on the note',
                  target_field, stem, domain)
         return False
+    if not local_part_matches_name(stem, email):
+        log.info('  organic-backfill SKIPPED %s on %s.md: the address\'s '
+                 'local part does not match the name', target_field, stem)
+        return False
     new_line = f'{target_field}: {email}'
     new_text = (text[:fm_match.start()] + new_line +
                 text[fm_match.end():])
@@ -1115,8 +1189,23 @@ def organic_email_backfill(stem: str, email: str, dry_run: bool,
     return True
 
 
+# A stub whose address the user's organisation does not vouch for (shared
+# free mail, or a domain outside org_domains) carries this line. PeopleIndex
+# does not index the address of a note carrying it, so an outsider's invite
+# cannot make its address resolve to a person by email (finding 5277579);
+# the note still matches by name. Promote the stub by deleting the line (or
+# setting it true) once the address is known to be that person's.
+EMAIL_UNVERIFIED_KEY = 'email_verified'
+
+
+def stub_email_verified(email: str, org_domains: frozenset) -> bool:
+    domain = _email_domain(email or '')
+    return bool(domain) and domain in org_domains and domain not in PERSONAL_DOMAINS
+
+
 def render_people_stub(canonical: str, contact: dict, attendee_display: str,
-                       source_subsource: str, now_iso: str) -> str:
+                       source_subsource: str, now_iso: str,
+                       email_verified: bool = True) -> str:
     """Render the People stub markdown per Pre-Pop Spec §8.4."""
     email = (contact.get('email') or '').strip()
     is_personal = email.split('@', 1)[1].lower() in PERSONAL_DOMAINS \
@@ -1137,6 +1226,8 @@ def render_people_stub(canonical: str, contact: dict, attendee_display: str,
     aliases_set = [a for a in aliases_set if a and a != canonical]
 
     aliases_yaml = '\n'.join(f'  - {_yaml_quoted(a)}' for a in aliases_set)
+    unverified_line = ('' if email_verified or not email
+                       else f'{EMAIL_UNVERIFIED_KEY}: false\n')
 
     fm = f'''---
 categories:
@@ -1158,7 +1249,7 @@ updated: {now_iso}
 status: stub
 source: meeting-prepopulate
 source_subsource: {_yaml_scalar(source_subsource)}
----
+{unverified_line}---
 
 
 ## Photo
@@ -1298,8 +1389,10 @@ def resolve_or_create_person(attendee: dict, contact_by_email: dict,
         counters['stub-refused-unsafe-path'] += 1
         return None, 'refused-unsafe-path'
 
+    email_ok = stub_email_verified(email, people_idx.org_domains)
     content = render_people_stub(
-        canonical, contact, display or '', name_source, now_iso)
+        canonical, contact, display or '', name_source, now_iso,
+        email_verified=email_ok)
     rel = 'People/_Unresolved' if is_low_confidence else 'People'
     log.info('  CREATE-STUB %s/%s.md  (source=%s)', rel, stem, name_source)
     if not dry_run:
@@ -1315,8 +1408,10 @@ def resolve_or_create_person(attendee: dict, contact_by_email: dict,
             return None, 'stub-write-failed'
     # Always update in-memory index so subsequent attendees in the same
     # run don't re-create the same stub (matters in dry-run especially).
-    if email:
+    if email and email_ok:
         people_idx.email_to_stem[email] = stem
+    elif email:
+        counters['stub-email-unverified'] += 1
     people_idx.name_to_stem[normalize_name_for_match(canonical)] = stem
 
     if is_low_confidence:

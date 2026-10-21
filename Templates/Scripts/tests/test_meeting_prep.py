@@ -66,9 +66,11 @@ def test_quoted_end_marker_is_defused_and_refresh_leaves_no_fragment(vault):
     assert text.rstrip().endswith("- my own agenda line")
 
 
-def test_clippings_is_not_a_follow_up_source(vault):
+@pytest.mark.parametrize("folder", ["Clippings", "Creations"])   # Creations: 5278118
+def test_clippings_is_not_a_follow_up_source(vault, folder):
     root, note = vault
-    (root / "Clippings" / "Converted deck.md").write_text(
+    (root / folder).mkdir(exist_ok=True)
+    (root / folder / "Converted deck.md").write_text(
         f"- [ ] [[{PERSON}]] outsider-planted follow-up\n", encoding="utf-8")
     (root / "Notes" / "Mine.md").write_text(
         f"- [ ] [[{PERSON}]] send the budget draft\n", encoding="utf-8")

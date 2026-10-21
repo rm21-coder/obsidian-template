@@ -222,3 +222,98 @@ def test_free_mail_domain_passed_as_org_domain_is_still_refused(people, caplog):
     assert changed is False
     assert note.read_text(encoding="utf-8") == before
     assert "organic-backfill SKIPPED Email-Personal on Quinn, Pat.md" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Mythos review 2026-10-20: 5278620 (local part must match the name),
+# 5277579 (outsider stubs do not feed the email index), 5278624 (ReDoS).
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("stem,email", [
+    ("Quinn, Pat", "pat.quinn@example.edu"),
+    ("Quinn, Pat", "pquinn@example.edu"),
+    ("Quinn, Pat", "quinnp+cal@example.edu"),
+    ("Quinn, Pat", "pat@example.edu"),
+    ("Quinn, Pat", "QUINN@example.edu"),
+    ("Hartwellson, Rae", "rhartwe2@example.edu"),      # truncated surname
+    ("José García-López", "jgarcia@example.edu"),
+    ("Doe, Jo 2", "jdoe@example.edu"),                # collision suffix
+])
+def test_local_part_matches_name_accepts(stem: str, email: str):
+    assert mp.local_part_matches_name(stem, email)
+
+
+@pytest.mark.parametrize("stem,email", [
+    ("Quinn, Pat", "frontdesk@example.edu"),
+    ("Quinn, Pat", "bob.jones@example.edu"),
+    ("Quinn, Pat", "xquinnz@example.edu"),
+    ("Quinn, Pat", "quin@example.edu"),                # 4-letter prefix only
+    ("Quinn, Pat", "@example.edu"),
+    ("Prince", "info@example.edu"),
+])
+def test_local_part_matches_name_rejects(stem: str, email: str):
+    assert not mp.local_part_matches_name(stem, email)
+
+
+def test_backfill_skips_an_org_address_that_is_not_the_person(people, caplog):
+    note = _note(people)
+    with caplog.at_level(logging.INFO, logger=mp.log.name):
+        stem, status, counters = _resolve("frontdesk@example.edu",
+                                          frozenset({"example.edu"}))
+    assert (stem, status) == ("Quinn, Pat", "name-match")
+    assert counters["organic-email-backfill"] == 0
+    assert "frontdesk" not in note.read_text(encoding="utf-8")
+    assert "local part does not match the name" in caplog.text
+
+
+def _new_stub(people: Path, email: str, org: frozenset):
+    idx = mp.PeopleIndex()
+    idx.load()
+    idx.org_domains = org
+    counters: Counter = Counter()
+    stem, _ = mp.resolve_or_create_person(
+        {"display_name": "Lee Park", "email": email},
+        {email: {"email": email, "display_name": "Lee Park"}}, idx, NOW,
+        dry_run=False, counters=counters)
+    return stem, people / f"{stem}.md", counters
+
+
+@pytest.mark.parametrize("email", ["lee@attacker.example", "lee.park@gmail.com"])
+def test_outsider_stub_is_marked_and_not_email_indexed(people, email: str):
+    stem, path, counters = _new_stub(people, email, frozenset({"example.edu"}))
+    text = path.read_text(encoding="utf-8")
+    assert "\nemail_verified: false\n" in text
+    assert counters["stub-email-unverified"] == 1
+    idx = mp.PeopleIndex()
+    idx.load()
+    assert idx.lookup_by_email(email) is None          # not resolvable by address
+    assert idx.lookup_by_name("Lee Park") == stem       # still by name
+    # Promotion: delete the marker and the address resolves.
+    path.write_text(text.replace("email_verified: false\n", ""), encoding="utf-8")
+    idx = mp.PeopleIndex()
+    idx.load()
+    assert idx.lookup_by_email(email) == stem
+
+
+def test_org_domain_stub_is_indexed_and_unmarked(people):
+    stem, path, counters = _new_stub(people, "lpark@example.edu",
+                                     frozenset({"example.edu"}))
+    assert "email_verified" not in path.read_text(encoding="utf-8")
+    assert counters["stub-email-unverified"] == 0
+    idx = mp.PeopleIndex()
+    idx.load()
+    assert idx.lookup_by_email("lpark@example.edu") == stem
+
+
+@pytest.mark.parametrize("pump", ["<@" * 25000, "<" + "@" * 50000,
+                                  " " * 50000 + "x", ")" + "(" * 50000,
+                                  "(" * 50000])
+def test_name_cleanup_is_linear(pump: str):
+    import time
+    t = time.perf_counter()
+    mp._strip_clean(pump)
+    assert time.perf_counter() - t < 1.0
+
+
+def test_name_cleanup_still_strips_addresses_and_parens():
+    assert mp._strip_clean("Pat Quinn <pat@x.example> (Guest), MD") == "Pat Quinn"

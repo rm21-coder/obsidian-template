@@ -41,3 +41,12 @@ def test_a_toast_that_cannot_be_shown_is_recorded_not_thrown() -> None:
     catch = SRC[SRC.index("} catch {"):]
     assert "toast not shown: " in catch
     assert "throw" not in catch
+
+
+def test_the_text_is_read_from_the_environment_by_default() -> None:
+    """Finding 5278108: security_common passes the text in the environment,
+    not as -Title/-Message arguments that powershell.exe -File re-splits."""
+    params = SRC[SRC.index("param("):SRC.index(")", SRC.index("param("))]
+    assert "[string]$Title = $env:OBSIDIAN_NOTIFY_TITLE" in params
+    assert "[string]$Message = $env:OBSIDIAN_NOTIFY_MESSAGE" in params
+    assert "Mandatory" not in params

@@ -155,11 +155,14 @@ so it cannot quietly rot:
 python3 Templates/Scripts/seed_demo_content.py --remove
 ```
 
-Safe to run in a vault containing your own notes. A file is deleted only if it
+Safe to run in a vault containing your own notes. A file is removed only if it
 carries a `demo_seed:` marker in its frontmatter **and** sits inside a known
 content folder. A note of your own in `Meetings/` has no marker and is never a
 candidate; a marked file outside the content folders is out of scope. Add
-`--dry-run` to see the list first.
+`--dry-run` to see the list first. Removed files are moved, not deleted, into
+one `.trash/demo-seed-<timestamp>/` folder in the vault (Obsidian's own trash),
+keeping their folder layout, so a note that carried the marker by mistake can
+be moved back. Empty that folder when you are sure.
 
 It also recognizes the `demo_seed: static` marker used by the earlier
 two-layer version of this script, so upgrading and running `--remove` still

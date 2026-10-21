@@ -96,10 +96,12 @@ def test_tagger_skips_an_oversize_clipping(monkeypatch: pytest.MonkeyPatch,
 def test_tagger_taxonomy_fallback_skips_an_oversize_note(monkeypatch, tmp_path):
     tagger = _import_tagger("tag_clippings", monkeypatch, tmp_path)
     vault = tmp_path / "vault"
-    (vault / "Clippings").mkdir(parents=True)
-    (vault / "Clippings" / "fine.md").write_text(
+    # Notes/, not Clippings/: the fallback no longer reads Clippings at all
+    # (finding 5268568).
+    (vault / "Notes").mkdir(parents=True)
+    (vault / "Notes" / "fine.md").write_text(
         "---\ntags:\n  - AI\n---\nbody\n", encoding="utf-8")
-    _oversize(vault / "Clippings" / "huge.md", "---\ntags:\n  - Big\n---\n")
+    _oversize(vault / "Notes" / "huge.md", "---\ntags:\n  - Big\n---\n")
     assert tagger.collect_all_tags(vault) == ["AI"]
 
 

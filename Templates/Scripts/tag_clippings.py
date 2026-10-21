@@ -213,6 +213,15 @@ def rebuild_file(frontmatter: dict, body: str) -> str:
 
 # ─── Tag Taxonomy Collection ────────────────────────────────────────────────
 
+# The one shape a tag may take, in the canonical taxonomy and in the
+# vault-scan fallback alike.
+TAG_SHAPE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_/\-]*")
+# Folders whose notes' tags the fallback does not learn from: their text,
+# frontmatter included, was written by outsiders (web clippings, caption
+# summaries, converted documents).
+FALLBACK_SKIP_FOLDERS = ("Clippings",)
+
+
 def load_canonical_taxonomy(taxonomy_file: Path) -> list[str] | None:
     """Load tags from the canonical taxonomy file. This is the HARD ALLOWLIST.
 
@@ -232,18 +241,26 @@ def load_canonical_taxonomy(taxonomy_file: Path) -> list[str] | None:
         if in_filtered_section:
             continue
         # Bullet list items: "- tag"
-        m = re.match(r"^-\s+([A-Za-z][A-Za-z0-9_/\-]*)\s*$", stripped)
-        if m:
+        m = re.match(r"^-\s+(\S+)\s*$", stripped)
+        if m and TAG_SHAPE_RE.fullmatch(m.group(1)):
             tags.add(m.group(1))
     return sorted(tags)
 
 
 def collect_all_tags(vault_root: Path) -> list[str]:
-    """Fallback: walk the vault and collect tags. Used only if taxonomy file is missing."""
+    """Fallback: walk the vault and collect tags. Used only if taxonomy file is missing.
+
+    This becomes the allowlist the model's suggestions are checked against,
+    and the default on a fresh install, so it takes only tags of the
+    canonical shape (TAG_SHAPE_RE), and none from Clippings/: a clipped page's
+    frontmatter could otherwise seed the allowlist with whatever its author
+    wrote (finding 5268568)."""
     tags = set()
     for md_file in vault_root.rglob("*.md"):
         parts = md_file.relative_to(vault_root).parts
         if any(p.startswith(".") for p in parts):
+            continue
+        if parts and parts[0] in FALLBACK_SKIP_FOLDERS:
             continue
         try:
             text = classification_tier.read_note(md_file)
@@ -255,7 +272,8 @@ def collect_all_tags(vault_root: Path) -> list[str]:
                 tag_str = str(tag).strip().strip('"').strip("'").lstrip("#")
                 if tag_str.startswith("[[") or tag_str.startswith("Categories/"):
                     continue
-                if tag_str and tag_str not in IGNORE_TAGS:
+                if (tag_str and tag_str not in IGNORE_TAGS
+                        and TAG_SHAPE_RE.fullmatch(tag_str)):
                     tags.add(tag_str)
     tags.discard(BASE_TAG)
     return sorted(tags)

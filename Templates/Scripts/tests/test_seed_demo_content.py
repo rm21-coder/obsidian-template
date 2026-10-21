@@ -451,3 +451,18 @@ def test_age_tasks_ignores_untagged_checkboxes(seeded):
     out = mod.age_tasks(body, ANCHOR - dt.timedelta(days=30), ANCHOR)
     assert "- [ ] grocery list item" in out
     assert "- [x] #task real work" in out
+
+
+def test_remove_moves_to_the_vault_trash_instead_of_deleting(seeded):
+    """Finding 5268563 (Mythos review 2026-10-20): a note of the user's that
+    carried the marker by mistake is recoverable, not unlinked."""
+    mod, vault = seeded
+    mod.seed(ANCHOR, dry_run=False)
+    before = sorted(p.relative_to(vault) for p, _ in mod.seeded_files())
+    assert before
+    mod.remove(dry_run=False)
+    assert mod.seeded_files() == []
+    bins = list((vault / ".trash").glob("demo-seed-*"))
+    assert len(bins) == 1
+    kept = sorted(p.relative_to(bins[0]) for p in bins[0].rglob("*.md"))
+    assert kept == before
