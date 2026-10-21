@@ -15,7 +15,8 @@ What's covered
      - integrity_monitor.py defines `scan_state_dir` and excludes
        integrity_state.json from that scan (chicken-and-egg comment).
 3. plistlib parses every security-control plist in Templates/Scripts/.
-4. integrity plist WatchPaths array covers the three expected targets.
+4. integrity plist WatchPaths array covers the expected targets
+   (LaunchAgents, Templates/Scripts, Templates/QuickAdd).
 5. run_tests.sh has valid shell syntax (`bash -n`).
 
 These tests run in milliseconds and provide the first line of defense
@@ -247,6 +248,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 INTEGRITY_WATCHPATH_SUFFIXES = (
     "Library/LaunchAgents",
     "Obsidian/Templates/Scripts",
+    "Obsidian/Templates/QuickAdd",     # 5278614: QuickAdd user scripts
 )
 
 
@@ -349,6 +351,46 @@ class TestPlists:
         with (scripts_dir / "com.obsidian.security.integrity.plist").open("rb") as f:
             watch = plistlib.load(f)["WatchPaths"]
         assert "/Users/YOUR_USERNAME/Obsidian/Templates/Scripts" in watch
+
+    def test_quickadd_scripts_are_watched(self, scripts_dir: Path) -> None:
+        """5278614: Templates/QuickAdd/*.js run inside Obsidian and were
+        hashed only at the daily run; the watch reports an edit within 30s."""
+        with (scripts_dir / "com.obsidian.security.integrity.plist").open("rb") as f:
+            watch = plistlib.load(f)["WatchPaths"]
+        assert "/Users/YOUR_USERNAME/Obsidian/Templates/QuickAdd" in watch
+
+    def test_group_photos_runs_isolated_scripts_from_the_scripts_folder(
+            self, scripts_dir: Path) -> None:
+        """5278622: the job ran Z_attachments/*.py without -I, from a synced
+        attachments folder no integrity scope covers. The scripts now live in
+        Templates/Scripts (hashed and watched) and run under -I."""
+        with (scripts_dir / "com.obsidian.group-photos.plist").open("rb") as f:
+            args = plistlib.load(f)["ProgramArguments"]
+        assert args[:2] == ["/bin/sh", "-c"]
+        base = "/Users/YOUR_USERNAME/Obsidian/Templates/Scripts/"
+        assert args[2] == (f"/usr/bin/python3 -I {base}insert_group_placeholders.py && "
+                           f"/usr/bin/python3 -I {base}refresh_groups.py")
+        assert "Z_attachments" not in args[2]
+        for name in ("insert_group_placeholders.py", "refresh_groups.py"):
+            assert (scripts_dir / name).is_file()
+            assert not (REPO_ROOT / "Z_attachments" / name).exists()
+        runner = (scripts_dir / "run_group_photos.py").read_text(encoding="utf-8")
+        assert '[sys.executable, "-I", str(script)' in runner
+        assert "Z_attachments" not in runner.split('"""', 2)[2]
+        comp = (REPO_ROOT / "installers" / "components" / "51-group-photos.sh"
+                ).read_text(encoding="utf-8")
+        assert '"$VAULT/Templates/Scripts/$s"' in comp
+        assert "$VAULT/Z_attachments/$s" not in comp
+
+    def test_no_code_ships_in_z_attachments(self, allow_subprocess) -> None:
+        """Z_attachments is synced attachments, outside every integrity
+        scope: no file a job could run may be tracked there."""
+        tracked = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "Z_attachments"],
+            check=True, capture_output=True, text=True).stdout.splitlines()
+        code = [t for t in tracked
+                if Path(t).suffix.lower() in (".py", ".sh", ".js", ".ps1", ".exe", ".cmd")]
+        assert tracked and code == []
 
     def test_the_installer_installs_the_copy_before_loading_the_agents(self) -> None:
         comp = (REPO_ROOT / "installers" / "components" / "49-security-controls.sh"

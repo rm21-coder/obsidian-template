@@ -165,7 +165,7 @@ Either way, the export gate blocks a dynamic command anywhere in an export
 | Control | Script | Schedule | What it checks |
 |---------|--------|----------|----------------|
 | Plugin integrity | `plugin_integrity_check.py` | daily 06:30 + on change to the plugins folder | SHA-256 of each plugin's `main.js` and `manifest.json` under `<vault>/.obsidian/plugins/`, diffed against an HMAC-signed allowlist. |
-| Workflow integrity | `integrity_monitor.py` | daily 06:35 + on change to scripts / LaunchAgents | SHA-256 of the scripts in `Templates/Scripts/` (and any module or bytecode planted beside them), every plist in `~/Library/LaunchAgents/`, the controls' own state files, the templates, the scripts' virtualenv, the Claude CLI's instructions and command-running settings, and the secrets file; every cached `.pyc` of the scripts checked against its source; plus a bulk-deletion guard on the vault's Markdown count. See "What the integrity monitor covers". |
+| Workflow integrity | `integrity_monitor.py` | daily 06:35 + on change to scripts / QuickAdd scripts / LaunchAgents (macOS; daily only on Windows) | SHA-256 of the scripts in `Templates/Scripts/` (and any module, bytecode, lock file or Windows executable planted beside them), every plist in `~/Library/LaunchAgents/`, the controls' own state files, the templates, the installer tree of a template checkout, the scripts' virtualenv, the Claude CLI's instructions and command-running settings, and the secrets file; every cached `.pyc` of the scripts checked against its source; plus a bulk-deletion guard on the vault's Markdown count. See "What the integrity monitor covers". |
 
 Both are wired as LaunchAgents (`com.obsidian.security.plugin-check`,
 `com.obsidian.security.integrity`), each run
@@ -226,7 +226,14 @@ Each scope is hashed and compared with the baseline:
 - **scripts** — `Templates/Scripts/`, including any `.pyc`, `.so`, `.pyd`,
   `.dylib` or `.pth` planted beside the scripts. The scripts' folder comes
   first on Python's import path, so a planted `requests.pyc` would shadow the
-  real package.
+  real package. The `requirements*.lock` files count too: they are what pip
+  installs, hash pins included, so an edited lock line is code at the next
+  install (finding 5278623). So do `.exe`, `.cmd`, `.bat`, `.com`, `.dll` and
+  `.psm1`: Windows looks for a program in the current directory first, and
+  every task starts in this folder, so a planted `ffprobe.exe` or
+  `claude.cmd` would run in place of the real tool (5278618). The group-photo
+  scripts live here too; until 2026-10-20 they ran from `Z_attachments/`, a
+  synced attachments folder no scope covered (5278622).
 - **launchagents** — the plists in `~/Library/LaunchAgents/` (on Windows, the
   `\Obsidian\` scheduled tasks).
 - **state_dir** — the controls' own trust anchors.
@@ -235,7 +242,15 @@ Each scope is hashed and compared with the baseline:
   may use; `meeting_pull.py` also refuses any tool name that is not a single
   identifier.
 - **templates** — the `.md` and `.js` files under `Templates/` that QuickAdd
-  fills or runs.
+  fills or runs. On macOS the agent also watches `Templates/QuickAdd/`, so an
+  edited QuickAdd script is reported within 30 seconds rather than at the
+  next daily run (5278614). Windows has no folder-watch trigger for either
+  control; there the check is the daily run.
+- **installers** — in a template checkout, every file under `installers/`
+  (components, helpers, hooks, pins, profiles) and the root `install.sh`,
+  `update.sh` and `uninstall.sh`. The installer and the updaters source and
+  run these from the vault tree. A vault that is not a checkout has none, and
+  that is an empty scope, not a failed scan.
 - **venv** — every code file in the scripts' virtualenv (`.py`, `.pyc`, `.pth`,
   `.so`, `.dylib`, …), `pyvenv.cfg` and the interpreter links. A `.pth` line
   or an edited package runs inside every job without touching a watched

@@ -41,10 +41,12 @@ import re
 import sys
 from pathlib import Path
 
-# Vault root is the parent of the directory this script lives in
-# (script lives at <vault>/Z_attachments/insert_group_placeholders.py).
-# Override with OBSIDIAN_VAULT env var for testing.
-VAULT = Path(os.environ.get("OBSIDIAN_VAULT") or Path(__file__).resolve().parent.parent)
+# Vault root is two levels above the directory this script lives in
+# (script lives at <vault>/Templates/Scripts/insert_group_placeholders.py; it moved out of
+# Z_attachments 2026-10-20, finding 5278622, so the code a nightly job runs
+# sits in the hashed, watched scripts folder rather than a synced
+# attachments folder). Override with OBSIDIAN_VAULT env var for testing.
+VAULT = Path(os.environ.get("OBSIDIAN_VAULT") or Path(__file__).resolve().parents[2])
 GROUPS_DIR = VAULT / "Groups"
 ATTACH_DIR = VAULT / "Z_attachments"
 PLACEHOLDER = "placeholder-person.png"

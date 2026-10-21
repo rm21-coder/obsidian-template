@@ -270,8 +270,9 @@ def test_every_script_parses_on_apples_python(allow_subprocess):
     """The dashboard and the security controls run on /usr/bin/python3 (3.9).
     A nested-quote f-string, legal only from 3.12, passed the whole suite on
     Homebrew 3.14 and broke the deployed dashboard; this parses every script
-    with the interpreter that actually runs them. The group-photos plist
-    runs two scripts from Z_attachments/ on it too."""
+    with the interpreter that actually runs them. Z_attachments/ is still
+    parsed: the group-photo scripts ran from there until 2026-10-20, and a
+    vault may carry an old copy."""
     scripts = sorted([*(REPO / "Templates" / "Scripts").glob("*.py"),
                       *(REPO / "Z_attachments").glob("*.py")])
     assert len(scripts) > 2

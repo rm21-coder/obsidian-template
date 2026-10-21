@@ -453,7 +453,7 @@ Photos are stored in Z_attachments with the naming convention `Lastname-Firstnam
 
 **Placeholder Image:** `Z_attachments/placeholder-person.png` is a 40x40 transparent PNG used in group files for people who don't have photos yet. This ensures consistent formatting.
 
-**Photo Refresh Process:** A scheduled job runs nightly at 02:00 — `com.obsidian.group-photos` on macOS (component `51-group-photos`), the `group-photos` scheduled task on Windows (`run_group_photos.py`). It runs two scripts in order, both in `Z_attachments/`:
+**Photo Refresh Process:** A scheduled job runs nightly at 02:00 — `com.obsidian.group-photos` on macOS (component `51-group-photos`), the `group-photos` scheduled task on Windows (`run_group_photos.py`). It runs two stdlib-only scripts in order, both in `Templates/Scripts/` and each under `python3 -I` (they lived in `Z_attachments/` until 2026-10-20; code a job runs now sits in the hashed, watched scripts folder rather than the synced attachments folder):
 
 1. `insert_group_placeholders.py` prepends `![[placeholder-person.png|40]]` to any member line in a static group file that is exactly a bare `[[Last, First]]` link.
 2. `refresh_groups.py` swaps a placeholder for the real photo once a matching `LastName-FirstName.{png,jpg,jpeg,webp}` file exists in `Z_attachments/` (case-insensitive; spaces, `-` and `_` are interchangeable).
@@ -516,7 +516,7 @@ Organization fields can be populated in bulk based on email domain patterns. For
 The group-photo job (Section 6.2) runs nightly at 02:00, so a new photo file in `Z_attachments/`, or a new `[[Last, First]]` line in a static Group file, is picked up the next night with no manual step. To run it now, run the two scripts in order:
 
 ```bash
-/usr/bin/python3 ~/Obsidian/Z_attachments/insert_group_placeholders.py && /usr/bin/python3 ~/Obsidian/Z_attachments/refresh_groups.py
+/usr/bin/python3 -I ~/Obsidian/Templates/Scripts/insert_group_placeholders.py && /usr/bin/python3 -I ~/Obsidian/Templates/Scripts/refresh_groups.py
 ```
 
 or, on macOS, `launchctl kickstart gui/$(id -u)/com.obsidian.group-photos`.

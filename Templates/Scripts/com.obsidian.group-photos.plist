@@ -6,12 +6,12 @@
   Keeps Groups/*.md member rows showing real headshots. Runs two stdlib-only
   scripts in order, once nightly:
 
-    1. Z_attachments/insert_group_placeholders.py
+    1. Templates/Scripts/insert_group_placeholders.py
          Prepends "![[placeholder-person.png|40]] " to any line that is a
          bare person wikilink (e.g. "[[Doe, Jane]]") with no image at all.
          It never touches a line that already has an "![[...]]" reference.
 
-    2. Z_attachments/refresh_groups.py
+    2. Templates/Scripts/refresh_groups.py
          Swaps "placeholder-person.png" for the real photo when a matching
          file (LastName-FirstName.{png,jpg,jpeg,webp}) now exists in
          Z_attachments/. Never modifies a non-placeholder reference.
@@ -21,9 +21,13 @@
   with no headshot yet just gets the placeholder, which is upgraded on a later
   night once the photo is added.
 
-  Both scripts derive the vault root from their own location (parent of
-  Z_attachments/), so no vault path needs to be configured. Override with the
-  OBSIDIAN_VAULT env var only for testing.
+  Both scripts derive the vault root from their own location (two levels
+  above Templates/Scripts/), so no vault path needs to be configured. Override
+  with the OBSIDIAN_VAULT env var only for testing. They import nothing but
+  the standard library, so they run under `python3 -I`: neither the script's
+  folder nor the current directory is put on sys.path, and PYTHON* variables
+  are ignored. They lived in Z_attachments/ until 2026-10-20; that folder is
+  synced attachments, outside every integrity scope (finding 5278622).
 
   To install:
     1. Replace YOUR_USERNAME below with your macOS short username (and adjust
@@ -51,7 +55,7 @@
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>/usr/bin/python3 /Users/YOUR_USERNAME/Obsidian/Z_attachments/insert_group_placeholders.py &amp;&amp; /usr/bin/python3 /Users/YOUR_USERNAME/Obsidian/Z_attachments/refresh_groups.py</string>
+        <string>/usr/bin/python3 -I /Users/YOUR_USERNAME/Obsidian/Templates/Scripts/insert_group_placeholders.py &amp;&amp; /usr/bin/python3 -I /Users/YOUR_USERNAME/Obsidian/Templates/Scripts/refresh_groups.py</string>
     </array>
 
     <key>EnvironmentVariables</key>

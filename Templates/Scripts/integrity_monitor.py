@@ -52,6 +52,11 @@ Four independent integrity checks, all built on a single state file
          secrets       ~/dev/secrets/.env (the same under %USERPROFILE% on
                        Windows): its hash, and (POSIX) a finding
                        whenever group or others can read it.
+         installers    (added 2026-10-20) <vault>/installers/** and the root
+                       install.sh / update.sh / uninstall.sh, which the
+                       installer and updaters source or run from the vault
+                       tree. Only a template checkout has them; absent is an
+                       empty scope, not a failed scan.
        plus a bytecode check with no baseline: every cached .pyc of the
        scripts that an interpreter would load instead of the source must
        compile from that source. Apple's /usr/bin/python3, which runs the
@@ -145,9 +150,20 @@ DELETION_RATIO = 0.05         # 5% relative
 # .pyc/.pyd/.so/.dylib/.pth added 2026-10-03: a module or bytecode file
 # planted beside the scripts shadows a package (the scripts' folder comes
 # first on sys.path), and a .pth there would run at startup.
-SCRIPT_EXTS = {".py", ".sh", ".plist", ".ps1", ".psd1",
-               ".js", ".applescript", ".txt", ".yaml", ".yml",
-               ".pyc", ".pyd", ".so", ".dylib", ".pth", ".pyw"}
+# .lock added 2026-10-20 (finding 5278623): requirements*.lock is what pip
+# installs, hash pins and all, so an edited lock line is an install-time code
+# path. .exe/.cmd/.bat/.com/.dll/.psm1 added the same day (5278618): Windows
+# CreateProcess and shutil.which search the current directory, which for every
+# task is this folder, so a planted ffprobe.exe or claude.cmd runs in place of
+# the real tool. Only the scripts scope uses this set; .venv and __pycache__ are
+# pruned from it and have scopes of their own.
+SCRIPT_EXTS = {".py", ".sh", ".plist", ".ps1", ".psd1", ".psm1",
+               ".js", ".applescript", ".txt", ".yaml", ".yml", ".lock",
+               ".pyc", ".pyd", ".so", ".dylib", ".pth", ".pyw",
+               ".exe", ".cmd", ".bat", ".com", ".dll"}
+# The installer entry points at the root of a template checkout. The installer
+# sources every component and helper under installers/ from the vault tree.
+INSTALLER_ROOT_FILES = ("install.sh", "update.sh", "uninstall.sh")
 
 TEMPLATE_EXTS = {".md", ".js"}
 # .pyw is importable source on Windows; .pem is the CA bundle requests trusts
@@ -167,7 +183,8 @@ AGENT_SETTINGS_KEYS = ("hooks", "disableAllHooks", "statusLine", "apiKeyHelper",
 HOME = Path.home()
 # Scopes that hash files against the baseline, in report order.
 BASELINE_SCOPES = ("scripts", "launchagents", "state_dir", "script_config",
-                   "templates", "venv", "user_site", "agent_config", "secrets")
+                   "templates", "venv", "user_site", "agent_config", "secrets",
+                   "installers")
 
 # Third-party LaunchAgents that rewrite themselves on their own schedule
 # (vendor auto-updaters). Their recurring CONTENT_CHANGE is noise, and a
@@ -209,10 +226,10 @@ def append_alert(record: dict) -> None:
 
 # ---------- Scanners ---------------------------------------------------------
 
-def scan_dir(directory: Path, *, exts: set[str],
+def scan_dir(directory: Path, *, exts: set[str] | None,
              extra_prune: frozenset[str] = frozenset()) -> dict[str, dict]:
-    """Hash every file in `directory` matching `exts`. Returns {rel_path:
-    {sha256, size, mtime}}.  Symlinks are followed (rare here) but their
+    """Hash every file in `directory` matching `exts` (every file when `exts`
+    is None). Returns {rel_path: {sha256, size, mtime}}.  Symlinks are followed (rare here) but their
     target file is what gets hashed; we record the symlink's own mtime."""
     out: dict[str, dict] = {}
     if not directory.is_dir():
@@ -225,7 +242,7 @@ def scan_dir(directory: Path, *, exts: set[str],
     for path in directory.rglob("*"):
         if not path.is_file():
             continue
-        if path.suffix.lower() not in exts:
+        if exts is not None and path.suffix.lower() not in exts:
             continue
         if any(p in prune or p.startswith(".")
                for p in path.relative_to(directory).parts[:-1]):
@@ -420,6 +437,23 @@ def scan_templates(vault: Path) -> dict[str, dict]:
     the scripts scope's."""
     return scan_dir(vault / "Templates", exts=TEMPLATE_EXTS,
                     extra_prune=frozenset({"Scripts"}))
+
+
+def scan_installers(vault: Path) -> dict[str, dict]:
+    """<vault>/installers/** (every file: components and helpers are sourced
+    or run by the installer and the updaters, hooks have no extension, and
+    profiles/*.env steer what gets installed) plus the root install.sh,
+    update.sh and uninstall.sh. Finding 5278120: none of it was hashed.
+
+    Only a template checkout has these; a vault that is not a checkout has
+    neither, and that is an empty scope, not a failed scan."""
+    out = {"installers/" + rel: entry
+           for rel, entry in scan_dir(vault / "installers", exts=None).items()}
+    for name in INSTALLER_ROOT_FILES:
+        path = vault / name
+        if path.is_file():
+            out[name] = _file_entry(path)
+    return out
 
 
 def scan_venv(venv: Path) -> dict[str, dict]:
@@ -899,6 +933,7 @@ def main(argv: list[str]) -> int:
         "user_site": timed("user_site", lambda: scan_user_site(HOME)),
         "agent_config": timed("agent_config", lambda: scan_agent_config(vault, HOME)),
         "secrets": timed("secrets", lambda: scan_secrets(HOME)),
+        "installers": timed("installers", lambda: scan_installers(vault)),
         "vault_md_count": timed("vault_md_count", lambda: count_vault_md(vault)),
     }
 
@@ -927,6 +962,7 @@ def main(argv: list[str]) -> int:
             f"{len(current['user_site'])} user-site files, "
             f"{len(current['agent_config'])} agent config entries, "
             f"{len(current['secrets'])} secrets file(s), "
+            f"{len(current['installers'])} installer files, "
             f"{n_md} markdown files in vault.",
             stream=sys.stdout)
         # The adopt is already complete; this only refreshes the scheduler's
@@ -994,6 +1030,7 @@ def main(argv: list[str]) -> int:
                 "user_site": len(current["user_site"]),
                 "agent_config": len(current["agent_config"]),
                 "secrets": len(current["secrets"]),
+                "installers": len(current["installers"]),
                 "vault_md_count": current["vault_md_count"],
             },
         }, indent=2))

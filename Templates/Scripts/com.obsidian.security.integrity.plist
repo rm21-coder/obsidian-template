@@ -63,6 +63,10 @@
     <array>
         <string>/Users/YOUR_USERNAME/Library/LaunchAgents</string>
         <string>/Users/YOUR_USERNAME/Obsidian/Templates/Scripts</string>
+        <!-- 5278614: the user scripts QuickAdd runs inside Obsidian. Hashed
+             by the templates scope; without this watch a change there was
+             seen only at the daily run. -->
+        <string>/Users/YOUR_USERNAME/Obsidian/Templates/QuickAdd</string>
     </array>
     <key>ThrottleInterval</key>
     <integer>30</integer>

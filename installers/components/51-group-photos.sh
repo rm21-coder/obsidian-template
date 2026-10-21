@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 51-group-photos.sh - Group Photos nightly refresh LaunchAgent.
 #
-# Two stdlib-only scripts in Z_attachments/ run in order each night:
+# Two stdlib-only scripts in Templates/Scripts/ run in order each night,
+# under /usr/bin/python3 -I (they lived in Z_attachments/ until 2026-10-20):
 #   insert_group_placeholders.py  prepends the placeholder to bare member
 #                                 rows, then
 #   refresh_groups.py             swaps placeholders for real headshots.
@@ -13,8 +14,8 @@ source "$REPO_ROOT/installers/lib/plist.sh"
 VAULT="$HOME/Obsidian"
 
 for s in insert_group_placeholders.py refresh_groups.py; do
-    if [[ ! -f "$VAULT/Z_attachments/$s" ]]; then
-        err "  $VAULT/Z_attachments/$s missing"
+    if [[ ! -f "$VAULT/Templates/Scripts/$s" ]]; then
+        err "  $VAULT/Templates/Scripts/$s missing"
         exit 1
     fi
 done

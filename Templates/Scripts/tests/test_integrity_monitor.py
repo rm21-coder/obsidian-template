@@ -1049,3 +1049,108 @@ class TestApplePrefixUnderIsolation:
         monkeypatch.setattr(im, "_environment_ignored", lambda: True)
         [f] = im.prefix_cache_findings()
         assert f["kind"] == "BYTECODE_MISMATCH" and f["path"] == str(pyc)
+
+
+class TestBatch2Coverage:
+    """Mythos review, batch 2 (2026-10-20): what the scripts scope hashes, and
+    the installers scope."""
+
+    @pytest.mark.parametrize("name", [
+        "requirements.lock", "requirements-dropper.lock",   # 5278623
+        "ffprobe.exe", "claude.cmd", "setup.bat", "more.com", "evil.dll",
+        "Helpers.psm1", "x.ps1", "schedules.psd1",           # 5278618
+    ])
+    def test_each_new_extension_is_flagged_when_planted_or_edited(
+            self, tmp_path: Path, name: str) -> None:
+        (tmp_path / name).write_bytes(b"v1")
+        before = im.scan_dir(tmp_path, exts=im.SCRIPT_EXTS)
+        assert name in before
+        (tmp_path / name).write_bytes(b"v2")
+        after = im.scan_dir(tmp_path, exts=im.SCRIPT_EXTS)
+        assert [(f["kind"], f["path"]) for f in im.diff_dir("scripts", after, before)] == [
+            ("CONTENT_CHANGE", name)]
+        assert [(f["kind"], f["path"]) for f in im.diff_dir("scripts", after, {})] == [
+            ("NEW_FILE", name)]
+
+    def test_the_new_extensions_do_not_reach_into_the_venv_or_bytecode_cache(
+            self, tmp_path: Path) -> None:
+        """Those folders have scopes of their own; the scripts scope prunes them."""
+        for rel in (".venv/Scripts/python.exe", ".venv/lib/x.dll",
+                    "__pycache__/m.cpython-39.pyc", "windows/run.cmd"):
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_bytes(b"\0")
+        assert sorted(im.scan_dir(tmp_path, exts=im.SCRIPT_EXTS)) == ["windows/run.cmd"]
+
+    def test_the_installers_scope_hashes_every_file_and_the_root_entry_points(
+            self, tmp_path: Path) -> None:
+        for rel in ("installers/components/10-x.sh", "installers/lib/hooks/pre-push",
+                    "installers/lib/plugins.sh", "installers/profiles/site.env",
+                    "installers/plugin-pins.json", "installers/lib/__pycache__/c.pyc",
+                    "install.sh", "update.sh", "uninstall.sh", "README.md"):
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_text(rel)
+        got = im.scan_installers(tmp_path)
+        assert sorted(got) == [
+            "install.sh", "installers/components/10-x.sh", "installers/lib/hooks/pre-push",
+            "installers/lib/plugins.sh", "installers/plugin-pins.json",
+            "installers/profiles/site.env", "uninstall.sh", "update.sh"]
+        assert got["installers/lib/plugins.sh"]["sha256"] == hashlib.sha256(
+            b"installers/lib/plugins.sh").hexdigest()
+
+    def test_an_edited_installer_component_is_drift(self, tmp_path: Path) -> None:
+        comp = tmp_path / "installers" / "components" / "49-security-controls.sh"
+        comp.parent.mkdir(parents=True)
+        comp.write_text("v1")
+        before = im.scan_installers(tmp_path)
+        comp.write_text("v2")
+        [f] = im.diff_dir("installers", im.scan_installers(tmp_path), before)
+        assert (f["kind"], f["scope"], f["path"]) == (
+            "CONTENT_CHANGE", "installers", "installers/components/49-security-controls.sh")
+
+    def test_a_vault_with_no_installers_is_an_empty_scope_not_a_failure(
+            self, tmp_path: Path, sample_vault: Path, tmp_state_dir: Path,
+            silent_notify: list, capsys: pytest.CaptureFixture) -> None:
+        assert not (sample_vault / "installers").exists()
+        assert im.scan_installers(sample_vault) == {}
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        agents = tmp_path / "LaunchAgents"
+        agents.mkdir()
+        argv = ["--scripts-dir", str(scripts), "--launchagents-dir", str(agents),
+                "--vault", str(sample_vault)]
+        assert im.main([*argv, "--update"]) == 0
+        assert json.loads(im.STATE_PATH.read_text())["installers"] == {}
+        capsys.readouterr()
+        assert im.main([*argv, "--json"]) == 0
+        report = json.loads(capsys.readouterr().out)
+        assert report["status"] == "ok"
+        assert report["current_summary"]["installers"] == 0
+
+    def test_installers_end_to_end_and_not_baselined_once(
+            self, tmp_path: Path, sample_vault: Path, tmp_state_dir: Path,
+            silent_notify: list, capsys: pytest.CaptureFixture) -> None:
+        (sample_vault / "installers" / "lib").mkdir(parents=True)
+        (sample_vault / "installers" / "lib" / "common.sh").write_text("v1")
+        (sample_vault / "install.sh").write_text("#!/bin/bash\n")
+        scripts = tmp_path / "scripts"
+        scripts.mkdir()
+        agents = tmp_path / "LaunchAgents"
+        agents.mkdir()
+        argv = ["--scripts-dir", str(scripts), "--launchagents-dir", str(agents),
+                "--vault", str(sample_vault)]
+        assert im.main([*argv, "--update"]) == 0
+        (sample_vault / "installers" / "lib" / "common.sh").write_text("v2 planted")
+        capsys.readouterr()
+        assert im.main([*argv, "--json"]) == 1
+        findings = json.loads(capsys.readouterr().out)["findings"]
+        assert [(f["kind"], f["scope"], f["path"]) for f in findings] == [
+            ("CONTENT_CHANGE", "installers", "installers/lib/common.sh")]
+        # A baseline from before the scope existed: one NOT_BASELINED, not a
+        # NEW_FILE per installer file.
+        state = json.loads(im.STATE_PATH.read_text())
+        state.pop("installers")
+        im.STATE_PATH.write_text(json.dumps(state))
+        assert im.main([*argv, "--json"]) == 1
+        findings = json.loads(capsys.readouterr().out)["findings"]
+        assert [(f["kind"], f["scope"], f["count"]) for f in findings] == [
+            ("NOT_BASELINED", "installers", 2)]
