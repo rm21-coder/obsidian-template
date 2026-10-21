@@ -41,7 +41,6 @@ import datetime as _dt
 import json
 import os
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -83,7 +82,10 @@ def find_claude(override):
     user-level install location where this CLI actually lives."""
     if override:
         return override if Path(override).is_file() else None
-    found = shutil.which("claude")
+    # PATH entries only, never the working directory or the vault (5277585;
+    # see exe_lookup).
+    import exe_lookup
+    found = exe_lookup.find_executable("claude")
     if found:
         return found
     home = Path.home()

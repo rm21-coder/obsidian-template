@@ -533,10 +533,28 @@ def transcribe(audio_path: Path, *, model: str | None, verbose: bool,
 
 # ---------- ffprobe duration ------------------------------------------------
 
+# The longest episode this will transcribe. The ONNX backend decodes the whole
+# file to PCM in memory first (~345 MB an hour at peak, the int16 buffer plus
+# its float32 copy), and the 500 MB download cap alone admits a ~140-hour
+# low-bitrate file (finding 5268411). Six hours covers the longest real
+# podcasts. whisper_onnx.MAX_AUDIO_SECONDS is the same limit applied to the
+# decode itself, for when ffprobe is missing.
+MAX_EPISODE_SECONDS = 6 * 3600
+
+
 def audio_duration(audio_path: Path) -> float:
+    """The file's length in seconds from ffprobe, or 0.0 if unknown.
+
+    ffprobe is looked up on PATH only (exe_lookup), never in the working
+    directory or the vault: a bare name on Windows would run a planted
+    ffprobe.exe/.cmd from the folder the job starts in (finding 5278618)."""
+    import exe_lookup
+    ffprobe = exe_lookup.find_executable("ffprobe")
+    if not ffprobe:
+        return 0.0
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+            [ffprobe, "-v", "error", "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)],
             capture_output=True, text=True, check=True, timeout=60,
         )
@@ -798,6 +816,10 @@ def main(argv: list[str]) -> int:
     if audio_seconds:
         log(f"audio duration: {format_duration(audio_seconds)} ({audio_seconds:.0f}s)",
             verbose=args.verbose)
+    if audio_seconds > MAX_EPISODE_SECONDS:
+        die(f"episode is {format_duration(audio_seconds)} long, over the "
+            f"{MAX_EPISODE_SECONDS // 3600}-hour limit (MAX_EPISODE_SECONDS); "
+            "not transcribing it")
 
     try:
         result = transcribe(audio_path, model=args.model, verbose=args.verbose,

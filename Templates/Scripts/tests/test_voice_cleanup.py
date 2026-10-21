@@ -654,3 +654,115 @@ def test_cleanup_uses_the_long_timeout():
     import importlib
     real = importlib.import_module("llm_endpoint")
     assert real.LONG_TIMEOUT_SEC >= 300
+
+
+# ---------------------------------------------------------------------------
+# Config path constraints (finding 5278626) and the brctl guard (5278616).
+# The autouse fixture replaces load_config, so these call the real one,
+# captured at import.
+# ---------------------------------------------------------------------------
+
+_REAL_LOAD_CONFIG = voice_cleanup.load_config
+
+
+@pytest.fixture
+def real_config(tmp_path, monkeypatch):
+    """The real load_config, pointed at a tmp drop root, vault and config."""
+    import source_media
+    root = tmp_path / "SourceMedia"
+    (root / "VoiceInput").mkdir(parents=True)
+    vault = tmp_path / "this-vault"
+    vault.mkdir()
+    cfg_path = tmp_path / "voice_cleanup_config.yaml"
+    monkeypatch.setattr(source_media, "drop_root", lambda: root)
+    monkeypatch.setattr(voice_cleanup, "VAULT_ROOT", vault)
+    monkeypatch.setattr(voice_cleanup, "CONFIG_PATH", cfg_path)
+
+    def load(text=None):
+        if text is not None:
+            cfg_path.write_text(text, encoding="utf-8")
+        return _REAL_LOAD_CONFIG()
+
+    load.root, load.vault = root.resolve(), vault.resolve()
+    return load
+
+
+def _yaml_path(p) -> str:
+    return str(p).replace("\\", "/")
+
+
+def test_defaults_pass_the_constraints(real_config):
+    cfg = real_config()
+    assert cfg["watch_folder"] == str(real_config.root / "VoiceInput")
+    assert cfg["vault_path"] == str(real_config.vault)
+
+
+def test_a_watch_folder_under_the_drop_root_is_accepted(real_config):
+    cfg = real_config(f'watch_folder: "{_yaml_path(real_config.root / "Other")}"\n')
+    assert cfg["watch_folder"] == str(real_config.root / "Other")
+
+
+@pytest.mark.parametrize("where", ["outside", "root", "dotdot"])
+def test_a_watch_folder_elsewhere_is_refused(real_config, tmp_path, where):
+    target = {"outside": tmp_path / "Documents",
+              "root": real_config.root,
+              "dotdot": real_config.root / "VoiceInput" / ".." / ".." / "x"}[where]
+    with pytest.raises(voice_cleanup.ConfigError,
+                       match="is not a folder under the drop root"):
+        real_config(f'watch_folder: "{_yaml_path(target)}"\n')
+
+
+def test_a_symlinked_watch_folder_out_of_the_root_is_refused(real_config, tmp_path):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    link = real_config.root / "Link"
+    try:
+        link.symlink_to(elsewhere, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks unavailable")
+    with pytest.raises(voice_cleanup.ConfigError,
+                       match="is not a folder under the drop root"):
+        real_config(f'watch_folder: "{_yaml_path(link)}"\n')
+
+
+def test_another_vault_path_is_refused(real_config, tmp_path):
+    with pytest.raises(voice_cleanup.ConfigError, match="is not this vault"):
+        real_config(f'vault_path: "{_yaml_path(tmp_path / "other-vault")}"\n')
+
+
+def test_this_vault_spelled_differently_is_accepted(real_config):
+    cfg = real_config(f'vault_path: "{_yaml_path(real_config.vault / "Creations" / "..")}"\n')
+    assert cfg["vault_path"] == str(real_config.vault)
+
+
+def test_a_non_mapping_config_is_refused(real_config):
+    with pytest.raises(voice_cleanup.ConfigError, match="must be a mapping"):
+        real_config("- a\n- b\n")
+
+
+def test_main_exits_with_the_message_on_a_bad_config(monkeypatch, caplog):
+    def bad():
+        raise voice_cleanup.ConfigError("watch_folder X is not a folder under the drop root")
+
+    monkeypatch.setattr(voice_cleanup, "load_config", bad)
+    monkeypatch.setattr(sys, "argv", ["voice_cleanup.py", "--once"])
+    with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as exc:
+        voice_cleanup.main()
+    assert exc.value.code == 1
+    assert "is not a folder under the drop root" in caplog.text
+
+
+@pytest.mark.parametrize("platform,runs", [("darwin", True), ("win32", False), ("linux", False)])
+def test_brctl_runs_only_on_macos_by_absolute_path(monkeypatch, tmp_path, platform, runs):
+    drop = tmp_path / "VoiceInput" / "note.txt"
+    drop.write_text("", encoding="utf-8")         # empty: returns before the model
+    calls = []
+    monkeypatch.setattr(voice_cleanup.sys, "platform", platform)
+    monkeypatch.setattr(voice_cleanup.subprocess, "run",
+                        lambda cmd, **kw: calls.append(cmd))
+    voice_cleanup.process_file(drop, None, {"vault_path": str(tmp_path / "vault"),
+                                            "claude_model": "m"})
+    if runs:
+        assert calls == [["/usr/bin/brctl", "download", str(drop)]]
+    else:
+        assert calls == []

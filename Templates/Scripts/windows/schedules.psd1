@@ -45,7 +45,14 @@
         # and holds a single-instance lock, so a long episode can't stack runs.
         # TimeLimitMinutes (see Register-Tasks.ps1): a long episode transcribed
         # on CPU can legitimately take well over the default 30 minutes.
-        @{ Name='podcast-watch';        Script='podcast_watch.py';      Args=@('--once');    Trigger=@{ Type='MinuteInterval'; Minutes=15 }; Enabled=$true; TimeLimitMinutes=180 }
+        # --timeout is podcast_watch's own per-episode limit, and it must fire
+        # first: run_logged stops the whole run at TimeLimitMinutes*60-120 s
+        # (10680 here), and a run stopped from outside before the episode's
+        # own limit used to leave the drop queued to be retried, and stopped,
+        # forever (finding 5278625). 10200 s leaves 8 minutes to stop
+        # podcast_transcribe and move the drop to failed\. Change both
+        # together; test_windows_tasks.py checks the margin.
+        @{ Name='podcast-watch';        Script='podcast_watch.py';      Args=@('--once','--timeout','10200'); Trigger=@{ Type='MinuteInterval'; Minutes=15 }; Enabled=$true; TimeLimitMinutes=180 }
         @{ Name='strip-ads';            Script='strip_ads.py';          Args=@();            Trigger=@{ Type='MinuteInterval'; Minutes=5  }; Enabled=$true }
         @{ Name='meeting-prep';         Script='meeting_prep.py';       Args=@();            Trigger=@{ Type='MinuteInterval'; Minutes=5  }; Enabled=$true }
         @{ Name='meeting-prepopulate';  Script='meeting_prepopulate.py';Args=@();            Trigger=@{ Type='MinuteInterval'; Minutes=30 }; Enabled=$true }

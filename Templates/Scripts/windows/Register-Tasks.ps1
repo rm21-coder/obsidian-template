@@ -26,6 +26,13 @@
   task in the Task Scheduler UI, not the window.) Re-run this script to move an
   existing install's tasks to pythonw.exe.
 
+  Every task starts in %LOCALAPPDATA%\obsidian-logs (the security tasks in
+  their installed copy's folder), never in the vault's Templates\Scripts: a
+  program started by bare name, or found through shutil.which, is looked up
+  in the working directory first on Windows, and the vault is a synced
+  folder (findings 5278618, 5278616, 5277585). The scripts find their own
+  folder from __file__, so nothing depends on the working directory.
+
   The two security tasks (Isolated=$true in the manifest) are the exception:
   they run an installed copy of run_logged.py and the control from
   %LOCALAPPDATA%\obsidian-security\bin under the base pythonw.exe with -I -S,
@@ -43,6 +50,11 @@ $scriptsDir = Get-ScriptsDir
 $python     = Get-VenvPythonW   # windowless: see common.ps1
 $runner     = Join-Path $scriptsDir 'run_logged.py'
 $folder     = '\Obsidian'
+# The working directory of every non-isolated task: run_logged.py's own log
+# folder, outside the vault and outside any sync client. Created here because
+# Task Scheduler refuses to start a task whose WorkingDirectory is missing,
+# and run_logged would otherwise create it only on its first run.
+$jobWorkDir = Join-Path $env:LOCALAPPDATA 'obsidian-logs'
 
 # Registering a task that points at a missing runner would give a task that
 # fails on every trigger with nothing in any log to say why.
@@ -138,11 +150,18 @@ foreach ($job in $manifest.Jobs) {
         $scriptPath = Join-Path $scriptsDir $job.Script
         $jobPython  = $python
         $jobFlags   = ''
-        $workDir    = $scriptsDir
+        $workDir    = $jobWorkDir
     }
     if (-not (Test-Path $scriptPath)) {
         Write-Warning "Skipping $($job.Name): script not found at $scriptPath"
         continue
+    }
+    if (-not (Test-Path -LiteralPath $workDir)) {
+        try { New-Item -ItemType Directory -Path $workDir -Force -ErrorAction Stop | Out-Null }
+        catch {
+            $failed += "$($job.Name) (could not create its working directory $workDir)"
+            continue
+        }
     }
 
     # run_logged.py <task-name> <script> [args]: the task name doubles as the
@@ -195,6 +214,7 @@ foreach ($job in $manifest.Jobs) {
         try { $liveLimit = [System.Xml.XmlConvert]::ToTimeSpan([string]$live.Settings.ExecutionTimeLimit) } catch { }
         $ok = $live -and $live.Actions[0].Execute -eq $jobPython -and
               $live.Actions[0].Arguments -eq $argString -and
+              $live.Actions[0].WorkingDirectory -eq $workDir -and
               $liveLimit -eq $limit -and
               (($live.State -eq 'Disabled') -eq (-not $enable))
         if (-not $ok) {

@@ -76,8 +76,27 @@ def _default_watch_folder() -> str:
     return str(source_media.drop_dir("voice"))
 
 
+BRCTL = "/usr/bin/brctl"
+
+
+class ConfigError(ValueError):
+    """voice_cleanup_config.yaml names a folder this job must not use."""
+
+
+def _within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
 def load_config() -> dict:
-    """Load configuration, with sensible defaults if no config file exists."""
+    """Load configuration, with sensible defaults if no config file exists.
+
+    The two paths are constrained (finding 5278626): watch_folder must lie
+    under the drop root (~/SourceMedia, source_media.drop_root) and
+    vault_path must be this vault. Without that, an edited config could aim
+    the job at any folder it can read -- every .txt in it sent to the model
+    and deleted -- or have notes written into some other tree. Both are
+    compared after resolving symlinks. Raises ConfigError otherwise.
+    """
     defaults = {
         "claude_model": "claude-sonnet-5-5",
         "vault_path": str(VAULT_ROOT),
@@ -87,10 +106,25 @@ def load_config() -> dict:
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "r") as f:
             cfg = yaml.safe_load(f) or {}
+        if not isinstance(cfg, dict):
+            raise ConfigError(f"{CONFIG_PATH.name} must be a mapping of settings")
         defaults.update(cfg)
 
-    defaults["vault_path"] = str(Path(defaults["vault_path"]).expanduser())
-    defaults["watch_folder"] = str(Path(defaults["watch_folder"]).expanduser())
+    import source_media
+    vault = Path(str(defaults["vault_path"])).expanduser().resolve()
+    if vault != VAULT_ROOT.resolve():
+        raise ConfigError(
+            f"vault_path {vault} in {CONFIG_PATH.name} is not this vault "
+            f"({VAULT_ROOT}); remove the setting")
+    watch = Path(str(defaults["watch_folder"])).expanduser().resolve()
+    root = source_media.drop_root().expanduser().resolve()
+    if watch == root or not _within(watch, root):
+        raise ConfigError(
+            f"watch_folder {watch} in {CONFIG_PATH.name} is not a folder under "
+            f"the drop root {root}; remove the setting to use "
+            f"{source_media.drop_dir('voice')}")
+    defaults["vault_path"] = str(vault)
+    defaults["watch_folder"] = str(watch)
     return defaults
 
 
@@ -158,11 +192,15 @@ def process_file(txt_path: Path, client: anthropic.Anthropic, cfg: dict):
     creations = vault / "Creations"
     creations.mkdir(exist_ok=True)
 
-    # Force iCloud to download the file locally before reading
-    try:
-        subprocess.run(["brctl", "download", str(txt_path)], timeout=10, capture_output=True)
-    except Exception:
-        pass  # brctl may not exist on all macOS versions
+    # Force iCloud to download the file locally before reading. macOS only,
+    # and by absolute path: on Windows a bare "brctl" was looked up in the
+    # job's working directory, so a planted brctl.exe/.cmd there ran every
+    # five minutes (finding 5278616).
+    if sys.platform == "darwin":
+        try:
+            subprocess.run([BRCTL, "download", str(txt_path)], timeout=10, capture_output=True)
+        except Exception:
+            pass  # brctl may not exist on all macOS versions
 
     # Read raw text — retry if iCloud is still syncing
     raw_text = None
@@ -358,7 +396,11 @@ def main():
     args = parser.parse_args()
 
     # Load config
-    cfg = load_config()
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        log.error("%s", exc)
+        sys.exit(1)
 
     # The endpoint and its credential (env/.env first, then the platform
     # keystore; stock Anthropic unless LLM_BASE_URL redirects it) are resolved

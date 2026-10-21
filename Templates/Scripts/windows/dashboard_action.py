@@ -141,10 +141,17 @@ def run_job(task: str, script: str, args: list[str], timeout: int) -> int:
     # The limit is enforced by run_logged, which stops the job's whole
     # process tree; this process waits a little longer only as a backstop
     # in case run_logged itself hangs.
+    # Started in run_logged's log folder, as Register-Tasks starts the task,
+    # never in the vault's scripts folder: a program run by bare name, or
+    # found through shutil.which, is looked up in the working directory
+    # first on Windows (findings 5278618, 5278616, 5277585). So the script
+    # goes by its full path.
     import run_logged
-    cmd = [sys.executable, str(SCRIPTS / "run_logged.py"), task, script, *args]
+    workdir = run_logged.log_dir()
+    workdir.mkdir(parents=True, exist_ok=True)
+    cmd = [sys.executable, str(SCRIPTS / "run_logged.py"), task, str(SCRIPTS / script), *args]
     env = {**os.environ, run_logged.LOCK_HELD_ENV: task, run_logged.TIMEOUT_ENV: str(timeout)}
-    return subprocess.run(cmd, cwd=str(SCRIPTS), env=env, timeout=timeout + 300,
+    return subprocess.run(cmd, cwd=str(workdir), env=env, timeout=timeout + 300,
                           creationflags=CREATE_NO_WINDOW).returncode
 
 

@@ -31,7 +31,6 @@ decode loop simple; word-level timing would need the timestamp-token path.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Iterator
@@ -57,9 +56,25 @@ class WhisperOnnxError(RuntimeError):
 # Audio
 # ---------------------------------------------------------------------------
 
-def decode_audio(path: Path, *, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
-    """Decode any ffmpeg-readable file to mono float32 PCM in [-1, 1]."""
-    exe = shutil.which("ffmpeg")
+# The longest audio decode_audio will hold. The whole file is decoded to PCM
+# in memory, so an unbounded file is an unbounded allocation (finding
+# 5268411). Same limit as podcast_transcribe.MAX_EPISODE_SECONDS, which
+# refuses a long episode up front when ffprobe can measure it; this one holds
+# when it cannot.
+MAX_AUDIO_SECONDS = 6 * 3600
+
+
+def decode_audio(path: Path, *, sample_rate: int = SAMPLE_RATE,
+                 max_seconds: int = MAX_AUDIO_SECONDS) -> np.ndarray:
+    """Decode any ffmpeg-readable file to mono float32 PCM in [-1, 1].
+
+    ffmpeg comes from PATH only (exe_lookup), never from the working
+    directory or the vault (finding 5278618). It is told to stop one second
+    past `max_seconds`, so memory stays bounded whatever the file holds, and
+    audio that runs past the limit is refused rather than transcribed in part.
+    """
+    import exe_lookup
+    exe = exe_lookup.find_executable("ffmpeg")
     if not exe:
         raise WhisperOnnxError(
             "ffmpeg not found on PATH. It decodes the audio before "
@@ -67,12 +82,17 @@ def decode_audio(path: Path, *, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
             "sure its bin directory is on PATH.")
     proc = subprocess.run(
         [exe, "-nostdin", "-threads", "0", "-i", str(path),
+         "-t", str(int(max_seconds) + 1),
          "-f", "s16le", "-ac", "1", "-acodec", "pcm_s16le",
          "-ar", str(sample_rate), "-"],
         capture_output=True)
     if proc.returncode != 0:
         tail = proc.stderr.decode("utf-8", "ignore").strip().splitlines()[-3:]
         raise WhisperOnnxError(f"ffmpeg failed on {path}: {' / '.join(tail)}")
+    if len(proc.stdout) // 2 > int(max_seconds) * sample_rate:
+        raise WhisperOnnxError(
+            f"{Path(path).name} is longer than the {int(max_seconds)} s limit "
+            "(MAX_AUDIO_SECONDS); not transcribing it")
     return np.frombuffer(proc.stdout, np.int16).astype(np.float32) / 32768.0
 
 

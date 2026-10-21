@@ -33,6 +33,7 @@ import json
 
 import pytest
 
+import exe_lookup
 import podcast_transcribe as pt
 
 SHOW_ID = "1528594034"
@@ -448,5 +449,57 @@ def test_ffprobe_call_has_a_timeout(monkeypatch, tmp_path):
         raise pt.subprocess.TimeoutExpired(cmd, kw.get("timeout"))
 
     monkeypatch.setattr(pt.subprocess, "run", fake_run)
+    monkeypatch.setattr(exe_lookup, "find_executable", lambda _n, **_k: "/opt/bin/ffprobe")
     assert pt.audio_duration(tmp_path / "a.mp3") == 0.0
     assert seen["timeout"] == 60
+
+
+# 5278618 -- ffprobe by absolute path from PATH, never a bare name
+def test_ffprobe_runs_from_the_resolved_path(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return pt.subprocess.CompletedProcess(cmd, 0, "12.5\n", "")
+
+    asked = []
+    monkeypatch.setattr(exe_lookup, "find_executable",
+                        lambda n, **_k: asked.append(n) or "/opt/bin/ffprobe")
+    monkeypatch.setattr(pt.subprocess, "run", fake_run)
+    assert pt.audio_duration(tmp_path / "a.mp3") == 12.5
+    assert asked == ["ffprobe"]
+    assert seen["cmd"][0] == "/opt/bin/ffprobe"
+
+
+def test_no_ffprobe_on_path_runs_nothing(monkeypatch, tmp_path):
+    def fail(*a, **k):
+        raise AssertionError("ran a program although ffprobe was not found")
+
+    monkeypatch.setattr(exe_lookup, "find_executable", lambda _n, **_k: None)
+    monkeypatch.setattr(pt.subprocess, "run", fail)
+    assert pt.audio_duration(tmp_path / "a.mp3") == 0.0
+
+
+# 5268411 -- an episode past the cap is refused before transcription
+def test_an_over_long_episode_is_refused(monkeypatch, tmp_path, capsys):
+    audio = tmp_path / "long.mp3"
+    audio.write_bytes(b"x")
+    monkeypatch.setattr(pt, "audio_duration", lambda _p: pt.MAX_EPISODE_SECONDS + 1.0)
+
+    def fail(*a, **k):
+        raise AssertionError("transcribed an over-long episode")
+
+    monkeypatch.setattr(pt, "transcribe", fail)
+    with pytest.raises(SystemExit) as exc:
+        pt.main([str(audio), "--out", str(tmp_path / "out")])
+    assert exc.value.code == 1
+    assert "over the 6-hour limit (MAX_EPISODE_SECONDS)" in capsys.readouterr().err
+
+
+def test_an_episode_at_the_cap_is_transcribed(monkeypatch, tmp_path):
+    audio = tmp_path / "ok.mp3"
+    audio.write_bytes(b"x")
+    monkeypatch.setattr(pt, "audio_duration", lambda _p: float(pt.MAX_EPISODE_SECONDS))
+    monkeypatch.setattr(pt, "transcribe", lambda *a, **k: {
+        "segments": [], "text": "hello", "_model": "base", "_elapsed_seconds": 1.0})
+    assert pt.main([str(audio), "--out", str(tmp_path / "out")]) == 0

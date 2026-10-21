@@ -162,7 +162,7 @@ Drains `~/SourceMedia/PodcastInput/` — audio files, or link files holding an e
    launchctl list | grep podcast-watch
    ```
 
-The agent ticks every 900 seconds rather than the 300 the cheap watchers use, and takes **one** episode per run behind a single-instance lock: transcription costs real CPU for real minutes (roughly a quarter of the audio's duration), so a queue drains one episode per tick instead of seizing the machine on the first one. Processed drops are moved to `done/` or `failed/` (with a sibling `.error.log`), never deleted — a dropped audio file may be your only copy of a recording.
+The agent ticks every 900 seconds rather than the 300 the cheap watchers use, and takes **one** episode per run behind a single-instance lock: transcription costs real CPU for real minutes (roughly a quarter of the audio's duration), so a queue drains one episode per tick instead of seizing the machine on the first one. Processed drops are moved to `done/` or `failed/` (with a sibling `.error.log`), never deleted — a dropped audio file may be your only copy of a recording. While an episode is transcribing it sits in `processing/`; one still there when the next run starts belonged to a run that was stopped part-way (a restart, a crash, a time limit) and goes to `failed/`, so move it back into the inbox to retry. Episodes longer than 6 hours are refused (`MAX_EPISODE_SECONDS` in `podcast_transcribe.py`).
 
 ---
 
@@ -177,7 +177,7 @@ This agent has additional setup beyond just loading the plist:
       ~/Obsidian/Templates/Scripts/voice_cleanup_config.yaml
    ```
 
-   Leave `watch_folder` commented out. Unset, it resolves through `source_media.drop_dir("voice")` — the same function `source_mail_pull.py` writes through, so the watcher and the transport cannot drift onto different folders. The resolved default is `~/SourceMedia/VoiceInput`.
+   Leave `watch_folder` commented out. Unset, it resolves through `source_media.drop_dir("voice")` — the same function `source_mail_pull.py` writes through, so the watcher and the transport cannot drift onto different folders. The resolved default is `~/SourceMedia/VoiceInput`. A `watch_folder` outside `~/SourceMedia/`, or a `vault_path` other than the vault the script sits in, is refused and the job exits with the reason in its log: every `.txt` in the folder is sent to the model and then deleted, so the config must not be able to aim it anywhere else.
 
 2. **Wire up the transport** so dictation actually arrives: the iPhone Shortcut signs a payload and mails it, and `com.obsidian.source-mail-pull` (below) drops it into `~/SourceMedia/VoiceInput/`. See [[Source-Mail-Transport]] for the producer side and [[Voice Notes (Optional)]] for the pipeline design.
 

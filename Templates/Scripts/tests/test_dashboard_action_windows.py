@@ -191,8 +191,9 @@ def test_task_state_reads_the_enum_through_powershell(monkeypatch) -> None:
     assert A.task_state("meeting-pull") is None
 
 
-def test_a_job_runs_through_run_logged_with_no_window(monkeypatch) -> None:
+def test_a_job_runs_through_run_logged_with_no_window(monkeypatch, tmp_path) -> None:
     seen = {}
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
     class P:
         returncode = 7
@@ -203,9 +204,14 @@ def test_a_job_runs_through_run_logged_with_no_window(monkeypatch) -> None:
 
     monkeypatch.setattr(A.subprocess, "run", fake_run)
     assert A.run_job("rag-sync", "obsidian-rag-sync.py", [], 99) == 7
-    assert seen["cmd"] == [sys.executable, str(SCRIPTS / "run_logged.py"), "rag-sync", "obsidian-rag-sync.py"]
+    assert seen["cmd"] == [sys.executable, str(SCRIPTS / "run_logged.py"), "rag-sync",
+                           str(SCRIPTS / "obsidian-rag-sync.py")]
     assert seen["kw"]["creationflags"] == A.CREATE_NO_WINDOW
-    assert seen["kw"]["cwd"] == str(SCRIPTS)
+    # 5278618/5278616/5277585: never the vault's scripts folder, where a
+    # bare-name program lookup would find a planted .exe/.cmd first
+    assert seen["kw"]["cwd"] == str(tmp_path / "obsidian-logs")
+    assert (tmp_path / "obsidian-logs").is_dir()
+    assert not Path(seen["kw"]["cwd"]).resolve().is_relative_to(SCRIPTS.parent.parent.resolve())
     assert seen["kw"]["env"]["RUN_LOGGED_TIMEOUT"] == "99"          # run_logged enforces it
     assert seen["kw"]["timeout"] == 99 + 300                          # only a backstop here
     assert seen["kw"]["env"]["RUN_LOGGED_LOCK_HELD"] == "rag-sync"   # it holds run_logged's lock

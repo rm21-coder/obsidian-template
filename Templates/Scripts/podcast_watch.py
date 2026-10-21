@@ -37,7 +37,10 @@ of the audio's own duration on a modern laptop CPU). So:
 
 Processed drops are moved, never deleted: `done/` on success, `failed/` on
 failure with a sibling .error.log. A dropped audio file may be the user's
-only copy of a recording.
+only copy of a recording. While it is being transcribed a drop sits in
+`processing/`; one still there when the next run starts belonged to a run
+that was stopped part-way, and goes to `failed/` rather than back into the
+queue, where it would be retried and stopped again on every tick.
 """
 from __future__ import annotations
 
@@ -75,6 +78,14 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 VAULT_ROOT = SCRIPTS_DIR.parent.parent
 LOCK_NAME = "podcast_watch"
 TRANSCRIBE = SCRIPTS_DIR / "podcast_transcribe.py"
+
+# Per-episode limit when none is passed. The macOS LaunchAgent puts no limit
+# on the run, so this is the only one there. The Windows task's run is
+# stopped after TimeLimitMinutes, so schedules.psd1 passes a --timeout that
+# fits inside it: a run killed from outside before this limit fired used to
+# leave the drop in the queue, to be retried and killed again forever
+# (finding 5278625).
+DEFAULT_TIMEOUT = 4 * 60 * 60
 
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav", ".ogg", ".opus", ".flac", ".mp4"}
 LINK_EXTS = {".txt", ".url"}
@@ -215,19 +226,56 @@ def _retire(item: Path, target_dir: Path) -> Path:
     return Path(shutil.move(str(item), str(dest)))
 
 
+PROCESSING = "processing"
+
+
+def recover_interrupted(inbox: Path) -> int:
+    """Move drops left in processing/ by a run that never finished to failed/.
+
+    A drop is moved into processing/ before transcription starts, so a run
+    stopped from outside -- the Windows task's time limit, a restart, a crash
+    -- leaves it there rather than back in the queue. Retried, it would hit
+    the same wall on every tick forever (finding 5278625). Called under the
+    single-instance lock, so nothing in processing/ belongs to a live run.
+    """
+    folder = inbox / PROCESSING
+    if not folder.is_dir():
+        return 0
+    moved = 0
+    for item in sorted(folder.iterdir()):
+        if not item.is_file():
+            continue
+        log.warning("%s: the run transcribing it was stopped before it "
+                    "finished; moved to failed/", item.name)
+        failed = _retire(item, inbox / "failed")
+        failed.with_suffix(failed.suffix + ".error.log").write_text(
+            "Interrupted: the run transcribing this was stopped before it "
+            "finished (a time limit, a restart or a crash). Move it back into "
+            "the inbox to try again.\n", encoding="utf-8")
+        moved += 1
+    return moved
+
+
 def process_item(item: Path, *, out_dir: Path, model: str | None,
                  python: str, timeout: int) -> bool:
-    """Transcribe one drop. Returns True on success."""
+    """Transcribe one drop. Returns True on success.
+
+    The drop is moved into processing/ first and out to done/ or failed/ at
+    the end, so a run that is killed part-way never leaves it in the queue
+    (see recover_interrupted)."""
+    inbox = item.parent
     if item.suffix.lower() in LINK_EXTS:
         source = extract_url(item)
         if not source:
             log.error("%s contains no http(s) URL", item.name)
-            failed = _retire(item, item.parent / "failed")
+            failed = _retire(item, inbox / "failed")
             failed.with_suffix(failed.suffix + ".error.log").write_text(
                 "No http(s) URL found in this file.\n", encoding="utf-8")
             return False
         log.info("%s -> %s", item.name, _redact_url(source))
+        item = _retire(item, inbox / PROCESSING)
     else:
+        item = _retire(item, inbox / PROCESSING)
         source = str(item)
         log.info("%s -> local audio", item.name)
 
@@ -240,7 +288,7 @@ def process_item(item: Path, *, out_dir: Path, model: str | None,
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
         log.error("%s timed out after %ss", item.name, timeout)
-        failed = _retire(item, item.parent / "failed")
+        failed = _retire(item, inbox / "failed")
         failed.with_suffix(failed.suffix + ".error.log").write_text(
             f"Transcription exceeded the {timeout}s limit.\n", encoding="utf-8")
         return False
@@ -249,7 +297,7 @@ def process_item(item: Path, *, out_dir: Path, model: str | None,
     if proc.returncode != 0:
         log.error("%s failed (exit %s) after %.0fs", item.name,
                   proc.returncode, elapsed)
-        failed = _retire(item, item.parent / "failed")
+        failed = _retire(item, inbox / "failed")
         failed.with_suffix(failed.suffix + ".error.log").write_text(
             f"exit {proc.returncode}\n\n--- stderr ---\n{proc.stderr}\n",
             encoding="utf-8")
@@ -258,12 +306,13 @@ def process_item(item: Path, *, out_dir: Path, model: str | None,
     written = (proc.stdout or "").strip().splitlines()
     log.info("%s done in %.0fs -> %s", item.name, elapsed,
              written[-1] if written else out_dir)
-    _retire(item, item.parent / "done")
+    _retire(item, inbox / "done")
     return True
 
 
 def run_once(inbox: Path, *, out_dir: Path, model: str | None, python: str,
              max_per_run: int, timeout: int, min_age: float) -> int:
+    recover_interrupted(inbox)
     items = pending_items(inbox, min_age=min_age)
     if not items:
         log.info("Nothing pending in %s", inbox)
@@ -301,8 +350,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="passed through to podcast_transcribe.py")
     p.add_argument("--max-per-run", type=int, default=1,
                    help="max drops per --once run; 0 for no limit (default: 1)")
-    p.add_argument("--timeout", type=int, default=4 * 60 * 60,
-                   help="per-episode timeout in seconds (default: 14400)")
+    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT,
+                   help="per-episode timeout in seconds (default: "
+                        f"{DEFAULT_TIMEOUT}). Keep it under any limit the "
+                        "scheduler puts on the whole run: windows/schedules.psd1 "
+                        "passes one that fits the task's TimeLimitMinutes")
     p.add_argument("--min-age", type=float, default=20.0,
                    help="seconds a file must be unmodified before it is "
                         "considered fully copied (default: 20)")

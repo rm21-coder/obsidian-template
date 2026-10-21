@@ -74,7 +74,9 @@ cp Templates/Scripts/voice_cleanup_config.yaml.example \
    Templates/Scripts/voice_cleanup_config.yaml
 # Leave watch_folder commented out. Unset, it resolves through
 # source_media.drop_dir("voice") — the same function the mail transport
-# writes through, so the two cannot drift onto different folders.
+# writes through, so the two cannot drift onto different folders. A
+# watch_folder outside ~/SourceMedia/, or a vault_path other than this
+# vault, is refused: the job logs why and exits.
 
 # 2) Create the per-vault venv and install dependencies
 cd ~/Obsidian/Templates/Scripts

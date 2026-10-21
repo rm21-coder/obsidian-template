@@ -21,6 +21,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+import exe_lookup
 import whisper_onnx as wo
 
 
@@ -215,7 +216,7 @@ class TestDecodeAudio:
             self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """ffmpeg is an external prerequisite, so its absence should say so
         rather than surfacing as a FileNotFoundError from subprocess."""
-        monkeypatch.setattr(wo.shutil, "which", lambda _: None)
+        monkeypatch.setattr(exe_lookup, "find_executable", lambda _n, **_k: None)
         with pytest.raises(wo.WhisperOnnxError, match="ffmpeg"):
             wo.decode_audio(tmp_path / "nope.mp3")
 
@@ -223,7 +224,7 @@ class TestDecodeAudio:
             self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
             allow_subprocess: None) -> None:
         from types import SimpleNamespace
-        monkeypatch.setattr(wo.shutil, "which", lambda _: "ffmpeg")
+        monkeypatch.setattr(exe_lookup, "find_executable", lambda _n, **_k: "ffmpeg")
         monkeypatch.setattr(
             wo.subprocess, "run",
             lambda *a, **k: SimpleNamespace(
@@ -236,7 +237,7 @@ class TestDecodeAudio:
             allow_subprocess: None) -> None:
         from types import SimpleNamespace
         pcm = np.array([0, 16384, -16384, 32767], dtype=np.int16).tobytes()
-        monkeypatch.setattr(wo.shutil, "which", lambda _: "ffmpeg")
+        monkeypatch.setattr(exe_lookup, "find_executable", lambda _n, **_k: "ffmpeg")
         monkeypatch.setattr(
             wo.subprocess, "run",
             lambda *a, **k: SimpleNamespace(returncode=0, stdout=pcm, stderr=b""))
@@ -244,3 +245,40 @@ class TestDecodeAudio:
         assert audio.dtype == np.float32
         assert audio.max() <= 1.0 and audio.min() >= -1.0
         assert audio[1] == pytest.approx(0.5, abs=1e-4)
+
+    # 5268411 -- the decode is bounded and an over-long file is refused
+    def test_ffmpeg_is_told_to_stop_past_the_cap(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+            allow_subprocess: None) -> None:
+        from types import SimpleNamespace
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"] = cmd
+            return SimpleNamespace(returncode=0, stdout=b"\0\0" * 10, stderr=b"")
+
+        monkeypatch.setattr(exe_lookup, "find_executable", lambda _n, **_k: "/opt/ffmpeg")
+        monkeypatch.setattr(wo.subprocess, "run", fake_run)
+        wo.decode_audio(tmp_path / "ok.wav")
+        cmd = seen["cmd"]
+        assert cmd[0] == "/opt/ffmpeg"
+        assert cmd[cmd.index("-t") + 1] == str(wo.MAX_AUDIO_SECONDS + 1)
+        assert cmd.index("-t") > cmd.index("-i")     # an output option
+
+    def test_audio_past_the_cap_is_refused(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+            allow_subprocess: None) -> None:
+        from types import SimpleNamespace
+        over = b"\0\0" * (2 * 16000 + 1)              # just over 2 s at 16 kHz
+        monkeypatch.setattr(exe_lookup, "find_executable", lambda _n, **_k: "ffmpeg")
+        monkeypatch.setattr(
+            wo.subprocess, "run",
+            lambda *a, **k: SimpleNamespace(returncode=0, stdout=over, stderr=b""))
+        with pytest.raises(wo.WhisperOnnxError, match="longer than the 2 s limit"):
+            wo.decode_audio(tmp_path / "long.mp3", max_seconds=2)
+        audio = wo.decode_audio(tmp_path / "long.mp3", max_seconds=3)
+        assert len(audio) == 2 * 16000 + 1
+
+    def test_cap_matches_podcast_transcribe(self) -> None:
+        import podcast_transcribe
+        assert wo.MAX_AUDIO_SECONDS == podcast_transcribe.MAX_EPISODE_SECONDS == 6 * 3600

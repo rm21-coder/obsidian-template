@@ -221,7 +221,11 @@ def find_claude(override):
             return override
         die("claude not executable at %s" % override)
 
-    found = shutil.which("claude")
+    # PATH entries only, never the working directory or the vault: on
+    # Windows shutil.which looks in the current directory first and honours
+    # PATHEXT, so a claude.cmd beside the scripts used to win (5277585).
+    import exe_lookup
+    found = exe_lookup.find_executable("claude")
     if found:
         return found
 

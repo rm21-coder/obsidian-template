@@ -10,7 +10,10 @@
 # matches it against the gateway's /v1/models.
 claude_model: "claude-sonnet-5-5"
 
-# Path to your Obsidian vault (only needed if the script can't auto-detect)
+# Path to your Obsidian vault. Leave it unset: the script finds the vault it
+# sits in, and any other value is refused (the job exits with
+# "vault_path ... is not this vault") so an edited config cannot send notes
+# into another folder.
 # vault_path: "/Users/yourname/your-vault"
 
 # Watch folder — where dictation drops land. Leave this commented out unless
@@ -18,5 +21,8 @@ claude_model: "claude-sonnet-5-5"
 # source_media.drop_dir ("~/SourceMedia/VoiceInput"), which is the same
 # function source_mail_pull.py writes through. Setting it here is how the
 # watcher and the mail transport end up on different folders, and the failure
-# is silent — drops are delivered into a folder nothing drains.
+# is silent — drops are delivered into a folder nothing drains. A value
+# outside ~/SourceMedia (after resolving symlinks) is refused, and so is
+# ~/SourceMedia itself: every .txt in the folder is sent to the model and then
+# deleted, so it must not be pointable at an arbitrary folder.
 # watch_folder: "~/SourceMedia/VoiceInput"
