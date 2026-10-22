@@ -310,12 +310,12 @@ def audit_range(repo_root: Path, rev_range: str) -> tuple[int, int]:
                 check=True, capture_output=True, text=True, encoding="utf-8",
                 errors="replace").stdout
         except subprocess.CalledProcessError as exc:
-            print(f"VIOLATION  {rel} @ {commit[:9]}  could not read: {exc}", file=sys.stderr)
+            print(f"VIOLATION  {rel.as_posix()} @ {commit[:9]}  could not read: {exc}", file=sys.stderr)
             violations += 1
             continue
         value = parse_classification(text)
         if value != REQUIRED_VALUE:
-            print(f"VIOLATION  {rel} @ {commit[:9]}\n"
+            print(f"VIOLATION  {rel.as_posix()} @ {commit[:9]}\n"
                   f"           classification: {value if value is not None else '(missing)'}\n"
                   f"           required:       {REQUIRED_VALUE}", file=sys.stderr)
             violations += 1

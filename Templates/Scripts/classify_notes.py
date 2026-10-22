@@ -585,6 +585,9 @@ def preserve_updated(updates: dict[str, str], fm_body: str | None) -> dict[str, 
 def process_file(filepath: Path, client, dry_run: bool,
                  detectors_only: bool, force: bool) -> dict | None:
     """Evaluate one note. Returns an action record, or None if nothing to do."""
+    # Records carry rel.as_posix(): it is printed and reported as a vault
+    # path, like the tracking keys and the review queue, and str(rel) is
+    # backslash-separated on Windows (Windows tester, 2026-10-22).
     rel = filepath.relative_to(VAULT_ROOT)
     try:
         original = classification_tier.read_note(filepath, newline="")
@@ -592,7 +595,7 @@ def process_file(filepath: Path, client, dry_run: bool,
         # Never read, never sent, tier untouched: an oversize note is not
         # evidence of anything, least of all of being public. Reported as an
         # error, so it is never tracked and comes back every run.
-        return {"action": "error", "rel": str(rel), "title": filepath.stem,
+        return {"action": "error", "rel": rel.as_posix(), "title": filepath.stem,
                 "from": "(unread)", "to": "", "layer": "parse",
                 "confidence": "",
                 "rationale": "note refused: larger than the "
@@ -650,7 +653,7 @@ def process_file(filepath: Path, client, dry_run: bool,
                                             newline=file_newline)
                     refused += (f"; L0 detector hit ({rules}): auto-applied {to} "
                                 f"(was {cur or 'unset'})")
-        return {"action": "error", "rel": str(rel), "title": filepath.stem,
+        return {"action": "error", "rel": rel.as_posix(), "title": filepath.stem,
                 "from": cur or "(unread)", "to": to, "layer": "parse",
                 "confidence": "", "rationale": refused}
     folder = rel.parts[0] if len(rel.parts) > 1 else "(root)"
@@ -687,7 +690,7 @@ def process_file(filepath: Path, client, dry_run: bool,
             preserve_updated(updates, fm_body)
             new_text = splice_frontmatter(text, updates)
             if not classification_tier.tier_not_lowered(text, new_text, tier):
-                return {"action": "error", "rel": str(rel), "title": title,
+                return {"action": "error", "rel": rel.as_posix(), "title": title,
                         "from": cur or "(unset)", "to": tier, "layer": "detector",
                         "confidence": "",
                         "rationale": f"L0 detector hit ({rules}): {tier} material, "
@@ -695,7 +698,7 @@ def process_file(filepath: Path, client, dry_run: bool,
                                      "safely; fix by hand"}
             if not dry_run:
                 filepath.write_text(new_text, encoding="utf-8", newline=file_newline)
-            return {"action": "auto-applied", "rel": str(rel), "title": title,
+            return {"action": "auto-applied", "rel": rel.as_posix(), "title": title,
                     "from": cur or "(unset)", "to": tier, "layer": "detector",
                     "confidence": "certain", "rationale": findings}
         return None
@@ -722,7 +725,7 @@ def process_file(filepath: Path, client, dry_run: bool,
 
     verdict = adjudicate(client, title, folder, body)
     if verdict is None:
-        return {"action": "error", "rel": str(rel), "title": title,
+        return {"action": "error", "rel": rel.as_posix(), "title": title,
                 "from": cur or "(unset)", "to": "", "layer": "llm",
                 "confidence": "", "rationale": "unparseable model response"}
 
@@ -753,7 +756,7 @@ def process_file(filepath: Path, client, dry_run: bool,
     # never leave the note lower, or unreadable, to them (5268564).
     if not classification_tier.tier_not_lowered(
             text, new_text, updates.get("classification")):
-        return {"action": "error", "rel": str(rel), "title": title,
+        return {"action": "error", "rel": rel.as_posix(), "title": title,
                 "from": cur or "(unset)", "to": "", "layer": "llm",
                 "confidence": "",
                 "rationale": "verdict NOT written — the tier could not be "
@@ -762,7 +765,7 @@ def process_file(filepath: Path, client, dry_run: bool,
         filepath.write_text(new_text, encoding="utf-8", newline=file_newline)
 
     return {"action": "suggested" if elevated else "backfilled",
-            "rel": str(rel), "title": title,
+            "rel": rel.as_posix(), "title": title,
             "from": cur or f"(unset -> {baseline})",
             "to": tier if elevated else baseline, "layer": "llm",
             "confidence": verdict["confidence"], "rationale": verdict["rationale"]}

@@ -700,6 +700,17 @@ def test_the_card_shows_the_count_and_links_to_the_page():
     assert "may be out of date" not in out
 
 
+def test_a_link_uses_vault_slashes_on_windows():
+    """Windows tester, 2026-10-22 ("Classification Review card missing"): the
+    card was there, but str() of a Windows path made its link, and every
+    other dashboard link, Actions%5CClassification%20Review. PureWindowsPath
+    stands in for a Windows Path here."""
+    from pathlib import PureWindowsPath
+    uri = md.obsidian_uri(PureWindowsPath("Actions\\Classification Review.md"))
+    assert uri.endswith("&file=Actions/Classification%20Review"), uri
+    assert "%5C" not in md.obsidian_uri(PureWindowsPath("Meetings\\History\\2026-03-04 1400.md"))
+
+
 def test_an_empty_queue_shows_no_card():
     out = _render({"pending": 0, "generated": _dt.datetime(2026, 9, 30, 5, 0),
                    "stale": False})

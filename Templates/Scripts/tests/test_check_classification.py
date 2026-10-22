@@ -354,6 +354,19 @@ class TestPushedRange:
         assert proc.returncode == 1, proc.stderr
         assert "VIOLATION  Knowledge/leak.md @ " in proc.stderr
 
+    def test_a_pushed_violation_names_the_git_path_on_every_platform(
+            self, audit, monkeypatch, capsys) -> None:
+        """`path @ commit` is a git object name: it is printed with / even on
+        Windows, where str(Path) gave Knowledge\\leak.md (Windows tester,
+        2026-10-22). PureWindowsPath stands in for a Windows Path here."""
+        from pathlib import PureWindowsPath
+        monkeypatch.setattr(audit, "range_blobs",
+                            lambda root, rng: [("a" * 40, PureWindowsPath("Knowledge/leak.md"))])
+        monkeypatch.setattr(audit.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
+            a[0], 0, CONFIDENTIAL, ""))
+        assert audit.audit_range(Path("."), "x..y") == (1, 1)
+        assert "VIOLATION  Knowledge/leak.md @ aaaaaaaaa" in capsys.readouterr().err
+
     def test_a_clean_range_passes_and_a_new_branch_range_works(
             self, content_repo: Path, allow_subprocess: None) -> None:
         _write(content_repo, "Knowledge/ok.md", PUBLIC)

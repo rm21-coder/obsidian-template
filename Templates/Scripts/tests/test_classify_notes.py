@@ -1204,6 +1204,22 @@ def test_an_oversize_note_is_reported_by_a_run(vault: Path,
     assert "-byte read cap" in out
 
 
+def test_a_record_names_the_note_by_its_vault_path_on_windows(monkeypatch: pytest.MonkeyPatch):
+    """Windows tester, 2026-10-22: "Oversize note not reported" was the run
+    printing `?? Knowledge\\Huge.md` -- the read cap worked; the record's rel
+    was str(Path). PureWindowsPath stands in for a Windows Path here."""
+    from pathlib import PureWindowsPath
+    import classification_tier
+
+    def too_large(path, **kw):
+        raise classification_tier.NoteTooLarge(f"{path}: larger than the cap")
+    monkeypatch.setattr(C, "VAULT_ROOT", PureWindowsPath("C:/v"))
+    monkeypatch.setattr(classification_tier, "read_note", too_large)
+    rec = C.process_file(PureWindowsPath("C:/v/Knowledge/Huge.md"), FakeClient("public"),
+                         dry_run=True, detectors_only=True, force=True)
+    assert rec["rel"] == "Knowledge/Huge.md"
+
+
 def test_read_note_caps_and_translates(tmp_path: Path):
     import classification_tier as T
     p = tmp_path / "n.md"

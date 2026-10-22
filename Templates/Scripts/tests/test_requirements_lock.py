@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from platform_caps import macos_shell
 
 REPO = Path(__file__).resolve().parents[3]
 SCRIPTS = REPO / "Templates" / "Scripts"
@@ -233,6 +234,7 @@ def _run_install_requirements(tmp_path: Path, **kw):
     return _mac_run(d, fake, kw.get("lock_name")), argv
 
 
+@macos_shell
 def test_macos_installs_only_the_lock_with_every_flag(tmp_path, allow_subprocess) -> None:
     p, argv = _run_install_requirements(tmp_path)
     assert p.returncode == 0, p.stdout + p.stderr
@@ -245,6 +247,7 @@ def test_macos_installs_only_the_lock_with_every_flag(tmp_path, allow_subprocess
     assert args.count("-m") == 1              # exactly one pip invocation
 
 
+@macos_shell
 def test_macos_installs_a_named_lock(tmp_path, allow_subprocess) -> None:
     p, argv = _run_install_requirements(tmp_path, lock_name="requirements-dropper.lock")
     assert p.returncode == 0, p.stdout + p.stderr
@@ -252,6 +255,7 @@ def test_macos_installs_a_named_lock(tmp_path, allow_subprocess) -> None:
     assert args[args.index("-r") + 1].endswith("/Scripts/requirements-dropper.lock")
 
 
+@macos_shell
 def test_macos_refuses_when_the_lock_is_missing(tmp_path, allow_subprocess) -> None:
     p, argv = _run_install_requirements(tmp_path, with_lock=False)
     assert p.returncode != 0
@@ -259,6 +263,7 @@ def test_macos_refuses_when_the_lock_is_missing(tmp_path, allow_subprocess) -> N
     assert not argv.exists()                  # pip never ran
 
 
+@macos_shell
 @pytest.mark.parametrize("probe,marker", [
     ("x86_64 13 gil", "is not an Apple Silicon interpreter (x86_64)"),
     ("arm64 15 gil", "is Python 3.15; the pinned dependencies need 3.10-3.14"),
@@ -274,6 +279,7 @@ def test_macos_refuses_an_interpreter_the_lock_cannot_serve(tmp_path, allow_subp
     assert not argv.exists()                  # pip never ran
 
 
+@macos_shell
 def test_macos_names_packages_the_lock_does_not_cover(tmp_path, allow_subprocess) -> None:
     p, _ = _run_install_requirements(tmp_path, extras="rich\npygments\n")
     assert p.returncode == 0
@@ -486,6 +492,7 @@ def _pip_calls(argv: Path) -> list[list[str]]:
     return calls + ([cur] if cur else [])
 
 
+@macos_shell
 def test_macos_reinstalls_everything_only_when_the_lock_is_new(tmp_path, allow_subprocess) -> None:
     import hashlib
     d, fake, argv = _mac_setup(tmp_path)
@@ -509,6 +516,7 @@ def test_macos_reinstalls_everything_only_when_the_lock_is_new(tmp_path, allow_s
     assert all("--require-hashes" in c and "--only-binary" in c for c in calls)
 
 
+@macos_shell
 def test_macos_records_the_lock_only_after_pip_succeeds(tmp_path, allow_subprocess) -> None:
     d, fake, argv = _mac_setup(tmp_path, pip_exit=1)
     p = _mac_run(d, fake)
@@ -518,6 +526,7 @@ def test_macos_records_the_lock_only_after_pip_succeeds(tmp_path, allow_subproce
     assert not (tmp_path / "venv" / "requirements.lock.sha256").exists()
 
 
+@macos_shell
 def test_macos_names_the_record_after_the_lock(tmp_path, allow_subprocess) -> None:
     d, fake, _ = _mac_setup(tmp_path, lock_name="requirements-dropper.lock")
     assert _mac_run(d, fake, "requirements-dropper.lock").returncode == 0

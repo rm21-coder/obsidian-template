@@ -26,6 +26,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from platform_caps import macos_shell, rmtree_force
 
 REPO = Path(__file__).resolve().parents[3]
 LIB = REPO / "installers" / "lib"
@@ -78,6 +79,7 @@ def _run(script: Path, *args: str, env: dict) -> subprocess.CompletedProcess:
 # install.sh
 # ---------------------------------------------------------------------------
 
+@macos_shell
 def test_a_clean_tree_runs(tree, allow_subprocess):
     repo, home, env = tree
     r = _run(repo / "install.sh", "--list", env=env)
@@ -86,6 +88,7 @@ def test_a_clean_tree_runs(tree, allow_subprocess):
     assert "  90-verify" in r.stdout
 
 
+@macos_shell
 def test_a_modified_tracked_installer_file_refuses_before_common_sh_runs(tree, allow_subprocess):
     repo, home, env = tree
     marker = home / "planted-ran"
@@ -101,6 +104,7 @@ def test_a_modified_tracked_installer_file_refuses_before_common_sh_runs(tree, a
     assert "  90-verify" not in r.stdout
 
 
+@macos_shell
 def test_an_untracked_file_in_installers_refuses(tree, allow_subprocess):
     repo, home, env = tree
     (repo / "installers" / "components" / "99-planted.sh").write_text("echo planted\n")
@@ -110,6 +114,7 @@ def test_an_untracked_file_in_installers_refuses(tree, allow_subprocess):
     assert "?? installers/components/99-planted.sh" in r.stderr
 
 
+@macos_shell
 def test_an_untracked_file_in_templates_scripts_refuses(tree, allow_subprocess):
     repo, home, env = tree
     (repo / "Templates" / "Scripts" / "com.planted.plist").write_text("<plist/>\n")
@@ -118,6 +123,7 @@ def test_an_untracked_file_in_templates_scripts_refuses(tree, allow_subprocess):
     assert "?? Templates/Scripts/com.planted.plist" in r.stderr
 
 
+@macos_shell
 def test_a_self_ignoring_gitignore_cannot_hide_a_planted_component(tree, allow_subprocess):
     """`*` in a nested .gitignore ignores the .gitignore too, so plain
     `git status` shows nothing; the ignored-files pass still sees it."""
@@ -134,6 +140,7 @@ def test_a_self_ignoring_gitignore_cannot_hide_a_planted_component(tree, allow_s
     assert "!! installers/components/99-planted.sh" in r.stderr
 
 
+@macos_shell
 def test_a_modified_gate_helper_is_not_sourced(tree, allow_subprocess):
     repo, home, env = tree
     marker = home / "gate-ran"
@@ -146,6 +153,7 @@ def test_a_modified_gate_helper_is_not_sourced(tree, allow_subprocess):
     assert not marker.exists()
 
 
+@macos_shell
 def test_the_override_runs_and_is_logged(tree, allow_subprocess):
     repo, home, env = tree
     with open(repo / "installers" / "lib" / "common.sh", "a", encoding="utf-8") as fh:
@@ -160,9 +168,10 @@ def test_the_override_runs_and_is_logged(tree, allow_subprocess):
     assert (home / "Library" / "Logs" / "obsidian-template-tree-gate.log").stat().st_mode & 0o077 == 0
 
 
+@macos_shell
 def test_a_tree_that_is_not_a_git_checkout_warns_and_continues(tree, tmp_path, allow_subprocess):
     repo, home, env = tree
-    shutil.rmtree(repo / ".git")
+    rmtree_force(repo / ".git")
     r = _run(repo / "install.sh", "--list", env=env)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "WARNING: " in r.stdout and "is not a git checkout" in r.stdout
@@ -172,6 +181,7 @@ def test_a_tree_that_is_not_a_git_checkout_warns_and_continues(tree, tmp_path, a
     assert "This run requires a checkout (--strict-tree, or an update, which pulls)." in strict.stderr
 
 
+@macos_shell
 def test_a_gitignored_profile_is_allowed_and_its_hash_printed(tree, allow_subprocess):
     repo, home, env = tree
     prof = repo / "installers" / "profiles" / "site.env"
@@ -184,6 +194,7 @@ def test_a_gitignored_profile_is_allowed_and_its_hash_printed(tree, allow_subpro
     assert f"profile file:   {prof.resolve()}" in out
 
 
+@macos_shell
 def test_a_profile_outside_the_vault_is_allowed(tree, tmp_path, allow_subprocess):
     repo, home, env = tree
     prof = tmp_path / "Downloads" / "ours.env"
@@ -194,6 +205,7 @@ def test_a_profile_outside_the_vault_is_allowed(tree, tmp_path, allow_subprocess
     assert hashlib.sha256(prof.read_bytes()).hexdigest() in r.stdout
 
 
+@macos_shell
 @pytest.mark.parametrize("where", ["ours.env", "Templates/ours.env"])
 def test_a_profile_elsewhere_in_the_vault_is_refused(tree, where, allow_subprocess):
     repo, home, env = tree
@@ -222,6 +234,7 @@ def test_a_full_install_ends_with_the_sync_notice():
 # update.sh and uninstall.sh
 # ---------------------------------------------------------------------------
 
+@macos_shell
 def test_update_refuses_an_untracked_installer_file(tree, allow_subprocess):
     """It used to check tracked files only (--untracked-files=no)."""
     repo, home, env = tree
@@ -233,14 +246,16 @@ def test_update_refuses_an_untracked_installer_file(tree, allow_subprocess):
         assert "?? installers/lib/planted.sh" in r.stderr
 
 
+@macos_shell
 def test_update_refuses_a_tree_git_cannot_vouch_for(tree, allow_subprocess):
     repo, home, env = tree
-    shutil.rmtree(repo / ".git")
+    rmtree_force(repo / ".git")
     r = _run(repo / "update.sh", "--dry-run", env=env)
     assert r.returncode == 1
     assert "This run requires a checkout (--strict-tree, or an update, which pulls)." in r.stderr
 
 
+@macos_shell
 def test_uninstall_refuses_before_sourcing_its_libraries(tree, allow_subprocess):
     repo, home, env = tree
     marker = home / "planted-ran"
@@ -341,6 +356,7 @@ def test_powershell_gate_has_no_pwsh_only_syntax():
 # gate cannot see a .pyc planted inside it, and installer helpers run without
 # -I import their siblings. After the gate, no Python the run starts may read
 # bytecode from the tree.
+@macos_shell
 def test_after_the_gate_python_reads_no_bytecode_from_the_tree(tree, allow_subprocess):
     repo, home, env = tree
     probe = ('source installers/lib/tree_gate.sh; '
@@ -381,6 +397,7 @@ def _tracked_doc(repo: Path) -> Path:
     return doc
 
 
+@macos_shell
 def test_update_notes_a_line_ending_only_change_outside_installer_code(tree, allow_subprocess):
     repo, home, env = tree
     doc = _tracked_doc(repo)
@@ -391,6 +408,7 @@ def test_update_notes_a_line_ending_only_change_outside_installer_code(tree, all
     assert "docs/Guide.md" in r.stdout
 
 
+@macos_shell
 def test_update_still_refuses_a_content_change_outside_installer_code(tree, allow_subprocess):
     repo, home, env = tree
     doc = _tracked_doc(repo)
@@ -401,6 +419,7 @@ def test_update_still_refuses_a_content_change_outside_installer_code(tree, allo
     assert "docs/Guide.md" in r.stderr
 
 
+@macos_shell
 def test_a_line_ending_change_to_installer_code_is_still_refused(tree, allow_subprocess):
     repo, home, env = tree
     lib = repo / "installers" / "lib" / "common.sh"

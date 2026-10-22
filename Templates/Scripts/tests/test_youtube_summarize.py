@@ -56,6 +56,7 @@ Mocking strategy
 from __future__ import annotations
 
 import json
+import re
 import socket
 import sys
 import textwrap
@@ -476,7 +477,9 @@ class TestCaptionTrackSSRF:
         assert result == ""
         err = capsys.readouterr().err
         assert f"refusing https://{long_name}/c.vtt: DNS resolution failed" in err
-        assert "UnicodeEncodeError" in err
+        # UnicodeEncodeError from 3.13 on, a bare UnicodeError on 3.12 (the
+        # Windows tester, 2026-10-22): the idna codec changed; both are caught.
+        assert re.search(r"\bUnicode(Encode)?Error\b", err), err
 
 
 # ---------------------------------------------------------------------------

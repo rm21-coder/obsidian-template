@@ -26,6 +26,7 @@ INSTALL = (WINDOWS / "install.ps1").read_text(encoding="utf-8").replace("\r\n", 
 
 sys.path.insert(0, str(HELPER.parent))
 import plugin_drift  # noqa: E402
+from platform_caps import macos_shell
 
 PINNED = b'{"id": "a", "version": "2.0.0"}'
 MAIN = b"pinned bundle"
@@ -104,6 +105,7 @@ def test_the_cli_prints_one_id_per_line(tmp_path, allow_subprocess) -> None:
     assert r.returncode == 0 and r.stdout.split() == ["a", "b"]
 
 
+@macos_shell
 def test_mac_plugins_drifted_reports_the_reason(tmp_path, allow_subprocess) -> None:
     def run(v: Path):
         return subprocess.run(["bash", "-c", f'source "{REPO}/installers/lib/common.sh"; '

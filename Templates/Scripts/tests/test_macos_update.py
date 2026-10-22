@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from platform_caps import macos_only
+from platform_caps import macos_only, macos_shell
 
 REPO = Path(__file__).resolve().parents[3]
 LIB = REPO / "installers" / "lib"
@@ -43,6 +43,7 @@ def _render(label: str, user: str = "tester") -> str:
 # The decisions.
 # ---------------------------------------------------------------------------
 
+@macos_shell
 @pytest.mark.parametrize("label,component", [
     ("com.tag-clippings", "40-tagger"),
     ("com.obsidian.classify", "58-classification"),        # a loose match said 20-secrets
@@ -57,6 +58,7 @@ def test_each_job_maps_to_the_component_that_installs_it(label, component, allow
     assert r.stdout.strip() == component
 
 
+@macos_shell
 def test_the_vault_may_be_a_symlink_to_the_repo(tmp_path, allow_subprocess):
     link = tmp_path / "Obsidian"
     link.symlink_to(REPO)
@@ -67,6 +69,7 @@ def test_the_vault_may_be_a_symlink_to_the_repo(tmp_path, allow_subprocess):
     assert _bash(f'vault_is_repo "{REPO}" "{tmp_path}/missing"').returncode != 0
 
 
+@macos_shell
 def test_only_installed_jobs_are_candidates_and_identical_ones_are_left_alone(
         tmp_path, allow_subprocess):
     la = tmp_path / "LaunchAgents"
@@ -83,6 +86,7 @@ def test_only_installed_jobs_are_candidates_and_identical_ones_are_left_alone(
     assert set(plan.values()) == {"unchanged", "changed", "not-installed"}
 
 
+@macos_shell
 def test_plugins_are_reinstalled_only_when_the_pins_moved(tmp_path, allow_subprocess):
     repo = tmp_path / "r"
     (repo / "installers").mkdir(parents=True)

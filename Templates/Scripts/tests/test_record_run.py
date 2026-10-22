@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from platform_caps import requires_symlinks
+
 import security_common
 
 
@@ -30,6 +32,7 @@ def test_the_record_is_not_a_json_trust_anchor(state: Path) -> None:
     assert not list(state.glob("*.json"))
 
 
+@requires_symlinks
 def test_a_planted_link_is_not_written_through(state: Path, tmp_path: Path) -> None:
     state.mkdir(parents=True)
     victim = tmp_path / "victim.txt"; victim.write_text("keep")
@@ -62,6 +65,7 @@ def test_the_bytecode_child_is_not_a_run(state: Path, monkeypatch) -> None:
     assert not (state / "last-run-integrity.txt").exists()
 
 
+@requires_symlinks
 def test_a_planted_link_is_not_written_through_without_o_nofollow(
         state: Path, tmp_path: Path, monkeypatch) -> None:
     # N6 (2026-10-22): Windows has no O_NOFOLLOW, so the flag was 0 there and

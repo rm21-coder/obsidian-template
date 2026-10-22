@@ -14,7 +14,9 @@ should run.
 from __future__ import annotations
 
 import os
+import shutil
 import signal
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -54,6 +56,44 @@ requires_posix_modes = pytest.mark.skipif(
     reason="POSIX file modes are not represented on this platform; the Windows "
            "ACL path (restrict_file / icacls) is covered separately")
 macos_only = pytest.mark.skipif(not ON_MACOS, reason="launchd is macOS-only")
+
+ON_WINDOWS = os.name == "nt"
+# The macOS installer layer (install.sh, update.sh, installers/lib/*.sh, the
+# pre-push hook as the Mac runs it) is driven by these tests through a real
+# bash. On Windows the `bash` on PATH is WSL or Git Bash: WSL sees C:\ paths
+# as /mnt/c/..., there is no /bin/bash for Python to start, and `source` of a
+# Windows path fails -- so those tests failed for the shell, not for the code
+# (Windows tester, 2026-10-22). The Windows layer is the PowerShell one, with
+# its own tests. Mark only tests that RUN a macOS shell script; a test that
+# only reads one stays on everywhere.
+macos_shell = pytest.mark.skipif(
+    ON_WINDOWS,
+    reason="runs a macOS installer shell script through bash; on Windows that is "
+           "WSL or Git Bash, which map paths and `source` differently -- the macOS "
+           "shell behaviour this test proves is NOT verified on this machine "
+           "(the PowerShell equivalent has its own tests)")
+
+
+def _force_remove(func, path, _exc) -> None:
+    """rmtree error handler: make the entry (and the folder holding it)
+    writable and retry once. git writes its object files read-only, and on
+    Windows a read-only file cannot be deleted, so a plain rmtree of a .git
+    directory fails there. The parent is for POSIX, where it is the folder's
+    mode that blocks the delete -- which is what lets the Mac test this."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.chmod(parent, stat.S_IRWXU)
+    os.chmod(path, stat.S_IRWXU if os.path.isdir(path) else stat.S_IREAD | stat.S_IWRITE)
+    func(path)
+
+
+def rmtree_force(path) -> None:
+    """shutil.rmtree that also removes read-only files (a .git directory on
+    Windows). onexc where it exists (3.12+, which deprecates onerror)."""
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_force_remove)
+    else:
+        shutil.rmtree(path, onerror=_force_remove)
 
 
 def make_cli_stub(directory: Path, name: str, source: str) -> Path:

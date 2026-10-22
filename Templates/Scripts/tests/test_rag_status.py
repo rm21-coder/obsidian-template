@@ -14,6 +14,7 @@ import importlib.util
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -58,7 +59,7 @@ def test_the_cli_exit_code_says_which(tmp_path, allow_subprocess) -> None:
     env = {k: v for k, v in os.environ.items() if k != R.KEY}
     for text, rc in (("OBSIDIAN_COLLECTION_ID=\n", 1), ("OBSIDIAN_COLLECTION_ID=abc\n", 0)):
         f.write_text(text, encoding="utf-8")
-        p = subprocess.run(["/usr/bin/python3" if Path("/usr/bin/python3").exists() else "python3",
+        p = subprocess.run(["/usr/bin/python3" if Path("/usr/bin/python3").exists() else sys.executable,
                             str(SCRIPTS / "rag_status.py")],
                            env={**env, "RAG_STATUS_SECRETS_ENV": str(f)}, capture_output=True, text=True)
         assert p.returncode == rc, p.stdout + p.stderr

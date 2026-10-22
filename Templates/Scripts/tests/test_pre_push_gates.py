@@ -10,6 +10,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from platform_caps import macos_shell
+
+# Every test here runs the real pre-push hook through bash.
+pytestmark = macos_shell
 
 REPO = Path(__file__).resolve().parents[3]
 LIB = REPO / "installers" / "lib"

@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from platform_caps import macos_shell
 
 REPO = Path(__file__).resolve().parents[3]
 SCRIPTS = REPO / "Templates" / "Scripts"
@@ -263,6 +264,7 @@ def _retire(tmp_path, dry: int):
     return p, vault, backup
 
 
+@macos_shell
 def test_macos_update_moves_the_retired_plugin_out_of_the_vault(tmp_path, allow_subprocess) -> None:
     p, vault, backup = _retire(tmp_path, 0)
     assert p.returncode == 0, p.stderr
@@ -272,6 +274,7 @@ def test_macos_update_moves_the_retired_plugin_out_of_the_vault(tmp_path, allow_
     assert "templater-obsidian: retired upstream; removed" in p.stdout + p.stderr
 
 
+@macos_shell
 def test_macos_dry_run_leaves_it(tmp_path, allow_subprocess) -> None:
     p, vault, backup = _retire(tmp_path, 1)
     assert (vault / ".obsidian" / "plugins" / "templater-obsidian").exists() and not backup.exists()
@@ -317,6 +320,7 @@ def test_updaters_refuse_while_obsidian_is_open() -> None:
     assert ps.index("Remove-RetiredPlugins -Vault $vault") < ps.index("== 3/3 scheduled tasks ==")
 
 
+@macos_shell
 def test_obsidian_running_detection(tmp_path, allow_subprocess) -> None:
     for code, expect in ((0, 0), (1, 1)):
         fake = tmp_path / f"pgrep{code}"
@@ -420,6 +424,7 @@ def _retire_with(tmp_path, plugin, note_name, note_text):
     return p, vault / ".obsidian" / "plugins" / plugin, p.stdout + p.stderr
 
 
+@macos_shell
 def test_a_vault_using_dataview_keeps_it(tmp_path, allow_subprocess) -> None:
     p, plugin, out = _retire_with(tmp_path, "dataview", "Topic.md",
                                   "# T\n\n```dataview\nLIST FROM \"\"\n```\n")
@@ -428,11 +433,13 @@ def test_a_vault_using_dataview_keeps_it(tmp_path, allow_subprocess) -> None:
     assert "dataview: retired upstream and disabled, but kept: 1 note(s) still use Dataview queries" in out
 
 
+@macos_shell
 def test_an_inline_dataview_query_counts_as_use(tmp_path, allow_subprocess) -> None:
     p, plugin, out = _retire_with(tmp_path, "dataview", "Note.md", "Count: `= length(this.file.tags)`\n")
     assert plugin.exists() and "still use Dataview" in out
 
 
+@macos_shell
 def test_a_defused_dataview_copy_is_not_use(tmp_path, allow_subprocess) -> None:
     # The ingest guard puts a zero-width space inside triggers in clipped text.
     p, plugin, out = _retire_with(tmp_path, "dataview", "Clip.md", "```dataview\u200b\nLIST\n```\n")
@@ -440,11 +447,13 @@ def test_a_defused_dataview_copy_is_not_use(tmp_path, allow_subprocess) -> None:
     assert "dataview: retired upstream; removed" in out
 
 
+@macos_shell
 def test_a_vault_without_dataview_queries_loses_the_plugin(tmp_path, allow_subprocess) -> None:
     p, plugin, out = _retire_with(tmp_path, "dataview", "Note.md", "Just text.\n")
     assert not plugin.exists() and "dataview: retired upstream; removed" in out
 
 
+@macos_shell
 def test_a_vault_with_drawings_keeps_excalidraw(tmp_path, allow_subprocess) -> None:
     p, plugin, out = _retire_with(tmp_path, "obsidian-excalidraw-plugin", "Sketch.excalidraw.md",
                                   "---\nexcalidraw-plugin: parsed\n---\n")

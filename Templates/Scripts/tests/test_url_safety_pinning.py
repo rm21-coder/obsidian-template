@@ -15,6 +15,7 @@ pinned public address is refused at the resolver stub before any socket opens.
 from __future__ import annotations
 
 import http.server
+import re
 import socket
 import threading
 import time
@@ -320,7 +321,11 @@ def test_an_unencodable_name_is_refused_not_raised(
     monkeypatch.setattr(socket, "getaddrinfo", encoding_resolver)
     ok, reason = url_safety.is_safe_url(f"https://{'a' * 64}.test.example/")
     assert not ok
-    assert "DNS resolution failed" in reason and "UnicodeEncodeError" in reason
+    # UnicodeEncodeError from 3.13 on, a bare UnicodeError before (3.12 on the
+    # Windows tester's machine, 2026-10-22): the idna codec changed, the code
+    # catches both.
+    assert "DNS resolution failed" in reason
+    assert re.search(r"\bUnicode(Encode)?Error\b", reason), reason
 
 
 class _Drip(http.server.BaseHTTPRequestHandler):

@@ -14,6 +14,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from platform_caps import macos_shell
 
 REPO = Path(__file__).resolve().parents[3]
 LIB = REPO / "installers" / "lib"
@@ -67,6 +68,7 @@ def run(tmp_path: Path, script: str, env_lines: str = "", kc: dict | None = None
     return p.stdout, env_file.read_text(), store
 
 
+@macos_shell
 def test_moves_a_dotenv_secret_into_the_keychain(tmp_path, allow_subprocess):
     out, env, kc = run(tmp_path, "migrate_env_secret SOURCE_MAIL_TOKEN",
                        "SOURCE_MAIL_USER=a@b.example\nSOURCE_MAIL_TOKEN=abc123\n")
@@ -75,6 +77,7 @@ def test_moves_a_dotenv_secret_into_the_keychain(tmp_path, allow_subprocess):
     assert "moved from" in out
 
 
+@macos_shell
 def test_keeps_dotenv_when_the_keychain_write_fails(tmp_path, allow_subprocess):
     out, env, kc = run(tmp_path, "migrate_env_secret SOURCE_MAIL_TOKEN",
                        "SOURCE_MAIL_TOKEN=abc123\n", kc_fails=True)
@@ -82,6 +85,7 @@ def test_keeps_dotenv_when_the_keychain_write_fails(tmp_path, allow_subprocess):
     assert "Keychain unavailable" in out
 
 
+@macos_shell
 def test_removes_a_duplicate_only_when_the_values_match(tmp_path, allow_subprocess):
     out, env, kc = run(tmp_path, "migrate_env_secret SOURCE_MAIL_TOKEN",
                        "SOURCE_MAIL_TOKEN=abc123\n", kc={"source_mail_token": "abc123"})
@@ -89,6 +93,7 @@ def test_removes_a_duplicate_only_when_the_values_match(tmp_path, allow_subproce
     assert "removed the plaintext copy" in out
 
 
+@macos_shell
 def test_never_switches_secrets_when_the_values_differ(tmp_path, allow_subprocess):
     out, env, kc = run(tmp_path, "migrate_env_secret SOURCE_MAIL_TOKEN",
                        "SOURCE_MAIL_TOKEN=in-use\n", kc={"source_mail_token": "stale"})
@@ -96,6 +101,7 @@ def test_never_switches_secrets_when_the_values_differ(tmp_path, allow_subproces
     assert "different values" in out
 
 
+@macos_shell
 def test_a_secret_already_only_in_the_keychain_is_left_alone(tmp_path, allow_subprocess):
     out, env, kc = run(tmp_path, "migrate_env_secret SOURCE_MAIL_TOKEN",
                        "SOURCE_MAIL_USER=a@b.example\n", kc={"source_mail_token": "abc"})

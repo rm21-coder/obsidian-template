@@ -458,3 +458,44 @@ def test_meta_bind_ships_pinned_with_javascript_off_and_outside_text_excluded() 
                     "Knowledge", "Templates", "Z_archive", "Z_attachments", "Z_dashboards"}
     assert outside_text <= set(cfg["excludedFolders"])
     assert "Actions" not in cfg["excludedFolders"]      # the review page lives there
+
+
+# ---------------------------------------------------------------------------
+# Windows tester, 2026-10-22: 102 errors from test ids over the 32,767-char
+# environment-variable cap (PYTEST_CURRENT_TEST), and a read-only .git that
+# tmp cleanup could not remove. The guards, checked on any platform.
+# ---------------------------------------------------------------------------
+
+def test_a_long_parameter_gets_a_short_stable_id() -> None:
+    import conftest
+    short = conftest.short_param_id("[[" * 250000)
+    assert short is not None and len(short) < 60
+    assert short == conftest.short_param_id("[[" * 250000)       # stable
+    assert short != conftest.short_param_id("[[" * 249999)       # distinct
+    assert "len500000-" in short
+    assert conftest.short_param_id(b"\n" * 5000).startswith("\\n\\n")
+    assert conftest.short_param_id("short") is None              # pytest's own id
+    assert conftest.short_param_id(12345) is None
+
+
+def test_a_long_node_id_is_caught_at_collection() -> None:
+    import conftest
+
+    class Item:
+        def __init__(self, nodeid: str) -> None:
+            self.nodeid = nodeid
+    long = "t.py::test_x[" + "a" * 40000 + "]"
+    assert conftest.long_node_ids([Item("t.py::ok"), Item(long)]) == [long]
+
+
+def test_rmtree_force_removes_what_a_plain_rmtree_cannot(tmp_path: Path) -> None:
+    from platform_caps import rmtree_force
+    obj = tmp_path / ".git" / "objects" / "ab" / "cdef"
+    obj.parent.mkdir(parents=True)
+    obj.write_bytes(b"x")
+    obj.chmod(0o444)              # Windows: the read-only attribute git sets
+    obj.parent.chmod(0o555)       # POSIX: a folder that refuses the delete
+    with pytest.raises(PermissionError):
+        shutil.rmtree(tmp_path / ".git")
+    rmtree_force(tmp_path / ".git")
+    assert not (tmp_path / ".git").exists()

@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from platform_caps import make_cli_stub
 
 LIB = Path(__file__).resolve().parent.parent.parent.parent / "installers" / "lib"
 HOOK = LIB / "hooks" / "pre-push"
@@ -81,10 +82,12 @@ print(json.dumps({{"type": "result", "subtype": "success", "is_error": False,
 @pytest.fixture
 def cli(tmp_path, monkeypatch):
     """A fake claude; returns a function giving the recorded calls."""
-    exe = tmp_path / "bin" / "claude"
-    exe.parent.mkdir()
-    exe.write_text(FAKE_CLI.format(python=sys.executable), encoding="utf-8")
-    exe.chmod(0o755)
+    # make_cli_stub, not a shebang script: Windows has no shebang handling, so
+    # a bare `claude` file there is not something CreateProcess can start
+    # (Windows tester, 2026-10-22). It builds a real .exe on Windows.
+    (tmp_path / "bin").mkdir()
+    source = FAKE_CLI.format(python=sys.executable).split("\n", 1)[1]
+    exe = make_cli_stub(tmp_path / "bin", "claude", source)
     log = tmp_path / "calls.jsonl"
     monkeypatch.setenv("FAKE_LOG", str(log))
     monkeypatch.setenv("FAKE_FINDINGS", json.dumps({"summary": "none", "findings": []}))
@@ -93,7 +96,7 @@ def cli(tmp_path, monkeypatch):
     def calls():
         if not log.exists():
             return []
-        return [json.loads(l) for l in log.read_text().splitlines()]
+        return [json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
     calls.exe = exe
     return calls
 
@@ -153,11 +156,11 @@ def test_the_staged_tree_is_the_new_commit_the_change_and_the_companions_only(dr
     meta = dr.stage(old, new, [{"path": comp, "label": "packet"},
                                {"path": tmp_path / "gone.md", "label": "gone"}], dest)
     assert sorted(p.name for p in dest.iterdir()) == ["change", "companions", "repo"]
-    assert (dest / "repo" / "job.py").read_text() == "INTERVAL_MIN = 15\n"
+    assert (dest / "repo" / "job.py").read_text(encoding="utf-8") == "INTERVAL_MIN = 15\n"
     assert not (dest / "repo" / ".git").exists()
-    assert "+INTERVAL_MIN = 15" in (dest / "change" / "diff.patch").read_text()
-    assert "run every 15 minutes" in (dest / "change" / "log.txt").read_text()
-    index = (dest / "companions" / "INDEX.md").read_text()
+    assert "+INTERVAL_MIN = 15" in (dest / "change" / "diff.patch").read_text(encoding="utf-8")
+    assert "run every 15 minutes" in (dest / "change" / "log.txt").read_text(encoding="utf-8")
+    index = (dest / "companions" / "INDEX.md").read_text(encoding="utf-8")
     assert "`01-Packet.md` -- packet" in index and "(missing) -- gone" in index
     assert meta["missing"] == ["gone"] and meta["commits"] == 1
 
@@ -196,9 +199,9 @@ def test_verified_findings_reach_the_note_and_rejected_ones_do_not(dr, repo, tmp
     assert "D1" in verify["prompt"] and "DISPROVE" in verify["prompt"]
 
     [report] = list((tmp_path / "reports").iterdir())
-    text = report.read_text()
+    text = report.read_text(encoding="utf-8")
     assert "## CONFIRMED (1)" in text and "## REJECTED (1)" in text and "## PLAUSIBLE (1)" in text
-    note = cfg["task_note"].read_text()
+    note = cfg["task_note"].read_text(encoding="utf-8")
     assert note.startswith("---\nclassification: internal-use-only\n")
     tasks = [l for l in note.splitlines() if l.startswith("- [ ] Drift")]
     assert len(tasks) == 1, "only the confirmed finding reaches the note"
@@ -214,7 +217,7 @@ def test_a_clean_review_writes_a_report_and_no_task(dr, repo, tmp_path, cli):
     assert dr.review_or_report_failure("%s..%s" % (old, new), cfg, tmp_path / "state") == 0
     assert len(cli()) == 1                      # no verify pass for nothing
     [report] = list((tmp_path / "reports").iterdir())
-    assert "## CONFIRMED (0)" in report.read_text()
+    assert "## CONFIRMED (0)" in report.read_text(encoding="utf-8")
     assert not cfg["task_note"].exists()
 
 
@@ -224,9 +227,9 @@ def test_a_failed_session_is_written_on_the_note(dr, repo, tmp_path, cli, monkey
     cfg = _config(tmp_path, cli)
     spec = "%s..%s" % (old[:7], new[:7])
     assert dr.review_or_report_failure(spec, cfg, tmp_path / "state") == 1
-    note = cfg["task_note"].read_text()
+    note = cfg["task_note"].read_text(encoding="utf-8")
     assert "- [ ] Drift review FAILED for %s: session exited 1 without a JSON reply" % spec in note
-    assert "FAILED" in (tmp_path / "state" / "drift_review.log").read_text()
+    assert "FAILED" in (tmp_path / "state" / "drift_review.log").read_text(encoding="utf-8")
 
 
 def test_model_text_cannot_run_plugin_code_or_forge_a_task(dr):
@@ -253,7 +256,7 @@ def test_a_second_section_appends_and_keeps_the_first(dr, tmp_path):
     note = tmp_path / "Drift Review.md"
     dr.append_tasks(note, "2026-10-06 a..b", ["- [ ] #task one"])
     dr.append_tasks(note, "2026-10-07 b..c", ["- [ ] #task two"])
-    body = note.read_text()
+    body = note.read_text(encoding="utf-8")
     assert body.count("classification:") == 1
     assert body.index("#task one") < body.index("## 2026-10-07 b..c") < body.index("#task two")
 

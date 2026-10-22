@@ -429,6 +429,30 @@ def test_a_broken_lock_directory_does_not_stop_a_job(tmp_path, monkeypatch, allo
     assert "already running" not in text
 
 
+def _time_limit_job(late: str) -> str:
+    """A job that starts a grandchild (which would write `late` after 3 s)
+    and then sleeps. The grandchild's code goes in by repr(), not inside a
+    hand-quoted literal: a Windows path (C:\\Users\\...) in a plain "..."
+    string is a \\U escape, so job.py did not compile there and the test
+    never reached the time limit (Windows tester, 2026-10-22)."""
+    grandchild = f"import time; time.sleep(3); open({late!r}, 'w')"
+    return ("import subprocess, sys, time\n"
+            f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+            "time.sleep(30)\n")
+
+
+def test_the_time_limit_job_compiles_with_a_windows_path() -> None:
+    late = r"C:\Users\tester\AppData\Local\Temp\grandchild-finished"
+    import ast
+    tree = ast.parse(_time_limit_job(late))            # the old literal: SyntaxError
+    [code] = [n.value for n in ast.walk(tree)
+              if isinstance(n, ast.Constant) and isinstance(n.value, str) and "sleep(3)" in n.value]
+    compile(code, "-c", "exec")
+    [opened] = [n.args[0].value for n in ast.walk(ast.parse(code))
+                if isinstance(n, ast.Call) and getattr(n.func, "id", "") == "open"]
+    assert opened == late                               # the path survives both quotings
+
+
 def test_a_time_limit_stops_the_job_and_its_children(tmp_path, monkeypatch, allow_subprocess, capsys) -> None:
     import time as _time
     import run_logged
@@ -439,10 +463,7 @@ def test_a_time_limit_stops_the_job_and_its_children(tmp_path, monkeypatch, allo
     monkeypatch.delenv(run_logged.LOCK_HELD_ENV, raising=False)
     late = tmp_path / "grandchild-finished"
     job = tmp_path / "job.py"
-    job.write_text(
-        "import subprocess, sys, time\n"
-        f"subprocess.Popen([sys.executable, '-c', \"import time; time.sleep(3); open(r'{late}', 'w')\"])\n"
-        "time.sleep(30)\n", encoding="utf-8")
+    job.write_text(_time_limit_job(str(late)), encoding="utf-8")
     t0 = _time.time()
     assert run_logged.main(["demo", str(job)]) == run_logged.TIMED_OUT
     assert _time.time() - t0 < 20

@@ -342,7 +342,7 @@ def scan_vault() -> tuple[dict[str, dict], dict[str, str]]:
             # Never uploaded (and deindexed if it was): no real note is this
             # big, and the extraction regexes and the server are not where to
             # find out what one is. Reported, like a blocked tier.
-            log.warning(f"{rel} is over the {classification_tier.MAX_NOTE_BYTES}"
+            log.warning(f"{rel.as_posix()} is over the {classification_tier.MAX_NOTE_BYTES}"
                         f"-byte note read cap; excluding from index")
             excluded[rel.as_posix()] = OVERSIZE_MARKER
             continue
@@ -361,7 +361,7 @@ def scan_vault() -> tuple[dict[str, dict], dict[str, str]]:
                 continue
             if classification not in KNOWN_CLASSIFICATIONS:
                 log.warning(
-                    f"unknown classification '{classification}' on {rel}; "
+                    f"unknown classification '{classification}' on {rel.as_posix()}; "
                     f"excluding from index (fail-secure). Expected one of: "
                     f"{', '.join(sorted(KNOWN_CLASSIFICATIONS))}."
                 )

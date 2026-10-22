@@ -122,9 +122,12 @@ def obsidian_uri(rel_path: Path) -> str:
     Uses urllib.parse.quote so spaces become %20, NOT `+`. Obsidian's
     URL handler treats `+` literally as a `+` character in the filename
     rather than as a space, which breaks links to any file with a space
-    in its path (e.g. `Meetings/History/2026-03-04 1400.md`)."""
+    in its path (e.g. `Meetings/History/2026-03-04 1400.md`).
+    as_posix(): Obsidian's vault paths are /-separated on every platform,
+    and str() of a Windows path made every link `Actions%5C...` (Windows
+    tester, 2026-10-22)."""
     vault = urllib.parse.quote(VAULT_NAME, safe="")
-    file  = urllib.parse.quote(str(rel_path.with_suffix("")), safe="/")
+    file  = urllib.parse.quote(rel_path.with_suffix("").as_posix(), safe="/")
     return f"obsidian://open?vault={vault}&file={file}"
 
 

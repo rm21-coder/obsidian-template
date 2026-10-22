@@ -23,7 +23,17 @@ DPAPI and the icacls hardening — were covered nowhere at all.
 Platform coverage: tests for a branch that calls an OS API existing on only
 one platform are marked for that platform and skip elsewhere (the Keychain
 cases skip on Windows; the DPAPI cases skip on macOS). Everything else runs
-everywhere. Run with `-rs` to see the skip reasons.
+everywhere. Run with `-rs` to see the skip reasons. The markers live in
+`platform_caps.py`; `macos_shell` skips, on Windows only, a test that RUNS a
+macOS installer script through bash (WSL or Git Bash there map paths and
+`source` differently), while a test that only reads one runs everywhere.
+A stand-in CLI goes through `make_cli_stub`, never a bare shebang file.
+
+`conftest.py` gives any parametrize value over 100 characters a short digest
+id, and fails collection on any platform if a test id is over 1,000: pytest
+puts the id in `PYTEST_CURRENT_TEST`, and Windows caps an environment
+variable at 32,767 characters, so the ReDoS timing tests' 50k-600k inputs
+once errored 102 tests there before they ran.
 
 ## Running
 

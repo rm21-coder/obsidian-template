@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from platform_caps import macos_shell
 
 REPO = Path(__file__).resolve().parents[3]
 SCRIPTS = REPO / "Templates" / "Scripts"
@@ -75,6 +76,7 @@ def _retire(tmp_path: Path, dry: int) -> tuple[subprocess.CompletedProcess, Path
     return p, la, backup, calls
 
 
+@macos_shell
 def test_macos_update_unloads_and_moves_aside_a_retired_agent(tmp_path, allow_subprocess) -> None:
     p, la, backup, calls = _retire(tmp_path, dry=0)
     assert p.returncode == 0, p.stdout + p.stderr
@@ -85,6 +87,7 @@ def test_macos_update_unloads_and_moves_aside_a_retired_agent(tmp_path, allow_su
     assert "com.obsidian.handoff-blob-pull: retired upstream; unloaded and removed" in p.stdout + p.stderr
 
 
+@macos_shell
 def test_macos_dry_run_only_says_so(tmp_path, allow_subprocess) -> None:
     p, la, backup, calls = _retire(tmp_path, dry=1)
     assert (la / "com.obsidian.handoff-blob-pull.plist").exists()

@@ -441,3 +441,57 @@ def assert_owner_only():
         assert aces, f"{path} has no explicit ACEs at all"
 
     return _assert
+
+
+# ---------------------------------------------------------------------------
+# Test ids stay short.
+#
+# pytest builds a parametrized test's id from its values and puts the id in
+# the PYTEST_CURRENT_TEST environment variable for every phase. The ReDoS
+# timing tests take 50,000-600,000-character inputs, so their ids were that
+# long, and Windows caps one environment variable at 32,767 characters: 102
+# tests there errored in setup before running (Windows tester, 2026-10-22;
+# three in test_disclosure_check had been fixed by hand with ids= on
+# 2026-09-25, and the pattern came back with each new timing test). So a long
+# value gets a short, stable id here, for every file at once, and the
+# collection check below fails the run on ANY platform -- the Mac included --
+# if an id is still long, e.g. one given explicitly with ids=.
+# ---------------------------------------------------------------------------
+
+PARAM_ID_MAX = 100      # a value longer than this gets a digest id
+NODE_ID_MAX = 1000      # far under 32,767; a nodeid this long is a mistake
+
+
+def short_param_id(val) -> str | None:
+    """A short id for a long str/bytes parameter value; None keeps pytest's."""
+    if isinstance(val, (bytes, bytearray)):
+        text = bytes(val).decode("latin-1")
+    elif isinstance(val, str):
+        text = val
+    else:
+        return None
+    if len(text) <= PARAM_ID_MAX:
+        return None
+    import hashlib
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:10]
+    head = text[:16].encode("unicode_escape").decode("ascii")
+    return f"{head}...len{len(text)}-{digest}"
+
+
+def pytest_make_parametrize_id(config, val, argname):
+    return short_param_id(val)
+
+
+def long_node_ids(items) -> list[str]:
+    return [item.nodeid for item in items if len(item.nodeid) > NODE_ID_MAX]
+
+
+def pytest_collection_modifyitems(session, config, items):
+    too_long = long_node_ids(items)
+    if too_long:
+        shown = "\n  ".join(f"{n[:120]}... ({len(n)} chars)" for n in too_long[:10])
+        raise pytest.UsageError(
+            f"{len(too_long)} test id(s) longer than {NODE_ID_MAX} characters. pytest "
+            "puts the id in PYTEST_CURRENT_TEST, and Windows caps an environment "
+            "variable at 32,767 characters, so such a test errors there before it "
+            "runs. Give the parametrize values short ids=.\n  " + shown)

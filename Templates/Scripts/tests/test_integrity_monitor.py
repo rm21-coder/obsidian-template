@@ -28,6 +28,34 @@ import pytest
 import integrity_monitor as im
 from platform_caps import requires_fifo
 
+REAL_SCAN_PERSISTENCE = im.scan_persistence
+
+
+@pytest.fixture(autouse=True)
+def persistence_scan_is_the_sandbox_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The persistence scope reads the test's --launchagents-dir on every host.
+
+    On Windows scan_persistence lists the real \\Obsidian\\ scheduled tasks
+    through PowerShell, which the suite's subprocess guard blocks, so every
+    --update there refused with exit 2 -- correctly: a scan that cannot run
+    must not be adopted as a baseline (Windows tester, 2026-10-22: 15
+    failures). The tests are about the monitor's logic, not about which
+    platform's agents it lists, so they get the macOS branch, a hash of the
+    sandbox folder, everywhere. The Windows enumeration has its own tests
+    below (_windows_scan), which patch scan_persistence themselves; the
+    dispatch is pinned by test_persistence_scan_dispatches_by_platform."""
+    monkeypatch.setattr(im, "scan_persistence",
+                        lambda la: im.scan_dir(la, exts={".plist"}))
+
+
+def test_persistence_scan_dispatches_by_platform(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "a.plist").write_text("<plist/>\n", encoding="utf-8")
+    monkeypatch.setattr(im, "scan_scheduled_tasks", lambda: {"Obsidian Tagger": {}})
+    monkeypatch.setattr(im.sys, "platform", "win32")
+    assert REAL_SCAN_PERSISTENCE(tmp_path) == {"Obsidian Tagger": {}}
+    monkeypatch.setattr(im.sys, "platform", "darwin")
+    assert list(REAL_SCAN_PERSISTENCE(tmp_path)) == ["a.plist"]
+
 
 # ---------------------------------------------------------------------------
 # scan_dir
