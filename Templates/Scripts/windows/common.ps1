@@ -678,8 +678,36 @@ function Test-OpenWebUIHardening {
     Write-Warning '    docker rm -f open-webui; then re-run setup-rag.ps1 -SkipModel'
     if ($vars.ContainsKey('WEBUI_AUTH') -and $found[0] -like 'WEBUI_AUTH=*') {
         Write-Warning '  With auth off, Open WebUI signs everyone in as one built-in admin; once auth is'
-        Write-Warning '  back on, give that account (Admin Panel -> Users) a strong password at once.'
+        Write-Warning '  back on, give that account a strong password at once, in'
+        Write-Warning '  Settings -> Account -> Change Password -> Update password (never the Admin Panel user editor).'
     }
+    return $false
+}
+
+# N10: an Open WebUI account still on the password "admin" (created while
+# sign-in was off, or reset by the admin user editor's Save). rag_pins.py
+# checks the stored hash inside the container and prints only the account's
+# email. $true when no account matches; $false when one does or the check
+# could not run.
+function Test-OpenWebUIDefaultPassword {
+    $py = $null
+    try { $py = Get-VenvPython } catch { }
+    if (-not $py) { Write-Warning '  could not check open-webui account passwords (no venv python)'; return $false }
+    $tool = Join-Path (Get-VaultRoot) 'installers\lib\rag_pins.py'
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = @(& $py -I $tool default-password 2>$null)
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $prevEAP }
+    if ($code -eq 0) { return $true }
+    if ($code -eq 1) {
+        foreach ($l in $out) { Write-Warning "  open-webui: $l" }
+        Write-Warning '  Change it now in Settings -> Account -> Change Password -> Update password;'
+        Write-Warning '  the Admin Panel user editor''s Save writes its password field back.'
+        return $false
+    }
+    Write-Warning '  could not check open-webui account passwords (container not running?)'
     return $false
 }
 

@@ -235,3 +235,80 @@ def test_both_installers_and_updaters_report_an_unhardened_container() -> None:
     assert "Test-OpenWebUIHardening" in setup and "Start-OpenWebUIFresh" in setup
     # a closed signup no longer reads as "an admin already exists"
     assert "$cfg.features.enable_signup" not in setup
+
+
+# ---------------------------------------------------------------------------
+# N10 (2026-10-22): an account still on the default password "admin"
+# ---------------------------------------------------------------------------
+
+class _Ran:
+    def __init__(self, rc: int, out: str) -> None:
+        self.returncode, self.stdout, self.stderr = rc, out, ""
+
+
+def _fake(rc: int, out: str, seen: list | None = None):
+    def run(argv, **kw):
+        if seen is not None:
+            seen.append(argv)
+        return _Ran(rc, out)
+    return run
+
+
+def test_default_password_accounts_reports_the_matching_emails(monkeypatch) -> None:
+    monkeypatch.setattr(rp.shutil, "which", lambda name: "/usr/local/bin/docker")
+    seen: list = []
+    found = rp.default_password_accounts(run=_fake(0, "CHECKED 2\nDEFAULT a@example.com\n", seen))
+    assert found == ["a@example.com"]
+    argv = seen[0]
+    assert argv[:4] == ["/usr/local/bin/docker", "exec", "open-webui", "python3"]
+    assert argv[-1] == "admin"
+
+
+def test_default_password_accounts_is_empty_when_none_match(monkeypatch) -> None:
+    monkeypatch.setattr(rp.shutil, "which", lambda name: "/usr/local/bin/docker")
+    assert rp.default_password_accounts(run=_fake(0, "CHECKED 1\n")) == []
+
+
+def test_an_unrunnable_check_is_never_read_as_clean(monkeypatch) -> None:
+    monkeypatch.setattr(rp.shutil, "which", lambda name: "/usr/local/bin/docker")
+    assert rp.default_password_accounts(run=_fake(1, "")) is None            # container gone
+    assert rp.default_password_accounts(run=_fake(0, "")) is None            # nothing ran
+    monkeypatch.setattr(rp.shutil, "which", lambda name: None)
+    assert rp.default_password_accounts(run=_fake(0, "CHECKED 1\n")) is None  # no docker
+
+
+def test_the_cli_exit_codes(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(rp, "default_password_accounts", lambda: ["a@example.com"])
+    assert rp.main(["default-password"]) == 1
+    assert capsys.readouterr().out == "a@example.com still has the default password 'admin'\n"
+    monkeypatch.setattr(rp, "default_password_accounts", lambda: [])
+    assert rp.main(["default-password"]) == 0
+    monkeypatch.setattr(rp, "default_password_accounts", lambda: None)
+    assert rp.main(["default-password"]) == 2
+    assert "could not check open-webui's account passwords" in capsys.readouterr().err
+
+
+def test_the_container_code_matches_open_webui_and_prints_no_hash() -> None:
+    compile(rp._DEFAULT_PASSWORD_CODE, "<container>", "exec")
+    code = rp._DEFAULT_PASSWORD_CODE
+    assert "mode=ro" in code
+    assert "bcrypt.checkpw(pw.encode('utf-8')[:72]" in code
+    assert "$argon2" in code
+    assert "print(h" not in code and "print(rows" not in code
+
+
+def test_every_installer_and_updater_runs_the_check() -> None:
+    assert "report_open_webui_default_password" in (REPO / "installers" / "components" / "50-llm-rag.sh").read_text()
+    assert "rag_pins.py\" default-password" in (REPO / "update.sh").read_text()
+    for name in ("update.ps1", "setup-rag.ps1"):
+        assert "Test-OpenWebUIDefaultPassword" in (WIN / name).read_text(encoding="ascii"), name
+    assert "function Test-OpenWebUIDefaultPassword" in (WIN / "common.ps1").read_text(encoding="ascii")
+
+
+def test_no_advice_sends_a_password_change_to_the_admin_user_editor() -> None:
+    files = [REPO / "installers" / "components" / "50-llm-rag.sh", WIN / "common.ps1",
+             REPO / "docs" / "Local LLM with Obsidian Vault RAG.md"]
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        assert "(Admin Panel -> Users) a strong password" not in text, f.name
+        assert "strong password (**Admin Panel → Users**)" not in text, f.name

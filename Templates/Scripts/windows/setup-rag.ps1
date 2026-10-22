@@ -197,6 +197,7 @@ switch ($webuiState) {
     'AUTH-OFF'    { Write-Warning '  open-webui reports login disabled (WEBUI_AUTH off)' }
     default       { Write-Warning '  could not read open-webui''s signup state' }
 }
+if (Test-OpenWebUIDefaultPassword) { Write-Host '  open-webui: no account uses the default password' }
 
 # Already fully configured? Check .env rather than guessing from Open WebUI's
 # signup state alone -- enable_signup=false is also the normal, expected state

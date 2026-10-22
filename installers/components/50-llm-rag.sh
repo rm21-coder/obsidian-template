@@ -143,7 +143,8 @@ report_open_webui_hardening() {
         warn "    docker rm -f open-webui && ./install.sh --only 50-llm-rag"
         if [[ "$findings" == *WEBUI_AUTH=* ]]; then
             warn "  With auth off, Open WebUI signs everyone in as one built-in admin; once auth is"
-            warn "  back on, give that account (Admin Panel -> Users) a strong password at once."
+            warn "  back on, give that account a strong password at once, in"
+            warn "  Settings -> Account -> Change Password -> Update password (never the Admin Panel user editor)."
         fi
     else
         ok "  open-webui requires login and limits CORS to the loopback origins"
@@ -155,6 +156,20 @@ report_open_webui_hardening() {
         SIGNUP-OPEN) warn "  open-webui signup is OPEN: Admin Panel -> Settings -> General -> 'Enable New Sign Ups' off" ;;
         AUTH-OFF) warn "  open-webui reports login disabled (WEBUI_AUTH off)" ;;
         *) warn "  could not read open-webui's signup state (not reachable yet?); re-run this component to check" ;;
+    esac
+    report_open_webui_default_password
+}
+# N10: an account still on the password "admin" (created while sign-in was
+# off, or reset by the admin user editor's Save). Checked in the container.
+report_open_webui_default_password() {
+    local weak rc=0
+    weak="$("${RAG_PINS[@]}" default-password 2>/dev/null)" || rc=$?
+    case "$rc" in
+        0) ok "  open-webui: no account uses the default password" ;;
+        1) while IFS= read -r line; do err "  open-webui: $line"; done <<< "$weak"
+           err "  change it now in Settings -> Account -> Change Password -> Update password;"
+           err "  the Admin Panel user editor's Save writes its password field back, and the profile Save changes nothing." ;;
+        *) warn "  could not check open-webui's account passwords (container not running?)" ;;
     esac
 }
 # An existing container keeps the image it was created from. Report, do not

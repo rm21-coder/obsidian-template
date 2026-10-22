@@ -193,6 +193,7 @@ if (Get-Command docker -ErrorAction SilentlyContinue) {
         else { Write-Host '  Bound to 127.0.0.1 only.' }
         if (Test-OpenWebUIImagePin) { Write-Host '  On the pinned image.' }
         if (Test-OpenWebUIHardening) { Write-Host '  Login required; CORS limited to the loopback origins.' }
+        if (Test-OpenWebUIDefaultPassword) { Write-Host '  No account uses the default password.' }
     }
 }
 

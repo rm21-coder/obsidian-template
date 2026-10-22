@@ -302,6 +302,15 @@ main() {
             while IFS= read -r line; do warn "  open-webui: $line"; done <<< "$rag_findings"
             warn "  fix with: docker rm -f open-webui && ./install.sh --only 50-llm-rag (volume kept)"
         fi
+        # N10: an account still on the password "admin".
+        local rag_weak rag_rc=0
+        rag_weak="$(python3 "$REPO_ROOT/installers/lib/rag_pins.py" default-password 2>/dev/null)" || rag_rc=$?
+        if [[ "$rag_rc" -eq 1 ]]; then
+            while IFS= read -r line; do warn "  open-webui: $line"; done <<< "$rag_weak"
+            warn "  change it in Settings -> Account -> Change Password -> Update password (never the admin user editor)"
+        elif [[ "$rag_rc" -ne 0 ]]; then
+            warn "  could not check open-webui's account passwords"
+        fi
         if has_cmd ollama; then
             python3 "$REPO_ROOT/installers/lib/rag_pins.py" verify-models 2>/dev/null \
                 || warn "  a pinned Ollama model differs from its pin (see above), or Ollama is not running"

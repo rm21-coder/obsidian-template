@@ -44,6 +44,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
+import subprocess
 import sys
 import time
 import urllib.request
@@ -226,6 +228,57 @@ def ollama_digest(model: str) -> str:
     return "sha256:" + hashlib.sha256(body).hexdigest()
 
 
+# N10 (2026-10-22): an account created while sign-in was off has the password
+# "admin", and the admin user editor writes its password field back over a
+# changed one. Checked inside the container against the stored hash (bcrypt or
+# argon2, as Open WebUI's own verify_password does), read-only. Only the
+# matching accounts' email addresses are printed, never a hash.
+DEFAULT_PASSWORDS = ("admin",)
+_DEFAULT_PASSWORD_CODE = (
+    "import sqlite3, sys\n"
+    "db = sqlite3.connect('file:/app/backend/data/webui.db?mode=ro', uri=True)\n"
+    "rows = db.execute('SELECT a.email, a.password FROM auth a JOIN user u ON u.id = a.id'\n"
+    "                  ' WHERE a.active = 1').fetchall()\n"
+    "def same(pw, h):\n"
+    "    if not h:\n"
+    "        return False\n"
+    "    if h.startswith('$argon2'):\n"
+    "        from argon2 import PasswordHasher\n"
+    "        try:\n"
+    "            return PasswordHasher().verify(h, pw)\n"
+    "        except Exception:\n"
+    "            return False\n"
+    "    import bcrypt\n"
+    "    try:\n"
+    "        return bcrypt.checkpw(pw.encode('utf-8')[:72], h.encode('utf-8'))\n"
+    "    except ValueError:\n"
+    "        return False\n"
+    "print('CHECKED %d' % len(rows))\n"
+    "for email, h in rows:\n"
+    "    if any(same(pw, h) for pw in sys.argv[1:]):\n"
+    "        print('DEFAULT ' + email)\n"
+)
+
+
+def default_password_accounts(container: str = "open-webui", run=subprocess.run,
+                              timeout: float = 120) -> list | None:
+    """Email addresses of active Open WebUI accounts whose password is a known
+    default, or None when that cannot be told (no docker, no container, the
+    check failed). None is never read as clean."""
+    docker = shutil.which("docker")
+    if not docker:
+        return None
+    try:
+        r = run([docker, "exec", container, "python3", "-c", _DEFAULT_PASSWORD_CODE,
+                 *DEFAULT_PASSWORDS], capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = (r.stdout or "").splitlines()
+    if r.returncode != 0 or not any(l.startswith("CHECKED ") for l in lines):
+        return None
+    return [l[len("DEFAULT "):] for l in lines if l.startswith("DEFAULT ")]
+
+
 def main(argv: list) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -238,11 +291,22 @@ def main(argv: list) -> int:
     r.add_argument("--webui", metavar="TAG")
     r.add_argument("--model", action="append", default=[], metavar="NAME:TAG")
     sub.add_parser("check-container")
+    sub.add_parser("default-password")
     for name in ("webui-state", "webui-signin"):
         w = sub.add_parser(name)
         w.add_argument("--url", default=WEBUI_URL)
         w.add_argument("--wait", type=float, default=0)
     args = ap.parse_args(argv)
+
+    if args.cmd == "default-password":
+        found = default_password_accounts()
+        if found is None:
+            print("could not check open-webui's account passwords "
+                  "(container not running, or the check failed)", file=sys.stderr)
+            return 2
+        for email in found:
+            print(f"{email} still has the default password 'admin'")
+        return 1 if found else 0
 
     if args.cmd == "check-container":
         try:
