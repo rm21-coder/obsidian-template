@@ -312,8 +312,22 @@ main() {
     # Adopting a baseline is a decision for the person reading this, after
     # checking that the drift is the update and nothing else. --json only reads.
     info "== 6/6 security controls =="
-    report_control "integrity monitor" integrity_monitor.py "$FROM" "$TO"
-    report_control "plugin integrity check" plugin_integrity_check.py "$FROM" "$TO"
+    # N8: when the tree was already at TO (pulled by hand), FROM..TO is empty;
+    # diff from the commit the last completed update ended at instead.
+    local diff_from="$FROM" last_update=""
+    last_update="$(cat "$UPDATE_RECORD" 2>/dev/null || true)"
+    if [[ "$FROM" == "$TO" ]]; then
+        if [[ -n "$last_update" && "$last_update" != "$TO" ]]; then
+            diff_from="$last_update"
+            info "  The tree was already at $TO when this update started; the diffs below"
+            info "  start at $last_update, where the last completed update ended."
+        else
+            info "  The tree was already at $TO when this update started, so a diff from it"
+            info "  shows nothing: compare against the commit your last baseline was taken at."
+        fi
+    fi
+    report_control "integrity monitor" integrity_monitor.py "$diff_from" "$TO"
+    report_control "plugin integrity check" plugin_integrity_check.py "$diff_from" "$TO"
 
     info ""
     if [[ "$plugins_failed" -eq 1 ]]; then
@@ -330,7 +344,13 @@ main() {
     else
         ok "Updated $FROM -> $TO."
     fi
+    if [[ "$DRY_RUN" -eq 0 ]]; then
+        ( umask 077; mkdir -p "$(dirname "$UPDATE_RECORD")" && printf '%s\n' "$TO" > "$UPDATE_RECORD" ) 2>/dev/null || true
+    fi
 }
+
+# The commit the last completed update ended at (N8).
+UPDATE_RECORD="$HOME/.local/share/obsidian-template/last-update-commit"
 
 # report_control <name> <script> <from> <to>
 report_control() {

@@ -129,6 +129,28 @@ function Test-TreeGate {
             return $false
         }
         $other = @($tracked | Where-Object { $changes -notcontains $_ })
+        # N9: outside the installer code, a file whose only change is its line
+        # endings (an editor or autocrlf) is not a reason to refuse an update.
+        # Installer paths never get here: they are in $changes.
+        $eolOnly = @()
+        $kept = @()
+        foreach ($l in $other) {
+            if ($l.StartsWith(' M ')) {
+                $path = $l.Substring(3)
+                $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+                try {
+                    & git -C $Root -c core.fsmonitor=false diff --ignore-cr-at-eol --quiet -- $path 2>$null
+                    $same = ($LASTEXITCODE -eq 0)
+                } finally { $ErrorActionPreference = $prev }
+                if ($same) { $eolOnly += $path; continue }
+            }
+            $kept += $l
+        }
+        $other = $kept
+        if ($eolOnly.Count -gt 0) {
+            Write-Host "tree gate: line endings only, not refused (reset with git -C `"$Root`" checkout -- <path>):"
+            foreach ($p in $eolOnly) { Write-Host "  $p" }
+        }
     }
     if ($changes.Count -eq 0 -and $other.Count -eq 0) {
         Write-Host "tree gate: installer code matches the git checkout (HEAD $head)."

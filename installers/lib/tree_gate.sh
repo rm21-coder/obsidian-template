@@ -141,6 +141,25 @@ tree_gate_check() {
             # Drop what the first list already names.
             other="$(printf '%s\n' "$other" | grep -vxF -f <(printf '%s\n' "$changes") || true)"
         fi
+        # N9: outside the installer code, a file whose only change is its line
+        # endings (Windows editors, autocrlf) is not a reason to refuse an
+        # update. Installer paths never get here: they are in $changes.
+        local kept="" eol_only="" line path
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            path="${line:3}"
+            if [[ "${line:0:3}" == " M " ]] \
+                    && _tg_git diff --ignore-cr-at-eol --quiet -- "$path" 2>/dev/null; then
+                eol_only="${eol_only}${path}"$'\n'
+            else
+                kept="${kept}${line}"$'\n'
+            fi
+        done <<< "$other"
+        other="${kept%$'\n'}"
+        if [[ -n "$eol_only" ]]; then
+            _tg_say "tree gate: line endings only, not refused (reset with git -C \"$root\" checkout -- <path>):"
+            printf '%s' "$eol_only" | sed 's/^/  /'
+        fi
     fi
 
     if [[ -z "$changes" && -z "$other" ]]; then

@@ -81,6 +81,12 @@ Notes:
 - Keep Open WebUI **localhost-only**. There is no supported remote-access path for the vault-RAG UI: do not open port 3000 to the LAN, and do not expose it over a mesh VPN such as Tailscale — the supply-chain surface of a third-party mesh isn't worth it for a personal index. To use the UI from another device, drive the host over its built-in **Screen Sharing** rather than exposing the port.
 
 - The image is pinned by release and digest (`ghcr.io/open-webui/open-webui:vX.Y.Z@sha256:…`), not taken from the moving `main` tag. Docker resolves the digest, so a re-pushed tag or a swapped image is refused rather than run. The installers and both updaters report a container running anything else; they do not replace it, because moving releases migrates Open WebUI's database.
+- **Moving the pin forward.** Open WebUI's database migrations only go forward, so the pin never moves back: a container started from an older release on a volume a newer one has migrated can fail or lose data. To upgrade, back up the volume first, then recreate the container on the same volume:
+  ```bash
+  docker run --rm -v open-webui:/data -v "$PWD":/backup alpine tar czf /backup/open-webui-$(date +%Y%m%d).tgz -C /data .
+  docker rm -f open-webui && ./install.sh --only 50-llm-rag
+  ```
+  The pin moved from v0.11.4 to v0.12.3 on 2026-10-22, after a Windows install had already moved to 0.12.0 from the `main` tag.
 
 To move to the pinned image (your account and knowledge live on the volume and are kept):
 

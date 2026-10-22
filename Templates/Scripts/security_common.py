@@ -153,12 +153,18 @@ def record_run(control: str, rc) -> None:
     dashboard dated the plugin check to the log's overnight rotation. Written
     atomically (temp file, then replace, which swaps the directory entry and
     never follows a planted link), and never raises: a control's verdict
-    must not depend on its bookkeeping."""
+    must not depend on its bookkeeping. The temp file is created fresh with
+    O_EXCL after removing whatever sits at its name, so a link planted there
+    is never opened: Windows has no O_NOFOLLOW (finding N6, 2026-10-22)."""
     try:
         target = last_run_path(control)
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_name(target.name + ".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        try:
+            os.unlink(tmp)               # removes a link itself, never its target
+        except FileNotFoundError:
+            pass
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL
                      | getattr(os, "O_NOFOLLOW", 0), 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(f"{datetime.datetime.now().isoformat(timespec='seconds')} rc={rc}\n")

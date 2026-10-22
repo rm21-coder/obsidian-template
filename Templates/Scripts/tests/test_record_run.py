@@ -60,3 +60,17 @@ def test_the_bytecode_child_is_not_a_run(state: Path, monkeypatch) -> None:
     monkeypatch.setattr(im, "main", lambda argv: 0)
     im._main_recording(["--bytecode-only"])
     assert not (state / "last-run-integrity.txt").exists()
+
+
+def test_a_planted_link_is_not_written_through_without_o_nofollow(
+        state: Path, tmp_path: Path, monkeypatch) -> None:
+    # N6 (2026-10-22): Windows has no O_NOFOLLOW, so the flag was 0 there and
+    # the open followed a link planted at the temp name.
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    victim = tmp_path / "victim.txt"; victim.write_text("keep")
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "last-run-plugin-check.txt.tmp").symlink_to(victim)
+    security_common.record_run("plugin-check", 4)
+    assert victim.read_text() == "keep"
+    assert (state / "last-run-plugin-check.txt").read_text().rstrip().endswith("rc=4")
+    assert not (state / "last-run-plugin-check.txt").is_symlink()

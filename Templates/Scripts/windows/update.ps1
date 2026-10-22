@@ -204,6 +204,15 @@ if (Get-Command ollama -ErrorAction SilentlyContinue) {
 
 $to = (Invoke-Native -ErrorMessage 'git rev-parse failed' { git -C $vault rev-parse --short HEAD }).Trim()
 
+# N8: when the tree was already at $to (pulled by hand), $From..$to is empty;
+# diff from the commit the last completed update ended at instead.
+$updateRecord = Join-Path $env:LOCALAPPDATA 'obsidian-template\last-update-commit'
+$diffFrom = $From
+$lastUpdate = $null
+if (Test-Path -LiteralPath $updateRecord) {
+    try { $lastUpdate = (Get-Content -LiteralPath $updateRecord -TotalCount 1).Trim() } catch { }
+}
+
 # Report only. Adopting a new baseline is a decision for the person reading
 # this, after they have checked the drift is the update and nothing else.
 Write-Host ''
@@ -228,9 +237,19 @@ if ($status -eq 'ok') {
     Write-Host '  See "Scheduled jobs" in docs\Windows Setup.md before setting one up.'
 } else {
     Write-Host "  Status: $status. The update changed watched files, so this is expected." -ForegroundColor Yellow
+    if ($From -eq $to) {
+        if ($lastUpdate -and $lastUpdate -ne $to) {
+            $diffFrom = $lastUpdate
+            Write-Host "  The tree was already at $to when this update started; the diff below starts"
+            Write-Host "  at $lastUpdate, where the last completed update ended."
+        } else {
+            Write-Host "  The tree was already at $to when this update started, so a diff from it shows"
+            Write-Host '  nothing: compare against the commit your last baseline was taken at.'
+        }
+    }
     Write-Host '  Before adopting it, confirm every finding is part of this update:'
     Write-Host "    findings:  & `"$controlPy`" -I -S `"$monitor`" --json"
-    Write-Host "    the diff:  git -C `"$vault`" diff --name-status $From $to"
+    Write-Host "    the diff:  git -C `"$vault`" diff --name-status $diffFrom $to"
     # Every file scope, not just scripts: a pull also changes templates and the
     # vault's CLAUDE.md (agent_config), and a rule naming only scripts and
     # tasks left those to guesswork (a Windows update, 2026-10-12).
@@ -259,4 +278,8 @@ if ($From -eq $to) {
 } else {
     Write-Host "Updated $From -> $to." -ForegroundColor Green
 }
+try {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $updateRecord) | Out-Null
+    Set-Content -LiteralPath $updateRecord -Value $to -Encoding ASCII
+} catch { }
 exit 0

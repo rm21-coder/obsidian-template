@@ -144,8 +144,8 @@ def container_findings(inspect) -> list:
 
 
 def webui_state(config) -> str:
-    """Classify Open WebUI's unauthenticated /api/config. ASSUMPTION (not
-    verified against v0.11.4 source here): `onboarding` is present only while
+    """Classify Open WebUI's unauthenticated /api/config. ASSUMPTION (checked
+    against a live v0.12.3 only, not its source): `onboarding` is present only while
     no user exists, and `features.auth` / `features.enable_signup` mirror
     WEBUI_AUTH / ENABLE_SIGNUP. Anything else reads UNKNOWN, never OK."""
     if not isinstance(config, dict):

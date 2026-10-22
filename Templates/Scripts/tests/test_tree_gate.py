@@ -360,3 +360,59 @@ def test_the_powershell_gate_also_stops_tree_bytecode():
     body = src[src.index("function Test-TreeGate {"):src.index("function Test-TreeGateProfile")]
     assert "$env:PYTHONDONTWRITEBYTECODE = '1'" in body
     assert "$env:PYTHONPYCACHEPREFIX = Join-Path $env:LOCALAPPDATA 'obsidian-template\\pycache'" in body
+
+
+# N9 (2026-10-22): on Windows a tracked doc that changed only in its line
+# endings made update refuse. Outside the installer code that is noted, not
+# refused; a real content change is still refused, and installer code is
+# still checked byte for byte.
+def _update_gate(repo: Path, env: dict) -> subprocess.CompletedProcess:
+    probe = 'source installers/lib/tree_gate.sh; tree_gate_check "$PWD" update 0 1'
+    return subprocess.run(["/bin/bash", "-c", probe], capture_output=True, text=True,
+                          env=env, cwd=str(repo))
+
+
+def _tracked_doc(repo: Path) -> Path:
+    doc = repo / "docs" / "Guide.md"
+    doc.parent.mkdir()
+    doc.write_bytes(b"# Guide\n\nOne line.\nTwo lines.\n")
+    _git(repo, "add", "docs/Guide.md")
+    _git(repo, "commit", "-qm", "doc")
+    return doc
+
+
+def test_update_notes_a_line_ending_only_change_outside_installer_code(tree, allow_subprocess):
+    repo, home, env = tree
+    doc = _tracked_doc(repo)
+    doc.write_bytes(doc.read_bytes().replace(b"\n", b"\r\n"))
+    r = _update_gate(repo, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "line endings only, not refused" in r.stdout
+    assert "docs/Guide.md" in r.stdout
+
+
+def test_update_still_refuses_a_content_change_outside_installer_code(tree, allow_subprocess):
+    repo, home, env = tree
+    doc = _tracked_doc(repo)
+    doc.write_bytes(doc.read_bytes().replace(b"One line.", b"One changed line."))
+    r = _update_gate(repo, env)
+    assert r.returncode == 1
+    assert "Local changes to tracked files; not updating:" in r.stderr
+    assert "docs/Guide.md" in r.stderr
+
+
+def test_a_line_ending_change_to_installer_code_is_still_refused(tree, allow_subprocess):
+    repo, home, env = tree
+    lib = repo / "installers" / "lib" / "common.sh"
+    lib.write_bytes(lib.read_bytes().replace(b"\n", b"\r\n"))
+    r = _update_gate(repo, env)
+    assert r.returncode == 1
+    assert "TREE GATE: REFUSED. The installer code in this tree differs" in r.stderr
+    assert "installers/lib/common.sh" in r.stderr
+
+
+def test_the_powershell_gate_has_the_same_line_ending_rule():
+    src = (REPO / "installers" / "lib" / "tree_gate.ps1").read_text(encoding="ascii")
+    assert "diff --ignore-cr-at-eol --quiet -- $path" in src
+    assert "tree gate: line endings only, not refused" in src
+    assert "$l.StartsWith(' M ')" in src

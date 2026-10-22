@@ -15,6 +15,11 @@ pytest-cov
 pyyaml
 python-dotenv
 requests
+# Windows ships no IANA time-zone database; zoneinfo reads only that or this
+# package, so without it the meeting tests cannot even be collected there
+# (N7, found on the Windows x64 laptop 2026-10-21). Same marker as
+# requirements.txt, and held to its version by the -c line above.
+tzdata; sys_platform == "win32"
 # podcast_transcribe parses untrusted XML through it (bandit B314).
 defusedxml
 # whisper_onnx.py imports numpy at module scope and test_whisper_onnx.py
