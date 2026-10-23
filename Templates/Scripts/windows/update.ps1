@@ -232,7 +232,7 @@ $controlPy = $null
 try { $controlPy = Get-ControlPython } catch { }
 $json = $null
 $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-try { if ($controlPy) { $json = & $controlPy -I -S $monitor --json 2>$null } }
+try { if ($controlPy) { $json = & $controlPy -I -S -B $monitor --json 2>$null } }
 finally { $ErrorActionPreference = $prevEAP }
 $status = 'unreadable'
 try { $status = ($json | Out-String | ConvertFrom-Json).status } catch { }

@@ -143,7 +143,7 @@ foreach ($job in $manifest.Jobs) {
         $jobRunner  = Join-Path $controlsDir 'run_logged.py'
         $scriptPath = Join-Path $controlsDir $job.Script
         $jobPython  = $controlPython
-        $jobFlags   = '-I -S '
+        $jobFlags   = '-I -S -B '
         $workDir    = $controlsDir
     } else {
         $jobRunner  = $runner

@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from platform_caps import requires_symlinks
+
 import meeting_prepopulate as mp
 
 TZ = "America/New_York"
@@ -211,6 +213,7 @@ class TestRetireHelpers:
         note.write_text("---\ntype: Individual\ntags: []\n---\n")
         assert mp.delete_cancelled(prev, "cancelled", False, []) == "trashed"
 
+    @requires_symlinks
     def test_a_symlinked_trash_is_refused_and_the_note_kept(
             self, meetings: Path, tmp_path: Path) -> None:
         elsewhere = tmp_path / "elsewhere"

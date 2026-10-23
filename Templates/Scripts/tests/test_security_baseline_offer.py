@@ -56,13 +56,13 @@ def test_windows_offers_baselines_after_the_tasks_are_registered() -> None:
 def test_windows_records_only_on_yes_and_the_plugin_allowlist_first() -> None:
     step = _win_step()
     yes = step.index("} elseif ($ans -match '^(y|yes)$') {")
-    plugin = step.index("& $controlPy -I -S $pluginCheck --update")
-    integ = step.index("& $controlPy -I -S $integrity --update")
+    plugin = step.index("& $controlPy -I -S -B $pluginCheck --update")
+    integ = step.index("& $controlPy -I -S -B $integrity --update")
     assert yes < plugin < integ
     # Every other branch only prints the commands.
     before = step[:yes]
-    assert "& $controlPy -I -S $pluginCheck --update" not in before
-    assert "& $controlPy -I -S $integrity --update" not in before
+    assert "& $controlPy -I -S -B $pluginCheck --update" not in before
+    assert "& $controlPy -I -S -B $integrity --update" not in before
 
 
 def test_windows_leaves_existing_baselines_and_skip_tasks_alone() -> None:

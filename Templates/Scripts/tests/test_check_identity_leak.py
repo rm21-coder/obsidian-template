@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from platform_caps import requires_symlinks
+
 LIB = Path(__file__).resolve().parent.parent.parent.parent / "installers" / "lib"
 SCANNER = LIB / "check_identity_leak.py"
 
@@ -432,6 +434,7 @@ class TestReviewRoundTwo:
         hits = m.scan(m.worktree_lines(), m.load_denylist(), m.load_allowed_domains())
         assert [(h[0], h[2]) for h in hits] == [("l1.md", "real-looking address: bob@realcorp.com")]
 
+    @requires_symlinks
     def test_a_type_change_is_scanned(self, monkeypatch, lib, repo) -> None:
         m = load_module(monkeypatch, lib)
         monkeypatch.chdir(repo)

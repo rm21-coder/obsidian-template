@@ -465,7 +465,7 @@ class TestIsolationIsPassedOn:
 
     def test_an_isolated_runner_starts_an_isolated_job(self, allow_subprocess) -> None:
         out = self._in_child(["-I", "-S"], "import run_logged; print(run_logged.child_command('c.py', ['--x'])[1:])")
-        assert out == "['-I', '-u', '-S', 'c.py', '--x']"
+        assert out == "['-I', '-u', '-B', '-S', 'c.py', '--x']"
 
     def test_an_ordinary_runner_adds_nothing(self, allow_subprocess) -> None:
         out = self._in_child([], "import run_logged; print(run_logged.child_command('c.py', [])[1:])")

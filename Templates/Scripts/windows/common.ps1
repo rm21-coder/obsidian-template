@@ -809,7 +809,10 @@ function Test-OpenWebUIImagePin {
     $ErrorActionPreference = 'Continue'
     try {
         $imageId = (docker inspect open-webui --format '{{.Image}}' 2>$null)
-        $digests = "$(docker image inspect $imageId --format '{{join .RepoDigests " "}}' 2>$null)"
+        # N17: no double quote inside a native argument -- Windows PowerShell 5.1
+        # passes it unescaped, the template breaks, and every container looked
+        # off-pin. One digest per line instead.
+        $digests = "$(docker image inspect $imageId --format '{{range .RepoDigests}}{{println .}}{{end}}' 2>$null)"
     } finally { $ErrorActionPreference = $prevEAP }
     if ($digests -like ('*@' + $script:RagPins.open_webui.digest + '*')) { return $true }
     Write-Warning ("  open-webui is not on the pinned image ({0})." -f $script:OpenWebUIImage)

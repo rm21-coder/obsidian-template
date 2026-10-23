@@ -418,7 +418,7 @@ class TestPlists:
         reg = (win / "Register-Tasks.ps1").read_text(encoding="utf-8")
         assert "Install-SecurityControls" in reg
         assert "$jobRunner  = Join-Path $controlsDir 'run_logged.py'" in reg
-        assert "$jobFlags   = '-I -S '" in reg
+        assert "$jobFlags   = '-I -S -B '" in reg   # -B: N18
         assert "$live.Actions[0].Execute -eq $jobPython" in reg
         common = (win / "common.ps1").read_text(encoding="utf-8")
         assert "Join-Path $env:LOCALAPPDATA 'obsidian-security\\bin'" in common

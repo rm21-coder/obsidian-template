@@ -726,6 +726,13 @@ x64 box that can offload to a discrete GPU.
   .\Templates\Scripts\.venv-test\Scripts\python.exe -m pytest Templates\Scripts\tests
   ```
 
+  Run it from a normal PowerShell, not "Run as administrator": with Python
+  3.12.4 and later, an elevated run leaves pytest's temp folder owned by the
+  Administrators group, and the next normal run fails at the end with
+  `PermissionError [WinError 5]` until that folder is removed from an
+  elevated prompt (`%TEMP%\pytest-of-<you>`). Tests that need symlinks skip
+  unless the account can create them (Developer Mode).
+
   A `.venv` that got `pytest` from the instructions here before 2026-10-12
   carries packages no lock names (`update.ps1` lists them as "installed but not
   in requirements.lock"); delete `.venv` and re-run `install.ps1` to get one

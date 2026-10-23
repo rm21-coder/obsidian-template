@@ -673,8 +673,8 @@ if ($haveBaselines) {
     } elseif ($ans -match '^(y|yes)$') {
         # Plugin allowlist first: it is one of the integrity monitor's trust
         # anchors, so the integrity baseline must record its final form.
-        Invoke-Native -Warn -ErrorMessage 'plugin baseline failed' { & $controlPy -I -S $pluginCheck --update }
-        Invoke-Native -Warn -ErrorMessage 'integrity baseline failed' { & $controlPy -I -S $integrity --update }
+        Invoke-Native -Warn -ErrorMessage 'plugin baseline failed' { & $controlPy -I -S -B $pluginCheck --update }
+        Invoke-Native -Warn -ErrorMessage 'integrity baseline failed' { & $controlPy -I -S -B $integrity --update }
         Write-Host '  baselines recorded'
     } else {
         Write-Warning '  No baselines recorded: both security controls stay inactive until you run, in this order:'

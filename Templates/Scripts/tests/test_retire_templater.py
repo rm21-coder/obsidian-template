@@ -166,7 +166,9 @@ def _run(tmp_path, script: str, scenario: dict) -> dict:
     h = tmp_path / "harness.js"
     h.write_text(HARNESS, encoding="utf-8")
     p = subprocess.run([NODE, str(h), str(QA / script), json.dumps(scenario)],
-                       capture_output=True, text=True, timeout=30)
+                       capture_output=True, text=True, encoding="utf-8", timeout=30)
+    # node writes UTF-8 to a pipe; without encoding= Windows decoded it with
+    # the console code page and the accented names came back garbled.
     assert p.returncode == 0, p.stderr
     return json.loads(p.stdout)
 

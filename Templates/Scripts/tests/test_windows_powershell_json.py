@@ -53,3 +53,27 @@ def test_the_hardening_check_enumerates_the_parsed_env() -> None:
     body = common[common.index("function Test-OpenWebUIHardening"):]
     body = body[:body.index("\n}\n")]
     assert "$parsed = $raw | ConvertFrom-Json; foreach ($item in $parsed) {" in body
+
+
+# N17 (2026-10-23): Windows PowerShell 5.1 passes a double quote inside a
+# native command's argument unescaped, so `docker ... --format '{{join .X " "}}'`
+# reached docker as `{{join .X  }}`, the template failed, and the Open WebUI pin
+# check reported every container, the pinned one included, as off-pin.
+_NATIVE_QUOTED = re.compile(r"""\b(docker|git|icacls|schtasks)\b[^#\n]*'[^'\n]*"[^'\n]*'""")
+
+
+def test_no_native_command_gets_a_double_quote_inside_an_argument():
+    offenders = []
+    for path in SHIPPED:
+        for n, line in enumerate(path.read_text(encoding="ascii").splitlines(), 1):
+            s = line.strip()
+            if s.startswith("#") or s.startswith("Write-"):
+                continue
+            if _NATIVE_QUOTED.search(line):
+                offenders.append(f"{path.name}:{n}")
+    assert not offenders, offenders
+
+
+def test_the_rule_catches_the_n17_form():
+    assert _NATIVE_QUOTED.search("""docker image inspect $id --format '{{join .RepoDigests " "}}' 2>$null""")
+    assert not _NATIVE_QUOTED.search("docker image inspect $id --format '{{range .RepoDigests}}{{println .}}{{end}}'")

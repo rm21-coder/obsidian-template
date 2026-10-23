@@ -162,10 +162,11 @@ def child_command(script: str, args: list[str], dump: float | None = None) -> li
     # Isolation is passed on (finding 5278112): the security tasks start this
     # file with -I -S from an installed copy outside the vault, and their
     # control must run the same way. -u stands in for PYTHONUNBUFFERED, which
-    # an isolated child ignores, like every PYTHON* variable child_env sets.
+    # an isolated child ignores, like every PYTHON* variable child_env sets,
+    # and -B for PYTHONDONTWRITEBYTECODE (N18: no .pyc in the installed copy).
     flags = []
     if sys.flags.isolated:
-        flags += ["-I", "-u"]
+        flags += ["-I", "-u", "-B"]
     if sys.flags.no_site:
         flags.append("-S")
     boot = Path(__file__).resolve().with_name("job_boot.py")

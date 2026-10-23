@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+from platform_caps import requires_symlinks
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 AUDIT_PY = REPO_ROOT / "installers" / "lib" / "check_classification.py"
 
@@ -323,6 +325,7 @@ class TestDefaultDeny:
         _write(content_repo, rel, CONFIDENTIAL)
         assert _run_audit(content_repo).returncode == 0
 
+    @requires_symlinks
     def test_a_symlink_replaced_by_a_confidential_file_is_audited(
             self, content_repo: Path, allow_subprocess: None) -> None:
         """A type change (symlink -> file) is diff-filter T, not M."""
