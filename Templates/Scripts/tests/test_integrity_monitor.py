@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 import integrity_monitor as im
-from platform_caps import requires_fifo
+from platform_caps import ON_MACOS, requires_fifo
 
 REAL_SCAN_PERSISTENCE = im.scan_persistence
 
@@ -914,7 +914,11 @@ class TestInstalledCopy:
         env = {k: v for k, v in os.environ.items() if not k.startswith("PYTHON")}
         home = tmp_path / "home"
         home.mkdir(exist_ok=True)
-        env.update(HOME=str(home), OBSIDIAN_SECURITY_STATE_DIR=str(state))
+        # USERPROFILE too: on Windows Path.home() ignores HOME, so the child
+        # read the tester's REAL ~/.claude/settings.json, which parses, and
+        # the deep-JSON assertion below saw a hash instead of RecursionError
+        # (Windows run, 2026-10-22) -- the depth was never the problem.
+        env.update(HOME=str(home), USERPROFILE=str(home), OBSIDIAN_SECURITY_STATE_DIR=str(state))
         return env
 
     def test_a_module_planted_in_the_watched_folder_does_not_run_in_the_installed_copy(
@@ -1008,7 +1012,7 @@ class TestInstalledCopy:
     def test_the_controls_find_their_sibling_without_their_folder_first(self) -> None:
         for name in ("integrity_monitor.py", "plugin_integrity_check.py"):
             src = (SCRIPTS / name).read_text(encoding="utf-8")
-            head = src[:src.index("\nimport security_common")]
+            head = src[:src.index("import security_common")]
             assert "sys.path.append(" in head and "sys.path.insert(" not in head, name
 
 
@@ -1055,6 +1059,12 @@ class TestUnparseableSettings:
 
 
 class TestApplePrefixUnderIsolation:
+    @pytest.mark.skipif(
+        not ON_MACOS,
+        reason="Apple's /usr/bin/python3 bytecode cache (~/Library/Caches/com.apple.python) "
+               "exists only on macOS, and prefix_cache_findings maps a cached .pyc back "
+               "to a drive-less POSIX source path -- the Apple-cache check is NOT "
+               "verified on this machine")
     def test_the_apple_cache_is_checked_when_isolation_hides_the_prefix(
             self, tmp_path: Path, monkeypatch) -> None:
         """Under -I Apple's python reports no pycache_prefix, but every other

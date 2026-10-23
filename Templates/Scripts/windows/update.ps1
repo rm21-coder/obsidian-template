@@ -185,9 +185,14 @@ if (Test-Path -LiteralPath $DashboardSchemeKey) {
 # published on every interface. Only touched when one exists and Docker is up.
 if (Get-Command docker -ErrorAction SilentlyContinue) {
     $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { $owui = (docker ps -a --filter 'name=^open-webui$' --format '{{.Names}}' 2>$null) }
+    try { $owui = (docker ps -a --filter 'name=^open-webui$' --format '{{.Names}}' 2>$null); $dockerExit = $LASTEXITCODE }
     finally { $ErrorActionPreference = $prevEAP }
-    if ($owui -eq 'open-webui') {
+    # N13: docker installed but its engine not running made this whole section
+    # vanish without a word, so a skipped check read like a passed one.
+    if ($dockerExit -ne 0) {
+        Write-Host '== open-webui =='
+        Write-Host '  Docker is not running: the Open WebUI checks were skipped.' -ForegroundColor Yellow
+    } elseif ($owui -eq 'open-webui') {
         Write-Host '== open-webui binding =='
         if (Repair-OpenWebUIBinding) { Write-Host '  Recreated, bound to 127.0.0.1:3000.' }
         else { Write-Host '  Bound to 127.0.0.1 only.' }
@@ -236,6 +241,13 @@ if ($status -eq 'ok') {
 } elseif ($status -eq 'no_baseline') {
     Write-Host '  No integrity baseline on this machine, so the integrity control is not active.'
     Write-Host '  See "Scheduled jobs" in docs\Windows Setup.md before setting one up.'
+} elseif ($status -eq 'unreadable') {
+    # N11: the control did not run at all. Not expected drift.
+    Write-Host '  The integrity monitor could not run, so nothing is being checked.' -ForegroundColor Red
+    Write-Host "    See why:  & `"$controlPy`" -I -S `"$monitor`" --json" -ForegroundColor Red
+    Write-Host "    If it cannot list $(Get-ControlsDir): that folder was probably created from an" -ForegroundColor Red
+    Write-Host '    elevated prompt. From an elevated PowerShell remove it, then run this update again' -ForegroundColor Red
+    Write-Host '    from a normal one; the update reinstalls the controls.' -ForegroundColor Red
 } else {
     Write-Host "  Status: $status. The update changed watched files, so this is expected." -ForegroundColor Yellow
     if ($From -eq $to) {

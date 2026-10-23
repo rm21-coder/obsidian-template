@@ -36,6 +36,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# N11 (2026-10-23): on Windows mkdir(mode=0o700) writes an owner-only ACL
+# (Python 3.12.4+); made from an elevated prompt, the owner is the
+# Administrators group and the user's own tasks cannot use the folder. There
+# the folder inherits the user's own profile ACL instead.
+_PRIVATE_DIR_MODE = 0o700 if os.name == "posix" else 0o777
+
 # Drop kind -> folder name. Kinds are the authenticated `type` values used by
 # source_mail_pull.py, so the two agree by construction: a type this dict does
 # not name is rejected by the transport rather than written somewhere unread.
@@ -88,12 +94,12 @@ def ensure_dirs() -> list[Path]:
     already exists.
     """
     root = drop_root()
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root.mkdir(mode=_PRIVATE_DIR_MODE, parents=True, exist_ok=True)
     _owner_only(root, 0o700)
     created = []
     for folder in sorted(DIR_NAMES.values()):
         path = root / folder
-        path.mkdir(mode=0o700, exist_ok=True)
+        path.mkdir(mode=_PRIVATE_DIR_MODE, exist_ok=True)
         _owner_only(path, 0o700)
         for sub in RETIRE_SUBDIRS:
             retired = path / sub

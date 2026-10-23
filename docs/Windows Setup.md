@@ -743,6 +743,19 @@ x64 box that can offload to a discrete GPU.
 
 ## Troubleshooting
 
+- **The security tasks end with result 3, or the update says "The integrity
+  monitor could not run"** — the installed controls cannot start, so nothing
+  is being checked. The task's log shows `CONTROL_ERROR: cannot import
+  security_common`. The usual cause is that
+  `%LOCALAPPDATA%\obsidian-security\bin` was first created from an elevated
+  ("Run as administrator") PowerShell: Python 3.12.4 and later make such a
+  folder owned by the Administrators group, and your normal account then
+  cannot list it (`PermissionError [WinError 5]`). Since 2026-10-23 the
+  controls' folders are made without that mode and checked listable. To
+  repair an existing one, remove it from an elevated PowerShell, then run
+  `update.ps1` from a normal one, which reinstalls the controls:
+  `Remove-Item -Recurse -Force "$env:LOCALAPPDATA\obsidian-security\bin"`.
+  Then adopt the integrity baseline as the update describes.
 - **A venv looks broken** (present but missing `Scripts\python.exe`) — delete
   `Templates\Scripts\.venv` and re-run `install.ps1`.
 - **Docker won't start** — `setup-rag.ps1` checks whether WSL2 is present and

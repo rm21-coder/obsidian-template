@@ -109,3 +109,18 @@ def test_settings_left_crlf_by_an_older_checkout_are_rewritten_after_the_pull() 
     assert guard < body.index("$redo += $rel")
     assert body.index("Remove-Item -LiteralPath") < body.index("checkout -- @redo")
     assert "catch {" in body and "Write-Warning" in body    # a failure warns, never ends the update
+
+
+def test_a_stopped_docker_engine_is_reported_not_silently_skipped() -> None:
+    """N13: with docker installed but Docker Desktop not running, `docker ps`
+    fails, the container name came back empty, and the whole Open WebUI
+    section vanished without a word -- a skipped check read like a passed one.
+    The exit code is now kept and a failed `docker ps` prints the notice."""
+    block = UPDATE[UPDATE.index("if (Get-Command docker -ErrorAction SilentlyContinue) {"):]
+    block = block[:block.index("# Ollama's API is unauthenticated")]
+    ps = block.index("docker ps -a --filter 'name=^open-webui$'")
+    keep = block.index("$dockerExit = $LASTEXITCODE", ps)
+    check = block.index("if ($dockerExit -ne 0) {", keep)
+    notice = block.index("'  Docker is not running: the Open WebUI checks were skipped.'", check)
+    container = block.index("} elseif ($owui -eq 'open-webui') {", notice)
+    assert ps < keep < check < notice < container

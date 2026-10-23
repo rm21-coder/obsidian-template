@@ -479,6 +479,7 @@ def test_the_quickadd_patch_runs_on_every_update(scratch, tmp_path, allow_subpro
                    "install.sh --auto --only 56-script-permissions"], log
 
 
+@macos_shell
 def test_an_update_reports_an_open_webui_container_off_its_pin(
         scratch, tmp_path, allow_subprocess):
     """The RAG check reports, never replaces: a container on another image is
@@ -514,6 +515,7 @@ def test_an_update_reports_an_open_webui_container_off_its_pin(
     assert "MUTATED" not in out
 
 
+@macos_shell
 def test_an_update_reports_an_open_webui_container_without_login_or_cors(
         scratch, tmp_path, allow_subprocess):
     """5268557 / N1: a container started with WEBUI_AUTH=false and no
@@ -550,3 +552,46 @@ def test_an_update_reports_an_open_webui_container_without_login_or_cors(
     assert "open-webui: CORS_ALLOW_ORIGIN is unset" in out
     assert "fix with: docker rm -f open-webui && ./install.sh --only 50-llm-rag" in out
     assert "MUTATED" not in out
+
+
+def _run_update_with_docker(scratch, tmp_path, docker_script: str):
+    home, vault, la, env = scratch
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    (stubs / "launchctl").write_text("#!/bin/sh\nexit 0\n")
+    (stubs / "launchctl").chmod(0o755)
+    docker = stubs / "fake-docker"
+    docker.write_text(docker_script)
+    docker.chmod(0o755)
+    venv_py = vault / "Templates" / "Scripts" / ".venv" / "bin" / "python3"
+    venv_py.unlink()
+    venv_py.write_text('#!/bin/sh\nif [ "$1" = "-c" ]; then echo "arm64 13 gil"; exit 0; fi\n')
+    venv_py.chmod(0o755)
+    head = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=vault,
+                          capture_output=True, text=True).stdout.strip()
+    r = subprocess.run(["/bin/bash", str(vault / "update.sh"), "--after-pull", "--from", head],
+                       capture_output=True, text=True,
+                       env={**env, "PATH": f"{stubs}:{env['PATH']}", "OBSIDIAN_DOCKER": str(docker)})
+    return r.stdout + r.stderr
+
+
+@macos_shell
+def test_an_update_says_when_docker_is_not_running(scratch, tmp_path, allow_subprocess):
+    """N13: docker installed but its engine down skipped the Open WebUI checks
+    without a word, so a skipped check read like a passed one."""
+    out = _run_update_with_docker(scratch, tmp_path, (
+        '#!/bin/sh\n'
+        'echo "Cannot connect to the Docker daemon" >&2\n'
+        'exit 1\n'))
+    assert "Docker is not running: the Open WebUI checks were skipped" in out, out
+    assert "open-webui runs the pinned image" not in out
+
+
+@macos_shell
+def test_no_docker_notice_when_docker_runs_without_an_open_webui_container(
+        scratch, tmp_path, allow_subprocess):
+    """The notice is for an engine that is down, not for a Mac without the
+    RAG stack: an empty `docker ps` stays silent."""
+    out = _run_update_with_docker(scratch, tmp_path, '#!/bin/sh\nexit 0\n')
+    assert "Docker is not running" not in out, out
+    assert "== local RAG stack ==" not in out

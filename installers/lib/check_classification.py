@@ -380,6 +380,13 @@ def find_repo_root(cli_value: str | None) -> Path:
 
 
 def main() -> int:
+    # N16: a file name the console code page cannot encode (cp1252 on a
+    # Windows pipe) must print escaped, not crash the audit.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(
         description="Audit the obsidian-template repo for non-public content."
     )

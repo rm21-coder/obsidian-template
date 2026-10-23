@@ -35,6 +35,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# N11 (2026-10-23): on Windows mkdir(mode=0o700) writes an owner-only ACL
+# (Python 3.12.4+); made from an elevated prompt, the owner is the
+# Administrators group and the user's own tasks cannot use the folder. There
+# the folder inherits the user's own profile ACL instead.
+_PRIVATE_DIR_MODE = 0o700 if os.name == "posix" else 0o777
+
 log = logging.getLogger("handoff_source")
 
 # The contract this module understands. Bump when the payload shape changes;
@@ -289,7 +295,7 @@ class DropFolderSource(HandoffSource):
         # are this account's alone, each archived file is restricted, and
         # the archive is pruned rather than kept forever.
         processed = ready_path.parent / self.PROCESSED_SUBDIR
-        processed.mkdir(mode=0o700, exist_ok=True)
+        processed.mkdir(mode=_PRIVATE_DIR_MODE, exist_ok=True)
         _restrict_dir(ready_path.parent)
         _restrict_dir(processed)
         stamp = dt.datetime.now().strftime("%Y%m%dT%H%M%S")

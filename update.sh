@@ -277,7 +277,13 @@ main() {
     # OBSIDIAN_DOCKER: the tests point it at a stub, so they never touch the
     # maintainer's real Docker.
     RAG_DOCKER="${OBSIDIAN_DOCKER:-docker}"
-    if has_cmd "$RAG_DOCKER" && "$RAG_DOCKER" ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^open-webui$'; then
+    # N13: docker installed but its engine not running used to skip this
+    # whole section without a word, so a skipped check read like a passed one.
+    local rag_names=""
+    if has_cmd "$RAG_DOCKER" && ! rag_names="$("$RAG_DOCKER" ps -a --format '{{.Names}}' 2>/dev/null)"; then
+        info "== local RAG stack =="
+        warn "  Docker is not running: the Open WebUI checks were skipped"
+    elif has_cmd "$RAG_DOCKER" && grep -q '^open-webui$' <<< "$rag_names"; then
         info "== local RAG stack =="
         rag_exposed="$("$RAG_DOCKER" port open-webui 8080 2>/dev/null | grep -v '^127\.0\.0\.1:' || true)"
         if [[ -n "$rag_exposed" ]]; then
@@ -381,6 +387,10 @@ report_control() {
         ok)          ok "  $name: clean" ;;
         no_baseline) warn "  $name: no baseline, so this control is not active."
                      warn "    Setting one up is a deliberate step: see docs/Security-Harness.md." ;;
+        unreadable)  # N11: the control did not run at all; never "expected drift".
+                     err "  $name: the control could not run, so nothing is being checked."
+                     err "    See why:  /usr/bin/python3 -I $path --json"
+                     err "    Reinstall it: /usr/bin/python3 -I ~/Obsidian/Templates/Scripts/security_common.py install-controls ~/Obsidian/Templates/Scripts" ;;
         *)
             warn "  $name: $status. An update changes watched files, so this is expected."
             warn "    Before adopting, confirm every finding is part of this update:"

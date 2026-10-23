@@ -35,7 +35,12 @@ foreach ($p in $pins) { $pinById[$p.id] = $p }
 
 $listFile = Join-Path $vault '.obsidian\community-plugins.json'
 if (-not (Test-Path $listFile)) { throw "plugin list not found: $listFile" }
-$ids = @(Get-Content $listFile -Raw | ConvertFrom-Json)
+# N12: not @(... | ConvertFrom-Json): Windows PowerShell 5.1 emits a JSON
+# array as ONE object, so @() held the whole list as a single element and
+# every id was refused as one space-joined name. Assign, then enumerate with
+# foreach (which unrolls on 5.1 and 7) so $ids is a flat array either way.
+$parsedIds = Get-Content $listFile -Raw | ConvertFrom-Json
+$ids = @(foreach ($i in $parsedIds) { $i })
 
 # Pin values are input, not code (findings 5278122, 5278131; the twin of
 # plugins.sh). A plugin id and a file name each become ONE path component under

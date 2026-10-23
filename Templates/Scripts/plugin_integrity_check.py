@@ -75,7 +75,16 @@ from pathlib import Path
 # folder, after the standard library. See integrity_monitor.py.
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-import security_common  # noqa: E402
+try:
+    import security_common  # noqa: E402
+except ImportError as _exc:
+    # N11: a control that cannot start must say so, and not as exit 1,
+    # which is also what drift returns. Nothing else is importable yet,
+    # so no alert record or notification: the scheduled task's result
+    # (3) and this line in its log are the signal.
+    sys.stderr.write("CONTROL_ERROR: cannot import security_common from %s (%s). "
+                     "The control did not run.\n" % (os.path.dirname(os.path.abspath(__file__)), _exc))
+    raise SystemExit(3)
 
 DEFAULT_VAULT = Path.home() / "Obsidian"
 STATE_DIR = security_common.state_dir()

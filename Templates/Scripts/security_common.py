@@ -260,6 +260,47 @@ def restrict_file(path: Path) -> bool:
         return False
 
 
+def make_private_dir(path: Path, parents: bool = False) -> None:
+    """Create (or keep) a folder only its owner can use, and check that this
+    account can list it. Raises OSError if it cannot.
+
+    POSIX: mode 0700. Windows: never mkdir(mode=0o700). Since Python 3.12.4
+    that writes a protected ACL granting only the folder's OWNER, SYSTEM and
+    Administrators, and a folder created from an elevated prompt is owned by
+    the Administrators group, so the user's own scheduled tasks cannot list
+    it (finding N11: both security controls stopped starting, silently).
+    Instead the folder inherits its parent's ACL (under %LOCALAPPDATA%, the
+    user's own) and then gets an explicit grant for this user and SYSTEM, as
+    restrict_file does for files.
+    """
+    path = Path(path)
+    if sys.platform != "win32":
+        path.mkdir(mode=0o700, parents=parents, exist_ok=True)
+        os.chmod(path, 0o700)
+    else:
+        path.mkdir(parents=parents, exist_ok=True)
+        user = os.environ.get("USERNAME")
+        if user:
+            domain = os.environ.get("USERDOMAIN")
+            principal = f"{domain}\\{user}" if domain else user
+            try:
+                subprocess.run(
+                    [ICACLS_EXE, str(path), "/inheritance:r",
+                     "/grant:r", f"{principal}:(OI)(CI)(F)",
+                     "/grant:r", f"{_SYSTEM_SID}:(OI)(CI)(F)"],
+                    check=False, capture_output=True, text=True, timeout=15)
+            except Exception:
+                pass                  # the listing check below decides
+    try:
+        os.listdir(path)
+    except OSError as exc:
+        raise OSError(
+            f"{path} exists but this account cannot list it ({exc}). It was "
+            "probably created from an elevated (Run as administrator) prompt. "
+            "From an elevated PowerShell, remove it (Remove-Item -Recurse -Force "
+            f"'{path}'), then run the update again from a normal PowerShell.") from exc
+
+
 # ---------- notifications ----------------------------------------------------
 
 # System binaries by absolute path, never by bare name. A bare name is resolved
@@ -614,19 +655,19 @@ def install_controls(src: Path, dest: Path | None = None) -> list:
             raise ValueError(f"{path} is not a regular file")
         blobs[rel] = path.read_bytes()
     new_parent = not dest.parent.exists()
-    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if dest.is_symlink():
+        raise ValueError(f"{dest} is not a directory")
+    if new_parent:              # the state dir, created here: owner-only too
+        make_private_dir(dest.parent, parents=True)
+    make_private_dir(dest)      # N11: never mkdir(mode=0o700) on Windows
     if dest.is_symlink() or not dest.is_dir():
         raise ValueError(f"{dest} is not a directory")
-    if os.name == "posix":
-        os.chmod(dest, 0o700)
-        if new_parent:          # the state dir, created here: owner-only too
-            os.chmod(dest.parent, 0o700)
     for rel, data in blobs.items():
         target = dest / rel
         if target.parent != dest:
-            target.parent.mkdir(mode=0o700, exist_ok=True)
             if target.parent.is_symlink():
                 raise ValueError(f"{target.parent} is a symlink")
+            make_private_dir(target.parent)
         tmp = target.with_name(target.name + ".tmp")
         try:
             os.unlink(tmp)

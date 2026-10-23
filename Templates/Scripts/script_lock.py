@@ -53,6 +53,12 @@ import sys
 from pathlib import Path
 from typing import Callable, IO
 
+# N11 (2026-10-23): on Windows mkdir(mode=0o700) writes an owner-only ACL
+# (Python 3.12.4+); made from an elevated prompt, the owner is the
+# Administrators group and the user's own tasks cannot use the folder. There
+# the folder inherits the user's own profile ACL instead.
+_PRIVATE_DIR_MODE = 0o700 if os.name == "posix" else 0o777
+
 try:
     import fcntl as _fcntl
 except ImportError:                                  # non-POSIX
@@ -122,7 +128,7 @@ def try_acquire(name: str, *, dir: Path | None = None) -> tuple[IO | None, str |
     """
     target = lock_path(name, dir=dir)
     try:
-        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target.parent.mkdir(mode=_PRIVATE_DIR_MODE, parents=True, exist_ok=True)
     except OSError:
         return None, f"could not create lock directory {target.parent}"
     # Owner-only (5278107): the default umask left the lock files 0644 in a

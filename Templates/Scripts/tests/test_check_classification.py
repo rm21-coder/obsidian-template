@@ -17,6 +17,7 @@ mocking it.
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -160,9 +161,17 @@ def _write(root: Path, rel: Path | str, text: str) -> Path:
 
 
 def _run_audit(root: Path, *flags: str) -> subprocess.CompletedProcess:
+    # PYTHONIOENCODING: decode what the child wrote in the encoding it wrote.
+    # On Windows a child's piped stderr is the ANSI code page (cp1252), so
+    # "José" arrived as a lone 0xE9 byte; the utf-8 decode then failed inside
+    # subprocess's Windows reader thread, which drops the exception and
+    # leaves proc.stderr None -- "argument of type 'NoneType' is not
+    # iterable" on every accented-path test (Windows run, 2026-10-22). Mac
+    # pipes are UTF-8 already, so this changes nothing there.
     return subprocess.run(
         [sys.executable, str(AUDIT_PY), "--repo-root", str(root), *flags],
-        capture_output=True, text=True, encoding="utf-8")
+        capture_output=True, text=True, encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"})
 
 
 class TestNonAsciiPathsAreAudited:
@@ -372,3 +381,11 @@ class TestPushedRange:
         _write(content_repo, "Knowledge/ok.md", PUBLIC)
         tip = self._commit(content_repo, "base")
         assert _run_audit(content_repo, "--range", f"{tip} --not --remotes").returncode == 0
+
+
+def test_main_escapes_unencodable_names_instead_of_crashing():
+    # N16 (2026-10-23): a non-cp1252 file name on a Windows pipe raised
+    # UnicodeEncodeError (the audit failed closed, but with a traceback).
+    src = (Path(__file__).resolve().parents[3] / "installers" / "lib" / "check_classification.py").read_text(encoding="utf-8")
+    body = src[src.index("def main() -> int:"):]
+    assert 'stream.reconfigure(errors="backslashreplace")' in body[:600]

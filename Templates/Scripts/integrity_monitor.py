@@ -126,7 +126,16 @@ from pathlib import Path
 SELF_DIR = Path(os.path.abspath(__file__)).parent
 sys.path.append(str(SELF_DIR))
 
-import security_common  # noqa: E402
+try:
+    import security_common  # noqa: E402
+except ImportError as _exc:
+    # N11: a control that cannot start must say so, and not as exit 1,
+    # which is also what drift returns. Nothing else is importable yet,
+    # so no alert record or notification: the scheduled task's result
+    # (3) and this line in its log are the signal.
+    sys.stderr.write("CONTROL_ERROR: cannot import security_common from %s (%s). "
+                     "The control did not run.\n" % (SELF_DIR, _exc))
+    raise SystemExit(3)
 
 DEFAULT_SCRIPTS = Path.home() / "Obsidian" / "Templates" / "Scripts"
 DEFAULT_LAUNCHAGENTS = Path.home() / "Library" / "LaunchAgents"

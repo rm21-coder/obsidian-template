@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 import rag_status as R
+from platform_caps import macos_shell
 
 SCRIPTS = Path(R.__file__).resolve().parent
 WIN = SCRIPTS / "windows"
@@ -115,6 +116,7 @@ def test_windows_handler_refuses_rag_where_it_is_not_set_up(monkeypatch, tmp_pat
     assert "Not set up on this machine: the local RAG layer is not configured." in notes
 
 
+@macos_shell
 def test_macos_dispatcher_refuses_rag_where_it_is_not_set_up(tmp_path, allow_subprocess) -> None:
     f = tmp_path / ".env"
     f.write_text("OBSIDIAN_COLLECTION_ID=\n", encoding="utf-8")

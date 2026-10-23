@@ -55,6 +55,12 @@ from pathlib import Path
 
 import script_lock
 
+# N11 (2026-10-23): on Windows mkdir(mode=0o700) writes an owner-only ACL
+# (Python 3.12.4+); made from an elevated prompt, the owner is the
+# Administrators group and the user's own tasks cannot use the folder. There
+# the folder inherits the user's own profile ACL instead.
+_PRIVATE_DIR_MODE = 0o700 if os.name == "posix" else 0o777
+
 
 def _redact_url(url: str) -> str:
     """Log-safe URL: no userinfo, no query. A stdlib twin of
@@ -219,7 +225,7 @@ def pending_items(inbox: Path, *, min_age: float = 20.0) -> list[Path]:
 
 def _retire(item: Path, target_dir: Path) -> Path:
     """Move a processed drop aside, keeping both copies if names collide."""
-    target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target_dir.mkdir(mode=_PRIVATE_DIR_MODE, parents=True, exist_ok=True)
     os.chmod(target_dir, 0o700)          # 5278632: done/ and failed/ hold transcripts
     dest = target_dir / item.name
     if dest.exists():

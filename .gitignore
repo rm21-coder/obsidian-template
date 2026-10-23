@@ -22,6 +22,9 @@ Templates/Scripts/.venv/
 # The test suite's own venv (tests/run_tests.sh, from requirements-dev.lock)
 Templates/Scripts/.venv-test/
 Templates/Scripts/__pycache__/
+# ...and under windows/: an untracked .pyc under Templates/Scripts made the
+# installer tree gate refuse on Windows (N14, 2026-10-23).
+Templates/Scripts/windows/__pycache__/
 
 # Bytecode cache from running installers/lib scripts directly (e.g. check_classification.py)
 installers/lib/__pycache__/
@@ -39,6 +42,9 @@ Templates/Scripts/tests/.coverage
 # Per-user Obsidian state — the workspace layout is unique to each machine
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
+# Written by the Workspaces and Backlinks core plugins; per-machine too.
+.obsidian/workspaces.json
+.obsidian/backlink.json
 
 # Generated per-machine output — the morning dashboard writes HTML here
 Z_dashboards/

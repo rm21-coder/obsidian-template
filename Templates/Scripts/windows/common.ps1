@@ -659,7 +659,11 @@ function Test-OpenWebUIHardening {
     $ErrorActionPreference = 'Continue'
     try { $raw = "$(docker inspect open-webui --format '{{json .Config.Env}}' 2>$null)" } finally { $ErrorActionPreference = $prevEAP }
     $vars = @{}
-    try { foreach ($item in @($raw | ConvertFrom-Json)) {
+    # N12: never @($raw | ConvertFrom-Json). Windows PowerShell 5.1 emits a JSON
+    # array as ONE object, so @() made a one-element array holding the whole
+    # list and every NAME=value string ran together into one garbled key.
+    # Assigning first and then foreach enumerates the elements on 5.1 and 7.
+    try { $parsed = $raw | ConvertFrom-Json; foreach ($item in $parsed) {
         $i = "$item".IndexOf('=')
         if ($i -gt 0) { $vars["$item".Substring(0, $i)] = "$item".Substring($i + 1) }
     } } catch { Write-Warning '  could not read the open-webui container environment'; return $false }
