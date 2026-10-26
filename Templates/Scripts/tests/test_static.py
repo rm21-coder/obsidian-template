@@ -910,19 +910,21 @@ class TestInstallerKeychainWrites:
 # ---------------------------------------------------------------------------
 
 class TestInstallProfileParity:
+    # Function-scoped: pytest 10 refuses class-scoped fixtures defined as
+    # instance methods, and these only read three small files.
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture
     def repo_root(self, scripts_dir: Path) -> Path:
         return scripts_dir.parent.parent
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture
     def windows_sources(self, scripts_dir: Path) -> str:
         win = scripts_dir / "windows"
         return "\n".join(
             f.read_text(encoding="utf-8")
             for f in sorted(win.glob("*.ps1")))
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture
     def documented_keys(self, repo_root: Path) -> list[str]:
         readme = repo_root / "installers" / "profiles" / "README.md"
         assert readme.is_file(), f"profile README not found at {readme}"
