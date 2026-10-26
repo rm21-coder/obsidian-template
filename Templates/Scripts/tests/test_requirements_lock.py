@@ -16,7 +16,7 @@ fake hashes (it seeded the "fresh" resolve from the committed lock), UV_*
 variables redirected the resolve, an existing venv kept unchecked files,
 two components still pip-installed unpinned, and no Python ceiling. These
 pin the fixes, and the floors the lock implies (macOS 14+ on Apple Silicon,
-Python 3.10-3.14, 3.12+ on Windows ARM64).
+Python 3.11-3.14, 3.12+ on Windows ARM64).
 """
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ def test_the_locks_name_the_tool_that_writes_them() -> None:
 def test_entries_read_name_version_marker_and_every_hash() -> None:
     e = L.entries(LOCK_TEXT)
     av = {k: v for k, v in e.items() if k[0] == "av"}
-    assert len(av) == 3 and all(k[2] for k in av)          # three marker-scoped versions
+    assert len(av) == 2 and all(k[2] for k in av)          # two marker-scoped versions
     assert all(len(h) > 1 for h in av.values())
 
 
@@ -266,8 +266,9 @@ def test_macos_refuses_when_the_lock_is_missing(tmp_path, allow_subprocess) -> N
 @macos_shell
 @pytest.mark.parametrize("probe,marker", [
     ("x86_64 13 gil", "is not an Apple Silicon interpreter (x86_64)"),
-    ("arm64 15 gil", "is Python 3.15; the pinned dependencies need 3.10-3.14"),
-    ("arm64 9 gil", "is Python 3.9; the pinned dependencies need 3.10-3.14"),
+    ("arm64 15 gil", "is Python 3.15; the pinned dependencies need 3.11-3.14"),
+    ("arm64 10 gil", "is Python 3.10; the pinned dependencies need 3.11-3.14"),
+    ("arm64 9 gil", "is Python 3.9; the pinned dependencies need 3.11-3.14"),
     ("arm64 13 nogil", "is a free-threaded (no-GIL) Python"),
     ("", "is not an Apple Silicon interpreter (unknown)"),
 ])
@@ -356,7 +357,7 @@ def test_windows_installs_only_the_lock_with_every_flag() -> None:
 
 
 def test_windows_python_floor_and_ceiling() -> None:
-    assert re.search(r"if \(Test-ArmWindows\) \{ return 12 \} else \{ return 10 \}", COMMON_PS)
+    assert re.search(r"if \(Test-ArmWindows\) \{ return 12 \} else \{ return 11 \}", COMMON_PS)
     assert "PROCESSOR_ARCHITEW6432 -eq 'ARM64'" in COMMON_PS
     assert f"function Get-MaxPythonMinor {{ return {L.PYTHON_CEILING.split('.')[1]} }}" in COMMON_PS
     assert "$min -ge (Get-MinPythonMinor) -and $min -le (Get-MaxPythonMinor)" in INSTALL_PS
@@ -402,7 +403,7 @@ def test_targets_cover_every_supported_platform() -> None:
     platforms = dict(L.TARGETS)
     assert set(platforms) == {"aarch64-apple-darwin", "x86_64-pc-windows-msvc",
                               "aarch64-pc-windows-msvc"}
-    assert min(platforms["aarch64-apple-darwin"]) == L.PYTHON_FLOOR == "3.10"
+    assert min(platforms["aarch64-apple-darwin"]) == L.PYTHON_FLOOR == "3.11"
     assert L.MACOS_FLOOR == "14.0"
 
 

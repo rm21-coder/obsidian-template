@@ -20,7 +20,7 @@
 #
 # The base interpreter is $TEST_PYTHON, else the first Homebrew python3.13 /
 # 3.12 / 3.14 / python3 found; the lock's own checks (Apple Silicon,
-# Python 3.10-3.14, GIL build) refuse anything it has no wheels for. Delete
+# Python 3.11-3.14, GIL build) refuse anything it has no wheels for. Delete
 # .venv-test to rebuild it from scratch.
 #
 # Default behavior is fully mocked — no real Keychain reads, no real

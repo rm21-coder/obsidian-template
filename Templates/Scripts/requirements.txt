@@ -5,6 +5,10 @@ requests
 # certifi (a requests dependency): floor for PYSEC-2026-4320, flagged by the
 # sca pass on 2026-10-20.
 certifi>=2026.10.19
+# filelock and setuptools (transitive): floors for CVE-2026-112907/-112913/
+# -112940 and GHSA-xmj3-9gf7-h52w, flagged by the sca pass on 2026-10-26.
+filelock>=4.2.1
+setuptools>=84.1.0 ; platform_machine == 'arm64' and sys_platform == 'darwin'
 
 # Optional feature scripts (bundled in core per the Windows "deploy completely"
 # goal). yt-dlp: youtube_summarize.py. markitdown: markitdown_cleanup/_dropper

@@ -92,8 +92,8 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
 
 - **Vault root:** `~/Obsidian` (macOS) / `%USERPROFILE%\Obsidian` (Windows).
 - **Scripts:** `<vault>/Templates/Scripts/` on both platforms.
-- **Python:** a shared venv at `Templates/Scripts/.venv`. Needs **3.10+**
-  (code uses PEP 604 `X | None` unions). macOS uses Homebrew python, NOT
+- **Python:** a shared venv at `Templates/Scripts/.venv`. Needs **3.11+**
+  (the locked dependencies need it; 3.10 is end of life). macOS uses Homebrew python, NOT
   `/usr/bin/python3` (that is 3.9), for the venv. But many jobs run on Apple's
   `/usr/bin/python3`, not the venv: any plist or installer step that launches
   it -- the morning dashboard and both security controls (on purpose: they
@@ -119,7 +119,7 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
   commit both; never hand-edit a lock, never `pip install` outside one (a test
   in `test_requirements_lock.py` scans every installer and script for that).
   `mlx-whisper` is Apple-Silicon-only and is guarded out elsewhere. Floors the
-  lock implies: macOS 14+ on Apple Silicon (no Intel), Python 3.10-3.14
+  lock implies: macOS 14+ on Apple Silicon (no Intel), Python 3.11-3.14
   (3.12-3.14 on Windows ARM64).
 - **Secrets/state:** secrets in the platform keystore via `secret_store.py`
   (configuration in `dev/secrets/.env`); runtime state under

@@ -192,7 +192,7 @@ PY=""
 for _c in ${PYTHON:+"$PYTHON"} python3 python; do
     [[ -n "${PYTHON:-}" && "$_c" != "$PYTHON" ]] && break   # an override is not second-guessed
     if command -v "$_c" >/dev/null 2>&1 \
-       && "$_c" -c 'import sys; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
+       && "$_c" -c 'import sys; sys.exit(sys.version_info < (3, 11))' >/dev/null 2>&1; then
         PY="$(command -v "$_c")"
         break
     fi
@@ -200,9 +200,9 @@ done
 if [[ -z "$PY" ]]; then
     PY=false        # every Python pass then records its own FAIL
     if [[ -n "${PYTHON:-}" ]]; then
-        _say "python:    NONE - PYTHON=$PYTHON is not a working Python 3.10+"
+        _say "python:    NONE - PYTHON=$PYTHON is not a working Python 3.11+"
     else
-        _say "python:    NONE - no Python 3.10+ found as python3 or python; set PYTHON=<path>"
+        _say "python:    NONE - no Python 3.11+ found as python3 or python; set PYTHON=<path>"
     fi
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*) _say "           e.g. PYTHON=\"\$USERPROFILE/Obsidian/Templates/Scripts/.venv/Scripts/python.exe\"" ;;

@@ -37,7 +37,7 @@ note of that name is never replaced: the new file gets a -YYYY-MM-DD-HHMMSS
 suffix instead. Path is printed to stdout on success.
 
 Requires:
-    - Python 3.10+
+    - Python 3.11+
     - ffmpeg on PATH:  brew install ffmpeg  /  winget install Gyan.FFmpeg
     - one transcription backend:
         Apple Silicon : mlx-whisper; elsewhere faster-whisper, or onnxruntime

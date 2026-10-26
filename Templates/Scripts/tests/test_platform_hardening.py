@@ -164,7 +164,7 @@ def test_a_python_override_that_does_not_work_is_named(tmp_path, allow_subproces
     r = subprocess.run(["bash", str(CHECKS), "--fast", "--artifacts", str(tmp_path)],
                        cwd=REPO, capture_output=True, text=True, timeout=300,
                        env={**os.environ, "PYTHON": str(tmp_path / "no-such-python")})
-    assert f"python:    NONE - PYTHON={tmp_path / 'no-such-python'} is not a working Python 3.10+" in r.stdout
+    assert f"python:    NONE - PYTHON={tmp_path / 'no-such-python'} is not a working Python 3.11+" in r.stdout
     assert "RESULT: FAIL" in r.stdout
 
 

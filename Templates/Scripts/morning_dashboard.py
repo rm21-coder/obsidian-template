@@ -1174,7 +1174,7 @@ def venv_defect(interpreter: str) -> str | None:
     if not os.path.exists(interpreter):
         verdict = (f"Verified: the interpreter {interpreter} does not exist, so "
                    f"the job cannot start at all. Rebuild the venv with "
-                   f"Homebrew python (3.10+), not /usr/bin/python3.")
+                   f"Homebrew python (3.11+), not /usr/bin/python3.")
     else:
         try:
             probe = subprocess.run([interpreter, "-c", "import anthropic"],

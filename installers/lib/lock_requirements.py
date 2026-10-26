@@ -55,11 +55,11 @@ COMPILE_COMMAND = "python3 installers/lib/lock_requirements.py"
 # onnxruntime (pulled in by markitdown's magika) stopped shipping them. The
 # installers refuse any Python above the highest version listed here.
 TARGETS = [
-    ("aarch64-apple-darwin", ("3.10", "3.11", "3.12", "3.13", "3.14")),
-    ("x86_64-pc-windows-msvc", ("3.10", "3.11", "3.12", "3.13", "3.14")),
+    ("aarch64-apple-darwin", ("3.11", "3.12", "3.13", "3.14")),
+    ("x86_64-pc-windows-msvc", ("3.11", "3.12", "3.13", "3.14")),
     ("aarch64-pc-windows-msvc", ("3.12", "3.13", "3.14")),
 ]
-PYTHON_FLOOR = "3.10"            # PEP 604 unions in the scripts
+PYTHON_FLOOR = "3.11"            # filelock 4.2.1+ (CVE fixes) needs it; 3.10 is end of life
 PYTHON_CEILING = "3.14"
 
 

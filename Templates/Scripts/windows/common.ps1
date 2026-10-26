@@ -23,7 +23,7 @@ function Get-ScriptsDir {
 function Get-VenvPython {
     $py = Join-Path (Get-ScriptsDir) '.venv\Scripts\python.exe'
     if (Test-Path $py) { return $py }
-    # Fall back to a launcher-resolved interpreter (must be 3.10+).
+    # Fall back to a launcher-resolved interpreter (must be 3.11+).
     $cmd = Get-Command python -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     throw "No venv python at $py and no 'python' on PATH. Run install.ps1 first."
@@ -91,14 +91,14 @@ function Install-SecurityControls {
 }
 
 # The lowest Python 3 minor version that can install requirements.lock here.
-# 3.10 is the floor everywhere (the scripts use PEP 604 unions); on Windows
+# 3.11 is the floor everywhere (the locked filelock needs it); on Windows
 # ARM64 it is 3.12, because pyyaml publishes no win_arm64 wheel for 3.11 and
 # the lock installs wheels only.
 function Test-ArmWindows {
     return ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64')
 }
 function Get-MinPythonMinor {
-    if (Test-ArmWindows) { return 12 } else { return 10 }
+    if (Test-ArmWindows) { return 12 } else { return 11 }
 }
 # ... and the highest: the lock is resolved and wheel-checked up to 3.14
 # (TARGETS in installers/lib/lock_requirements.py). A newer Python has no

@@ -281,10 +281,10 @@ run() {
 # pip itself is not upgraded: that would be an unpinned fetch ahead of the
 # pinned ones, and the venv's bundled pip handles all of this.
 #
-# The lock has wheels for Apple Silicon and Python 3.10-3.14 only; the venv's
+# The lock has wheels for Apple Silicon and Python 3.11-3.14 only; the venv's
 # own interpreter is what counts (a Rosetta shell or an Intel Homebrew python
 # on an Apple Silicon Mac would otherwise pass the preflight and fail in pip).
-LOCK_PYTHON_MIN=10
+LOCK_PYTHON_MIN=11
 LOCK_PYTHON_MAX=14
 
 # lock_is_plain <lock>

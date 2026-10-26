@@ -187,7 +187,7 @@ disabled; you prove it by hand and enable it.
 ### Two interpreters on macOS
 
 Most dependencies install into one shared venv at `Templates/Scripts/.venv`,
-which needs Python 3.10 or later and is built from Homebrew Python. It is
+which needs Python 3.11 or later and is built from Homebrew Python. It is
 installed only from `requirements.lock`: every package at a locked release
 with the SHA-256 of each file, installed with
 `pip --require-hashes --no-deps --only-binary :all:`. The lock is generated
