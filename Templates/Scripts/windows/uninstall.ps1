@@ -32,6 +32,9 @@
   deletes it), WSL, the MSVC runtime.
 
 .PARAMETER Yes     Non-interactive; take the default answer for every prompt.
+.PARAMETER AllowLocalChanges  Run over your own edits to installer code (a
+                   maintainer). Logged to %LOCALAPPDATA%\obsidian-template\tree-gate.log.
+.PARAMETER StrictTree  Refuse a tree that is not a git checkout.
 .PARAMETER DryRun  Print what would happen; change nothing.
 .EXAMPLE  .\uninstall.ps1 -DryRun
 .EXAMPLE  .\uninstall.ps1 -Yes                       # safe teardown, unattended
@@ -44,9 +47,39 @@
     [switch]$RemovePlugins,
     [switch]$RemoveApps,
     [switch]$PurgeModels,
-    [switch]$All
+    [switch]$All,
+    [switch]$AllowLocalChanges,
+    [switch]$StrictTree
 )
 $ErrorActionPreference = 'Stop'
+
+# ---- tree gate (findings 5278120 / 5278133; review R3, 2026-10-26) --------
+# As in install.ps1, and as uninstall.sh does: before common.ps1 or anything
+# else in the tree is dot-sourced, refuse installer code git does not vouch
+# for. This teardown deletes paths its libraries compute. tree_gate.ps1 is
+# checked against HEAD first; nothing can check THIS file (see tree_gate.ps1).
+$treeRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
+$treeGate = Join-Path $treeRoot 'installers\lib\tree_gate.ps1'
+if (-not $AllowLocalChanges -and (Test-Path -LiteralPath (Join-Path $treeRoot '.git')) -and
+    (Get-Command git -ErrorAction SilentlyContinue)) {
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try {
+        $gateWant = "$(& git -C $treeRoot rev-parse -q --verify 'HEAD:installers/lib/tree_gate.ps1' 2>$null)"
+        $gateHave = "$(& git -C $treeRoot hash-object -- 'installers/lib/tree_gate.ps1' 2>$null)"
+    } finally { $ErrorActionPreference = $prevEAP }
+    $gateItem = Get-Item -LiteralPath $treeGate -Force -ErrorAction SilentlyContinue
+    if (-not $gateWant -or $gateWant -ne $gateHave -or
+        ($gateItem -and ($gateItem.Attributes -band [IO.FileAttributes]::ReparsePoint))) {
+        Write-Host 'TREE GATE: REFUSED. installers/lib/tree_gate.ps1 differs from HEAD; not loading it.' -ForegroundColor Red
+        Write-Host "  Inspect: git -C `"$treeRoot`" status --untracked-files=all; git -C `"$treeRoot`" diff"
+        exit 1
+    }
+}
+. $treeGate
+if (-not (Test-TreeGate -Root $treeRoot -Mode uninstall -AllowLocalChanges:$AllowLocalChanges -Strict:$StrictTree)) {
+    exit 1
+}
+
 . "$PSScriptRoot\common.ps1"
 
 # This process may be freshly launched (`powershell -File ...`) from a

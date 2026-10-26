@@ -69,6 +69,35 @@ def clean_address(value) -> str:
     return text if _ADDRESS_RE.match(text) and len(text) <= 254 else ""
 
 
+# The message-link shapes Outlook uses (review R11, 2026-10-26): the OWA read
+# link the connector returns (/owa/?ItemID=...&exvsurl=1&viewmodel=
+# ReadMessageItem, the only shape seen in the operator's 22 live tasks) and
+# the /mail/.../id/<id> deep link. Any other path or query on an Outlook host
+# is refused, so an open redirect there cannot become an "open in Outlook"
+# link to somewhere else.
+_OWA_PATHS = ("/owa/", "/owa")
+_OWA_PARAM_RE = {"ItemID": re.compile(r"[A-Za-z0-9%]{1,1024}\Z"),
+                 "exvsurl": re.compile(r"[0-9]{1,2}\Z"),
+                 "viewmodel": re.compile(r"ReadMessageItem\Z")}
+_MAIL_PATH_RE = re.compile(r"/mail/(?:[A-Za-z0-9]+/)*(?:id|deeplink/read)/"
+                           r"[A-Za-z0-9%_=.+-]{1,1024}/?\Z")
+
+
+def _message_path(parts) -> bool:
+    if parts.fragment:
+        return False
+    if parts.path in _OWA_PATHS:
+        seen = set()
+        for pair in parts.query.split("&") if parts.query else []:
+            key, eq, val = pair.partition("=")
+            rule = _OWA_PARAM_RE.get(key)
+            if not eq or rule is None or key in seen or not rule.match(val):
+                return False
+            seen.add(key)
+        return "ItemID" in seen
+    return not parts.query and bool(_MAIL_PATH_RE.match(parts.path))
+
+
 def outlook_link(value) -> str:
     """The message's own Outlook link, or nothing. Only https on Microsoft's
     Outlook hosts; anything else would be a link an email chose.
@@ -85,6 +114,8 @@ def outlook_link(value) -> str:
     parts = urlsplit(value)
     host = (parts.hostname or "").lower()
     if parts.scheme != "https" or host not in OUTLOOK_HOSTS or parts.netloc.lower() != host:
+        return ""
+    if not _message_path(parts):
         return ""
     rebuilt = "https://%s%s" % (host, parts.path or "/")
     if parts.query:

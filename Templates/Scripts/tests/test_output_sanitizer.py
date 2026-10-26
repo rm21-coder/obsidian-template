@@ -180,7 +180,8 @@ def test_entity_scheme_space_lands_after_the_scheme_in_the_original():
 
 
 def test_click_to_dial_schemes_are_defused_although_a_digit_follows():
-    for s in ("tel", "sms", "facetime", "facetime-audio", "callto"):
+    # skype, sip, sips: review R10 (2026-10-26).
+    for s in ("tel", "sms", "facetime", "facetime-audio", "callto", "skype", "sip", "sips"):
         t, c = S("[d](%s:15551212)" % s)
         assert t == "[d](%s%s:15551212)" % (s, Z) and c["schemes"] == 1, s
 

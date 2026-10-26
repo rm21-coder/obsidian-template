@@ -481,14 +481,17 @@ a push.
   bound to loopback, and on Windows setup and every update warn if it listens
   beyond the machine, but nothing stops a user who widens it deliberately.
 - **The installer cannot verify itself.** `install.sh`, `update.sh`,
-  `uninstall.sh` and the Windows installers refuse to run, before sourcing
+  `uninstall.sh`, `install.ps1`, `update.ps1` and `uninstall.ps1` refuse to run, before sourcing
   anything else, when git reports installer code under `installers/`,
   `Templates/Scripts/` or the root scripts as modified, untracked or hidden by
   an ignore rule, and they stop every Python they start from reading bytecode
   in the tree. That check lives in the entry script, so it cannot catch an
   edit to the entry script itself, and it trusts git's own `.git/` folder. The control for that case is the Sync requirement
   above; a release that keeps code outside the vault would remove it, and is
-  not planned.
+  not planned. The standalone Windows helpers (`Register-Tasks.ps1`,
+  `Install-Plugins.ps1`, `setup-rag.ps1`) are not gated themselves; the
+  installer and updater that call them are, so run them on their own only
+  from a tree one of those has just passed.
 - **Hooks can be bypassed.** `--no-verify` skips both hooks. The recipient-side
   classification audit at install, and the push gates that read every pushed
   commit, are the backstops.

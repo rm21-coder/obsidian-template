@@ -59,7 +59,7 @@ Shortcut Settings → **Show in Share Sheet**, accepted input **URLs**.
 straight into `payload`, a share yielding two URLs produces a multi-line
 payload — and `parse_body()` on the Mac is line-based, so it reconstructs only
 the first line while the phone signed the whole thing. The result is
-`hmac mismatch`, and because a rejected message is marked `\Seen` and never
+`hmac mismatch`, and because a rejected message is deleted and never
 retried, the phone shows nothing wrong at all.
 
 Steps 6–8 exist because Shortcuts cannot inline a script result's dictionary
@@ -111,10 +111,9 @@ between the mailbox and the noise floor.
 
 Either way the device gives no indication anything went wrong, so check
 `~/Library/Logs/source-mail-pull.err` first when a share seems to vanish. A
-rejected message is marked `\Seen` and will not be retried — just re-share
-from the device. Clearing the flag by hand is unreliable on Gmail, which
-restores read state across a whole conversation, and every drop of a given
-type shares one subject so they thread together.
+rejected message is moved to the mailbox's Trash and will not be retried —
+just re-share from the device. (Moving it back from Trash to the inbox and
+marking it unread would retry it, but re-sharing is simpler.)
 
 ## Verifying
 

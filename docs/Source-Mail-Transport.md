@@ -149,6 +149,17 @@ the log as an IMAP error and the run retries five minutes later. On macOS the
 venv's Homebrew Python reads Homebrew's CA bundle; a python.org build needs its
 `Install Certificates.command` run once, or every login fails verification.
 
+Every message the puller has dealt with, accepted or rejected, is then
+removed from the inbox: marked read, copied to the folder the server marks as
+Trash (RFC 6154 `\Trash`; `[Gmail]/Trash` on Gmail, which empties it after
+30 days) and deleted. The copy matters on Gmail: a message that is only
+deleted and expunged from INBOX is archived by default and stays in All Mail.
+A server that advertises no Trash folder gets the delete alone, and the log
+says so. Before 2026-10-26 processed messages were only marked read, so an
+older install's mailbox still holds every drop it ever received, in plain
+text. Delete those once by hand (in Gmail: search `in:inbox is:read`, select
+all, delete, then empty Trash).
+
 > Google is phasing App Passwords out during 2026 in favour of OAuth 2.0. When
 > that lands, only `_secret()` in `source_mail_pull.py` needs to change; the
 > routing, verification and sanitising logic is independent of how the mailbox

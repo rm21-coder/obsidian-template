@@ -60,9 +60,11 @@ _SCHEME_COLON_RE = re.compile(
 # ("llama3.1:8b", "localhost:8080") far more often than a link. It is left
 # alone, except for these schemes (and every ms-* Office scheme), which are
 # defused whatever follows. tel:, sms:, facetime: and callto: are here
-# because a digit is exactly what follows them (MDASH weekly:388).
+# because a digit is exactly what follows them (MDASH weekly:388); skype:,
+# sip: and sips: for the same reason (review R10, 2026-10-26).
 _ALWAYS_DEFUSE = ("javascript", "vbscript", "data", "file", "obsidian",
-                  "tel", "sms", "facetime", "facetime-audio", "callto")
+                  "tel", "sms", "facetime", "facetime-audio", "callto",
+                  "skype", "sip", "sips")
 
 # An entity or a backslash escape, as CommonMark decodes them inside a link
 # destination. html.unescape decides what an "&..." token means; one it

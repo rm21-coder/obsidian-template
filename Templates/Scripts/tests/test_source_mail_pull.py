@@ -366,7 +366,13 @@ class _FakeIMAP:
     def __init__(self, raw_messages: list[bytes]):
         self._raw = raw_messages
         self.stored: list[tuple[bytes, str]] = []
+        self.copied: list[tuple[bytes, str]] = []
+        self.expunges = 0
         self.timeout = None
+        # What Gmail's LIST answers with (RFC 6154 special-use flags).
+        self.list_lines = [b'(\\HasNoChildren) "/" "INBOX"',
+                           b'(\\HasNoChildren \\Trash) "/" "[Gmail]/Trash"']
+        self.copy_status = "OK"
 
     def __call__(self, host, port, timeout=None, ssl_context=None):
         # `timeout` is required, not merely tolerated: a double that silently
@@ -400,6 +406,17 @@ class _FakeIMAP:
 
     def store(self, num, op, flags):
         self.stored.append((num, flags))
+        return "OK", []
+
+    def list(self):
+        return "OK", list(self.list_lines)
+
+    def copy(self, num, mailbox):
+        self.copied.append((num, mailbox))
+        return self.copy_status, []
+
+    def expunge(self):
+        self.expunges += 1
         return "OK", []
 
     def close(self): pass
@@ -621,6 +638,57 @@ class TestReplaySeenCache:
         assert mode == 0o600
 
 
+class TestProcessedDropsLeaveTheMailbox:
+    """Review R7 (2026-10-26): processed drops were only marked Seen, so the
+    intake mailbox kept every dictation ever sent, in plain text, readable
+    with its app password. Accepted and rejected messages alike are now
+    copied to the server's Trash and deleted from the inbox."""
+
+    def _pull(self, fake, root, monkeypatch, dry_run=False):
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", fake)
+        return smp.process_mailbox(
+            user="u", password="p", key=KEY,
+            allowed=["phone@example.com"], root=root, dry_run=dry_run)
+
+    def test_an_accepted_drop_goes_to_trash_and_leaves_the_inbox(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        fake = _FakeIMAP([_raw_drop(_signed())])
+        assert self._pull(fake, tmp_path, monkeypatch) == (1, 0)
+        assert fake.copied == [(b"1", '"[Gmail]/Trash"')]
+        assert fake.stored == [(b"1", "\\Seen"), (b"1", "\\Deleted")]
+        assert fake.expunges == 1
+
+    def test_a_rejected_message_is_deleted_too(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        fake = _FakeIMAP([_raw_drop(_signed(), sender="stranger@example.net")])
+        assert self._pull(fake, tmp_path, monkeypatch) == (0, 1)
+        assert (b"1", "\\Deleted") in fake.stored
+        assert fake.copied == [(b"1", '"[Gmail]/Trash"')]
+
+    def test_without_a_trash_folder_the_drop_is_still_deleted_and_says_so(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog) -> None:
+        fake = _FakeIMAP([_raw_drop(_signed())])
+        fake.list_lines = [b'(\\HasNoChildren) "/" "INBOX"']
+        assert self._pull(fake, tmp_path, monkeypatch) == (1, 0)
+        assert fake.copied == []
+        assert (b"1", "\\Deleted") in fake.stored
+        assert "advertises no \\Trash folder" in caplog.text
+
+    def test_a_failed_copy_still_deletes_and_is_logged(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog) -> None:
+        fake = _FakeIMAP([_raw_drop(_signed())])
+        fake.copy_status = "NO"
+        assert self._pull(fake, tmp_path, monkeypatch) == (1, 0)
+        assert (b"1", "\\Deleted") in fake.stored
+        assert "could not copy message 1 to \"[Gmail]/Trash\" (NO)" in caplog.text
+
+    def test_a_dry_run_changes_nothing_on_the_server(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        fake = _FakeIMAP([_raw_drop(_signed())])
+        assert self._pull(fake, tmp_path, monkeypatch, dry_run=True) == (1, 0)
+        assert (fake.stored, fake.copied, fake.expunges) == ([], [], 0)
+
+
 class TestMessageSizeGate:
     """A message is sized before it is downloaded (M-DASH, CWE-770).
 
@@ -644,9 +712,9 @@ class TestMessageSizeGate:
         assert (accepted, rejected) == (0, 1)
         assert getattr(fake, "full_fetches", 0) == 0, (
             "the oversized message body was downloaded before being rejected")
-        assert fake.stored == [(b"1", "\\Seen")], (
-            "a rejected oversized drop should be marked Seen so it is not "
-            "re-probed every run")
+        assert fake.stored == [(b"1", "\\Seen"), (b"1", "\\Deleted")], (
+            "a rejected oversized drop should be marked Seen and deleted so it "
+            "is not re-probed every run")
 
     def test_normal_drop_still_goes_through(
             self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

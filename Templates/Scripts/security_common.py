@@ -271,7 +271,10 @@ def make_private_dir(path: Path, parents: bool = False) -> None:
     it (finding N11: both security controls stopped starting, silently).
     Instead the folder inherits its parent's ACL (under %LOCALAPPDATA%, the
     user's own) and then gets an explicit grant for this user and SYSTEM, as
-    restrict_file does for files.
+    restrict_file does for files. If that grant cannot be made (no USERNAME,
+    icacls missing, failing or timing out) it raises: until 2026-10-26 the
+    result was discarded, so a folder could keep an inherited ACL while
+    every caller took it as owner-only (review R9).
     """
     path = Path(path)
     if sys.platform != "win32":
@@ -280,17 +283,24 @@ def make_private_dir(path: Path, parents: bool = False) -> None:
     else:
         path.mkdir(parents=parents, exist_ok=True)
         user = os.environ.get("USERNAME")
-        if user:
-            domain = os.environ.get("USERDOMAIN")
-            principal = f"{domain}\\{user}" if domain else user
-            try:
-                subprocess.run(
-                    [ICACLS_EXE, str(path), "/inheritance:r",
-                     "/grant:r", f"{principal}:(OI)(CI)(F)",
-                     "/grant:r", f"{_SYSTEM_SID}:(OI)(CI)(F)"],
-                    check=False, capture_output=True, text=True, timeout=15)
-            except Exception:
-                pass                  # the listing check below decides
+        if not user:
+            raise OSError(f"cannot make {path} owner-only: USERNAME is not set, "
+                          "so there is no account to grant it to")
+        domain = os.environ.get("USERDOMAIN")
+        principal = f"{domain}\\{user}" if domain else user
+        try:
+            r = subprocess.run(
+                [ICACLS_EXE, str(path), "/inheritance:r",
+                 "/grant:r", f"{principal}:(OI)(CI)(F)",
+                 "/grant:r", f"{_SYSTEM_SID}:(OI)(CI)(F)"],
+                check=False, capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise OSError(f"cannot make {path} owner-only: icacls did not run "
+                          f"({type(exc).__name__}: {exc})") from exc
+        if r.returncode != 0:
+            why = ((r.stderr or "") + (r.stdout or "")).strip()[:200]
+            raise OSError(f"cannot make {path} owner-only: icacls exited "
+                          f"{r.returncode}" + (f" ({why})" if why else ""))
     try:
         os.listdir(path)
     except OSError as exc:

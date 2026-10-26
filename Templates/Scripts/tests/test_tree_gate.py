@@ -302,15 +302,24 @@ def test_the_powershell_gate_is_ascii_and_crlf():
     assert b"\r\n" in raw and raw.count(b"\n") == raw.count(b"\r\n")
 
 
-@pytest.mark.parametrize("name", ["install.ps1", "update.ps1"])
+# uninstall.ps1 since review R3 (2026-10-26): uninstall.sh was gated, its
+# Windows twin was not, and it deletes paths its libraries compute.
+@pytest.mark.parametrize("name", ["install.ps1", "update.ps1", "uninstall.ps1"])
 def test_the_powershell_gate_runs_before_common_ps1(name):
     src = (WIN / name).read_text(encoding="utf-8")
     verify = src.index("hash-object -- 'installers/lib/tree_gate.ps1'")
     load = src.index(". $treeGate")
-    check = src.index("Test-TreeGate -Root $treeRoot -Mode install")
+    check = src.index("Test-TreeGate -Root $treeRoot -Mode ")
     common = src.index('. "$PSScriptRoot\\common.ps1"')
     assert verify < load < check < common
     assert "[switch]$AllowLocalChanges" in src
+
+
+def test_uninstall_ps1_gates_in_uninstall_mode_and_the_gate_accepts_it():
+    src = (WIN / "uninstall.ps1").read_text(encoding="utf-8")
+    assert "Test-TreeGate -Root $treeRoot -Mode uninstall" in src
+    assert "[switch]$StrictTree" in src
+    assert "[ValidateSet('install', 'update', 'uninstall')]" in GATE_PS.read_text(encoding="utf-8")
 
 
 def test_update_ps1_has_one_tree_check_and_passes_the_override_on():

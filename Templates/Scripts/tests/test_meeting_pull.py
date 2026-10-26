@@ -723,6 +723,41 @@ class TestEmittedEventsAreCheckedAgainstTheTools:
         mp._event_facts([{"type": "text", "text": json.dumps(EVENT)}], facts)
         assert facts == {"e1": False}
 
+    def test_a_cancellation_no_tool_reported_is_refused(self, capsys) -> None:
+        # Review R1: the connector's projection may omit isCancelled; the
+        # model's own claim must not stand in for it.
+        quiet = {k: v for k, v in EVENT.items() if k != "isCancelled"}
+        lie = dict(EVENT, isCancelled=True)
+        out = mp.extract_events(_stream([lie], returned=[quiet]), SEARCH)
+        assert out[0]["id"] == "e1" and out[0]["isCancelled"] is False
+        assert ("WARNING: event 'e1': kept, but its cancellation was refused: no "
+                "calendar tool result reported isCancelled") in capsys.readouterr().out
+
+    def test_a_decline_the_tools_did_not_report_is_refused(self, capsys) -> None:
+        # Review R1: "declined" retires the note, so it is vouched like an id.
+        me = {"name": "Me", "address": "Me@Example.edu", "type": "required"}
+        truth = dict(EVENT, attendees=[dict(me, responseStatus="accepted")])
+        lie = dict(EVENT, attendees=[dict(me, responseStatus="declined")])
+        out = mp.extract_events(_stream([lie], returned=[truth]), SEARCH)
+        assert out[0]["attendees"][0]["responseStatus"] == "accepted"
+        assert ("WARNING: event 'e1': kept, but 1 attendee decline(s) were refused"
+                in capsys.readouterr().out)
+
+    def test_a_decline_for_an_attendee_the_tools_never_listed_becomes_none(self) -> None:
+        stranger = {"name": "X", "address": "x@example.edu", "type": "required",
+                    "responseStatus": "declined"}
+        lie = dict(EVENT, attendees=EVENT["attendees"] + [stranger])
+        out = mp.extract_events(_stream([lie], returned=[EVENT]), SEARCH)
+        assert out[0]["attendees"][1]["responseStatus"] == "none"
+        assert out[0]["attendees"][0]["responseStatus"] == "accepted"
+
+    def test_a_real_decline_still_comes_through(self) -> None:
+        me = {"name": "Me", "address": "me@example.edu", "type": "required",
+              "responseStatus": "declined"}
+        declined = dict(EVENT, attendees=[me])
+        out = mp.extract_events(_stream([declined]), SEARCH)
+        assert out[0]["attendees"][0]["responseStatus"] == "declined"
+
     def test_a_duplicate_id_is_dropped(self, capsys) -> None:
         twin = dict(EVENT, subject="Budget review (copy)", isCancelled=True)
         rejected = []

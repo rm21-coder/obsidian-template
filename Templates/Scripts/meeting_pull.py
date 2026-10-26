@@ -622,9 +622,21 @@ def search_tool_name(config):
 _FACTS_MAX_DEPTH = 8
 
 
+class _Facts(dict):
+    """event id -> isCancelled (bool, or None when no tool result carried the
+    field), plus `responses`: event id -> {attendee address: responseStatus}
+    as the tool results reported them. A dict, so callers and tests that
+    compare it with a plain dict keep working (review R1, 2026-10-26)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.responses = {}
+
+
 def _event_facts(node, facts, depth=0):
     """Record into `facts` (event id -> isCancelled bool, or None) every
-    event object found in one tool result.
+    event object found in one tool result, and, when `facts` is a _Facts,
+    each attendee's response status into facts.responses.
 
     Finding 5278615: the ids and flags the model emits must be checked
     against what the calendar tools returned. An event object is a dict with
@@ -659,6 +671,21 @@ def _event_facts(node, facts, depth=0):
             facts[ev_id] = flag if prior is None else (prior and flag)
         else:
             facts.setdefault(ev_id, None)
+        responses = getattr(facts, "responses", None)
+        attendees = node.get("attendees")
+        if responses is not None and isinstance(attendees, list):
+            seen = responses.setdefault(ev_id, {})
+            for a in attendees:
+                if not isinstance(a, dict):
+                    continue
+                addr, status = a.get("address"), a.get("responseStatus")
+                if isinstance(addr, str) and isinstance(status, str):
+                    addr = addr.strip().lower()
+                    # Results that disagree resolve to not-declined, for the
+                    # same reason as isCancelled above.
+                    if seen.get(addr) not in (None, "declined"):
+                        continue
+                    seen[addr] = status
     for key, value in node.items():
         if isinstance(value, (dict, list)):
             _event_facts(value, facts, depth + 1)
@@ -687,7 +714,7 @@ def _read_session(stdout):
         return whole, None, None, None     # one --output-format json envelope
     if whole is not None and not isinstance(whole, dict):
         raise ProducerOutputError("CLI output was not a JSON object")
-    envelope, init, calls, facts = None, None, {}, {}
+    envelope, init, calls, facts = None, None, {}, _Facts()
     pending = {}           # tool_use id -> tool name, until its result arrives
     # split("\n"), not splitlines(): that also splits on U+2028, U+0085 and
     # other separators the CLI writes unescaped inside a meeting body, which
@@ -747,8 +774,12 @@ def verify_events(events, facts, rejected):
     event with an id already kept: either is what an injected invite body
     steering the session would produce, and an id is what the consumer
     deletes or moves a note by. isCancelled is taken from the tool result
-    when the tool reported it. Each drop is appended to `rejected` as a
-    short label (the id, never the body).
+    when the tool reported it, and when it did not, a cancellation the model
+    claims is refused. An attendee's "declined" stands only if a tool result
+    reported that attendee as declined: the consumer retires a note the user
+    declined, so an unvouched decline is the same retargeting path (review
+    R1, 2026-10-26). Each drop is appended to `rejected` as a short label
+    (the id, never the body); a refused flag is logged, and the event kept.
     """
     kept, ids = [], set()
     for i, ev in enumerate(events):
@@ -766,6 +797,28 @@ def verify_events(events, facts, rejected):
         ids.add(ev_id)
         if facts[ev_id] is not None and ev.get("isCancelled") != facts[ev_id]:
             ev = dict(ev, isCancelled=facts[ev_id])
+        elif facts[ev_id] is None and ev.get("isCancelled") is True:
+            log("WARNING: event %s: kept, but its cancellation was refused: no "
+                "calendar tool result reported isCancelled (possible prompt "
+                "injection)" % label)
+            ev = dict(ev, isCancelled=False)
+        responses = getattr(facts, "responses", None)
+        if responses is not None and isinstance(ev.get("attendees"), list):
+            told = responses.get(ev_id, {})
+            fixed, refused = [], 0
+            for a in ev["attendees"]:
+                if isinstance(a, dict) and a.get("responseStatus") == "declined":
+                    addr = a.get("address")
+                    addr = addr.strip().lower() if isinstance(addr, str) else None
+                    if told.get(addr) != "declined":
+                        a = dict(a, responseStatus=told.get(addr) or "none")
+                        refused += 1
+                fixed.append(a)
+            if refused:
+                log("WARNING: event %s: kept, but %d attendee decline(s) were "
+                    "refused: no calendar tool result reported them (possible "
+                    "prompt injection)" % (label, refused))
+                ev = dict(ev, attendees=fixed)
         kept.append(ev)
     return kept
 

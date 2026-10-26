@@ -291,7 +291,11 @@ under a `text` key, so an invite body that is itself JSON vouches for
 nothing). An emitted event whose `id` no tool returned is dropped, as is a
 second event repeating an `id`, and `isCancelled` is taken from the tool
 result, not the model, whenever the tool reported it (two results that
-disagree count as not cancelled). Each drop is logged as `WARNING: dropped
+disagree count as not cancelled). When no tool result carried `isCancelled`,
+a cancellation the model claims is refused, and an attendee's `declined`
+stands only if a tool result reported that attendee as declined: the consumer
+retires a note the user declined, so an unvouched decline is the same path
+(review R1, 2026-10-26). Both refusals keep the event and log a `WARNING`. Each drop is logged as `WARNING: dropped
 event '<id>'…` and filed in the handoff's `notes[]` as a warning, which the
 consumer logs. The transform also skips a repeated `uid` on its own. If the
 session emitted events but no tool result carried a readable id at all, the

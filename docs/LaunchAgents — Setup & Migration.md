@@ -314,7 +314,7 @@ tail -10 ~/Library/Logs/obsidian-rag-sync.err
 - `Error: ANTHROPIC_API_KEY not found` — `~/dev/secrets/.env` is missing or unreadable. Check the path and permissions (`chmod 600 ~/dev/secrets/.env`).
 - `anthropic.AuthenticationError: Unauthorized` — your API key is rejected. Confirm the key is valid and the script is reading the right `.env` file.
 
-**A dictation never appears, and the voice-cleanup log shows nothing.** The watcher only drains a folder — it does not fetch mail. Check `~/Library/Logs/source-mail-pull.err` first: a drop rejected on the sender allowlist or the HMAC is logged there and nowhere else, and the sending device gives no indication anything went wrong. A rejected message is marked `\Seen` and is not retried; just re-share from the device.
+**A dictation never appears, and the voice-cleanup log shows nothing.** The watcher only drains a folder — it does not fetch mail. Check `~/Library/Logs/source-mail-pull.err` first: a drop rejected on the sender allowlist or the HMAC is logged there and nowhere else, and the sending device gives no indication anything went wrong. A rejected message is moved to the mailbox's Trash and is not retried; just re-share from the device.
 
 **Voice cleanup log is empty.** Check that `~/SourceMedia/VoiceInput/` exists (`python3 Templates/Scripts/source_media.py` reports where each kind resolves, `--apply` creates them) and that the mail transport is accepting drops — see `~/Library/Logs/source-mail-pull.err`.
 

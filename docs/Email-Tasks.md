@@ -48,7 +48,11 @@ The job is split in two, and only the half that never sees mail can write.
    strips every link and URI scheme,
    tags, wikilinks, HTML, code, table pipes and Tasks emoji. The one link it
    adds is the message's own Outlook link, accepted only as `https` on
-   `outlook.office.com`, `outlook.office365.com` or `outlook.live.com`. A due
+   `outlook.office.com`, `outlook.office365.com` or `outlook.live.com`, and
+   only in a message-link shape: the OWA read link
+   (`/owa/?ItemID=…&exvsurl=1&viewmodel=ReadMessageItem`, what the connector
+   returns) or a `/mail/…/id/<id>` deep link. Any other path or query on those
+   hosts is refused, so an open redirect there cannot become the link. A due
    date must be a real date within a year of today. The block then goes
    through the same ingest guard as every other job that writes outside text
    (`templater_guard.neutralize`), and the note is written atomically.

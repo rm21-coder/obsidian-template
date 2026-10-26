@@ -107,6 +107,28 @@ class TestLinks:
         [line] = _lines(_req(weblink=link))
         assert "open in Outlook" not in line and "evil" not in line
 
+    @pytest.mark.parametrize("link", [
+        # Review R11 (2026-10-26): an Outlook host is not enough. An open
+        # redirect there would still be an "open in Outlook" link elsewhere.
+        "https://outlook.office.com/owa/redir.aspx?URL=https%3a%2f%2fevil.example",
+        "https://outlook.office365.com/owa/?ItemID=AAMk1&URL=https://evil.example",
+        "https://outlook.office365.com/owa/?ItemID=AAMk1&ItemID=AAMk2",
+        "https://outlook.office365.com/owa/?exvsurl=1&viewmodel=ReadMessageItem",
+        "https://outlook.office365.com/owa/?ItemID=AAMk1&viewmodel=Compose",
+        "https://outlook.office365.com/owa/?ItemID=AAMk1#x",
+        "https://outlook.office.com/mail/id/1?redirect=https://evil.example",
+        "https://outlook.office.com/calendar/item/1",
+    ])
+    def test_only_a_message_link_shape_is_kept_on_an_outlook_host(self, link) -> None:
+        [line] = _lines(_req(weblink=link))
+        assert "open in Outlook" not in line
+
+    def test_the_owa_read_link_the_connector_returns_is_kept(self) -> None:
+        link = ("https://outlook.office365.com/owa/?ItemID=AAMkAD%2BxY%3D"
+                "&exvsurl=1&viewmodel=ReadMessageItem")
+        [line] = _lines(_req(weblink=link))
+        assert "([open in Outlook](%s))" % link in line
+
     @pytest.mark.parametrize("host", T.OUTLOOK_HOSTS)
     def test_each_outlook_host_is_accepted(self, host: str) -> None:
         [line] = _lines(_req(weblink="https://%s/mail/id/1" % host))

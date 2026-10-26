@@ -564,6 +564,7 @@ def process_mailbox(*, user: str, password: str, key: str,
     try:
         conn.login(user, password)
         conn.select("INBOX")
+        trash = None if dry_run else _trash_folder(conn)
         status, data = conn.search(None, "UNSEEN")
         if status != "OK":
             log.error("IMAP search failed: %s", status)
@@ -590,7 +591,7 @@ def process_mailbox(*, user: str, password: str, key: str,
                             size, MAX_RAW_MESSAGE_BYTES)
                 rejected += 1
                 if not dry_run:
-                    conn.store(num, "+FLAGS", "\\Seen")
+                    _retire(conn, num, trash)
                 continue
             status, raw = conn.fetch(num, "(RFC822)")
             if status != "OK" or not raw or not raw[0]:
@@ -618,14 +619,14 @@ def process_mailbox(*, user: str, password: str, key: str,
                             type(exc).__name__)
                 rejected += 1
                 if not dry_run:
-                    conn.store(num, "+FLAGS", "\\Seen")
+                    _retire(conn, num, trash)
                 continue
 
             if not ok:
                 log.warning("REJECT [%s]: %s", subject, who)
                 rejected += 1
                 if not dry_run:
-                    conn.store(num, "+FLAGS", "\\Seen")
+                    _retire(conn, num, trash)
                 continue
 
             ok, reason = verify(fields, key=key)
@@ -635,7 +636,7 @@ def process_mailbox(*, user: str, password: str, key: str,
                 log.warning("REJECT [%s] from %s: %s", subject, who, reason)
                 rejected += 1
                 if not dry_run:
-                    conn.store(num, "+FLAGS", "\\Seen")
+                    _retire(conn, num, trash)
                 continue
 
             digest = fields["hmac"].strip().lower()
@@ -644,7 +645,7 @@ def process_mailbox(*, user: str, password: str, key: str,
                             "already-accepted drop", subject, who)
                 rejected += 1
                 if not dry_run:
-                    conn.store(num, "+FLAGS", "\\Seen")
+                    _retire(conn, num, trash)
                 continue
 
             dest = write_drop(root, fields["type"], fields["ts"],
@@ -655,7 +656,13 @@ def process_mailbox(*, user: str, password: str, key: str,
             if not dry_run:
                 seen[digest] = time.time()
                 seen_dirty = True
-                conn.store(num, "+FLAGS", "\\Seen")
+                _retire(conn, num, trash)
+        if not dry_run:
+            try:
+                conn.expunge()
+            except Exception as exc:  # noqa: BLE001 -- CLOSE expunges too
+                log.warning("IMAP expunge failed (%s); the server's CLOSE will "
+                            "remove the deleted messages", type(exc).__name__)
         return accepted, rejected
     finally:
         if seen_dirty:
@@ -673,6 +680,50 @@ def process_mailbox(*, user: str, password: str, key: str,
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+_LIST_RE = re.compile(rb'^\(([^)]*)\) (?:"(?:[^"\\]|\\.)*"|NIL) (.+)$')
+
+
+def _trash_folder(conn):
+    """The mailbox the server marks \\Trash (RFC 6154), as its LIST names it,
+    or None. Gmail archives a message that is only flagged \\Deleted and
+    expunged from INBOX (its default "auto-expunge" behaviour), so the drop
+    would stay in All Mail; a copy to Trash first makes the server delete it
+    after its retention period."""
+    try:
+        status, data = conn.list()
+    except Exception as exc:  # noqa: BLE001 -- optional: deletion still happens
+        log.warning("IMAP LIST failed (%s): processed drops are deleted from the "
+                    "inbox but not moved to Trash", type(exc).__name__)
+        return None
+    for line in data if status == "OK" and isinstance(data, list) else []:
+        m = _LIST_RE.match(line) if isinstance(line, bytes) else None
+        if m and b"\\trash" in m.group(1).lower().split():
+            return m.group(2).decode("utf-8", "replace")
+    log.warning("the mailbox advertises no \\Trash folder: processed drops are "
+                "deleted from the inbox, and a server that archives on expunge "
+                "(Gmail's default) keeps a copy in All Mail")
+    return None
+
+
+def _retire(conn, num, trash):
+    """Done with a message, accepted or rejected: mark it read, copy it to
+    Trash when the server has one, and flag it deleted from the inbox. Before
+    2026-10-26 a processed drop was only marked read, so the intake mailbox
+    kept every dictation ever sent, in plain text, readable with its app
+    password (review R7)."""
+    conn.store(num, "+FLAGS", "\\Seen")
+    if trash:
+        try:
+            status, _ = conn.copy(num, trash)
+        except Exception as exc:  # noqa: BLE001 -- still delete it below
+            status = type(exc).__name__
+        if status != "OK":
+            log.warning("could not copy message %s to %s (%s); deleting it from "
+                        "the inbox anyway", num.decode(errors="replace")
+                        if isinstance(num, bytes) else num, trash, status)
+    conn.store(num, "+FLAGS", "\\Deleted")
+
 
 class RunDeadlineExceeded(Exception):
     """The run outlived RUN_DEADLINE_SEC and is blocking its own successor."""

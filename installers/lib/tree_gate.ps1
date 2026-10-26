@@ -83,11 +83,13 @@ function Write-TreeGateLog {
     } catch { }
 }
 
-# Test-TreeGate -Root <repo> -Mode install|update [-AllowLocalChanges] [-Strict]
+# Test-TreeGate -Root <repo> -Mode install|update|uninstall [-AllowLocalChanges] [-Strict]
+# uninstall judges the installer code as install does (review R3, 2026-10-26:
+# uninstall.ps1 deletes paths its libraries compute, as uninstall.sh does).
 # Returns $true to proceed, $false to refuse (the reason is already printed).
 function Test-TreeGate {
     param([Parameter(Mandatory)][string]$Root,
-          [Parameter(Mandatory)][ValidateSet('install', 'update')][string]$Mode,
+          [Parameter(Mandatory)][ValidateSet('install', 'update', 'uninstall')][string]$Mode,
           [switch]$AllowLocalChanges,
           [switch]$Strict)
     $flag = '-AllowLocalChanges'

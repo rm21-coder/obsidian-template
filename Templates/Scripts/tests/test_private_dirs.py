@@ -59,6 +59,30 @@ def test_make_private_dir_on_windows_grants_the_user_and_never_passes_0700(tmp_p
     assert f"{sc._SYSTEM_SID}:(OI)(CI)(F)" in argv
 
 
+@pytest.mark.parametrize("outcome,marker", [
+    ("exit5", "icacls exited 5 (Access is denied.)"),
+    ("raise", "icacls did not run (FileNotFoundError"),
+    ("nouser", "USERNAME is not set"),
+])
+def test_a_failed_windows_grant_raises_instead_of_passing_silently(tmp_path, monkeypatch, outcome, marker):
+    # Review R9 (2026-10-26): icacls's result was discarded, so a folder that
+    # kept an inherited ACL was still treated as owner-only.
+    monkeypatch.setattr(sc.sys, "platform", "win32")
+    monkeypatch.setenv("USERDOMAIN", "BOX")
+    if outcome == "nouser":
+        monkeypatch.delenv("USERNAME", raising=False)
+    else:
+        monkeypatch.setenv("USERNAME", "tester")
+
+    def run(argv, **kw):
+        if outcome == "raise":
+            raise FileNotFoundError(2, "No such file", argv[0])
+        return subprocess.CompletedProcess(argv, 5, "", "Access is denied.")
+    monkeypatch.setattr(sc.subprocess, "run", run)
+    with pytest.raises(OSError, match=re.escape(marker)):
+        sc.make_private_dir(tmp_path / "bin")
+
+
 def test_an_unlistable_folder_fails_loudly_with_the_remedy(tmp_path, monkeypatch):
     def listdir(path):
         raise PermissionError(13, "Access is denied")
