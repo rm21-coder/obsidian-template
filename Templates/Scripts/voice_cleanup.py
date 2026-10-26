@@ -15,7 +15,8 @@ Setup:
        ("Voice — from dictation" in docs/Source-Mail-Producer-Setup.md);
        the workflow end to end is docs/Voice Notes (Optional).md
     3. Edit the config section below to match your paths
-    4. Set ANTHROPIC_API_KEY in ~/dev/secrets/.env (or your preferred location).
+    4. Store ANTHROPIC_API_KEY in the platform keystore:
+           python3 Templates/Scripts/secret_store.py set ANTHROPIC_API_KEY
        To route through an institutional AI gateway instead, set LLM_BASE_URL
        and LLM_API_KEY_NAME — see Templates/Scripts/llm_endpoint.py.
 

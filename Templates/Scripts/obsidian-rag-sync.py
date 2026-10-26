@@ -831,7 +831,8 @@ def main() -> int:
     args = parser.parse_args()
 
     if not WEBUI_API_KEY:
-        log.error("OPEN_WEBUI_API_KEY env var not set")
+        log.error("OPEN_WEBUI_API_KEY not found in the environment or the keystore; "
+                  "store it with: python3 secret_store.py set OPEN_WEBUI_API_KEY")
         return 1
     if not COLLECTION_ID:
         log.error("OBSIDIAN_COLLECTION_ID env var not set")

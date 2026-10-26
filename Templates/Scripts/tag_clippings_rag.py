@@ -34,7 +34,8 @@ Setup:
     1. Run the installer: anthropic, pyyaml, python-dotenv and requests come
        from requirements.lock, installed hash-checked into the venv
     2. Ollama running locally with an embedding model: ollama pull nomic-embed-text
-    3. ANTHROPIC_API_KEY in your environment or ~/dev/secrets/.env (see below),
+    3. ANTHROPIC_API_KEY in the platform keystore
+       (python3 Templates/Scripts/secret_store.py set ANTHROPIC_API_KEY),
        or LLM_BASE_URL + LLM_API_KEY_NAME to route through an institutional
        AI gateway — see Templates/Scripts/llm_endpoint.py.
     4. Provide glosses in tag_glosses.py (ships with an example to replace).

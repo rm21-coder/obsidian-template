@@ -2533,9 +2533,12 @@ def render(today: _dt.date,
             )
         if status in ("FAIL", "ABORT"):
             problems.append(
-                'Last run did not complete cleanly. A 401 here usually means the Open '
-                'WebUI API key was rejected — re-mint it and update OPEN_WEBUI_API_KEY '
-                'in dev/secrets/.env.'
+                'Last run did not complete cleanly. Check first that Docker and the '
+                'open-webui container are running. A 401 means the Open WebUI API key '
+                'was rejected: re-mint it and store it with '
+                'python3 Templates/Scripts/secret_store.py set OPEN_WEBUI_API_KEY '
+                '(and delete any OPEN_WEBUI_API_KEY line left in dev/secrets/.env, '
+                'which would override the keystore).'
             )
         if problems:
             parts.append('      <div class="rag-alert">\n')

@@ -52,8 +52,9 @@ Before either agent will run successfully, the host Mac needs:
    # Required by tag_clippings.py and voice_cleanup.py
    ANTHROPIC_API_KEY=sk-ant-...
 
-   # Required by obsidian-rag-sync.py (only if you run the RAG agent)
-   OPEN_WEBUI_API_KEY=sk-...
+   # Required by obsidian-rag-sync.py (only if you run the RAG agent).
+   # Its API key goes in the Keychain, not here:
+   #   python3 Templates/Scripts/secret_store.py set OPEN_WEBUI_API_KEY
    OBSIDIAN_COLLECTION_ID=<uuid-of-your-WebUI-knowledge-collection>
 
    # Optional overrides — defaults shown
@@ -204,7 +205,7 @@ Prerequisites beyond the shared list above:
 
 - Open WebUI running and reachable at `http://localhost:3000` (default Docker setup).
 - A Knowledge collection already created in Open WebUI; copy its UUID into `OBSIDIAN_COLLECTION_ID` in `~/dev/secrets/.env`.
-- An Open WebUI API key with collection-write permission; into `OPEN_WEBUI_API_KEY` in `~/dev/secrets/.env`.
+- An Open WebUI API key with collection-write permission, stored in the Keychain with `python3 Templates/Scripts/secret_store.py set OPEN_WEBUI_API_KEY` (the installer's secrets step does this for you).
 
 ```bash
 # 1) Edit the plist (replace YOUR_USERNAME) and load
@@ -254,7 +255,9 @@ rm -rf .venv
 
 # 3) Confirm the secrets file is there and has the right keys
 ls ~/dev/secrets/.env
-grep -c "ANTHROPIC_API_KEY\|OPEN_WEBUI_API_KEY\|OBSIDIAN_COLLECTION_ID" ~/dev/secrets/.env
+grep -c "ANTHROPIC_API_KEY\|OBSIDIAN_COLLECTION_ID" ~/dev/secrets/.env
+#    OPEN_WEBUI_API_KEY lives in the Keychain, which does not migrate:
+#    python3 Templates/Scripts/secret_store.py set OPEN_WEBUI_API_KEY
 
 # 4) Confirm the log directory exists
 mkdir -p ~/Library/Logs
@@ -330,8 +333,8 @@ The deletion ceiling tripped — usually because you reorganized the vault betwe
 
 The script auto-backs up `state.json` before mutating, so if you change your mind there's a `state.bak.YYYYMMDD-HHMMSS.json` to restore from.
 
-**`obsidian-rag-sync` reports `OPEN_WEBUI_API_KEY env var not set` on a manual run.**
-The script reads from `~/dev/secrets/.env` via `load_dotenv()`. Confirm the key is there (`grep OPEN_WEBUI_API_KEY ~/dev/secrets/.env`) and that the venv has `python-dotenv` installed (`.venv/bin/pip show python-dotenv`).
+**`obsidian-rag-sync` reports `OPEN_WEBUI_API_KEY not found` on a manual run.**
+The key is read from the environment (including `~/dev/secrets/.env`), then the Keychain. Confirm it is stored with `python3 Templates/Scripts/secret_store.py get OPEN_WEBUI_API_KEY >/dev/null && echo stored`, and store it with `secret_store.py set OPEN_WEBUI_API_KEY` if not. A line for it left in `.env` wins over the Keychain, so delete one that holds an old key.
 
 **A specific note got tagged with only the base tag (`clippings`) and no topical tags.** Older versions of `tag_clippings.py` could fail to parse Claude's response if Claude appended reasoning text after the JSON array. Affected files end up tracked as "processed" even though they have no real tags. Fix: delete those entries from `~/Obsidian/.tag_tracking.json` and the next run will re-tag them with the current parser, or run `tag_clippings.py --force` once to re-tag everything.
 

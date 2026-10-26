@@ -76,8 +76,8 @@ class MissingCredential(EndpointError):
     def __init__(self, name: str) -> None:
         self.name = name
         super().__init__(
-            f"{name} not found. Set it in your environment or "
-            f"~/dev/secrets/.env, or store it with:\n"
+            f"{name} not found in the environment or the keystore. "
+            f"Store it with:\n"
             f"  python3 secret_store.py set {name}"
         )
 

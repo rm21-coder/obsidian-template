@@ -15,12 +15,12 @@ Usage:
 Setup:
     1. Run the installer: anthropic, pyyaml and python-dotenv come from
        requirements.lock, installed hash-checked into the venv
-    2. Set ANTHROPIC_API_KEY in your environment, or create a .env file.
+    2. Store ANTHROPIC_API_KEY in the platform keystore:
+           python3 Templates/Scripts/secret_store.py set ANTHROPIC_API_KEY
        To route through an institutional AI gateway instead of a personal
-       Anthropic key, set LLM_BASE_URL and LLM_API_KEY_NAME — see
+       Anthropic key, set LLM_BASE_URL and LLM_API_KEY_NAME in
+       ~/dev/secrets/.env and store that key the same way — see
        Templates/Scripts/llm_endpoint.py.
-       The script checks for ~/dev/secrets/.env by default — edit the
-       load_dotenv() path below if your secrets live elsewhere.
     3. Place this script in Templates/Scripts/ (or the vault root).
     4. Run from the vault root: python3 Templates/Scripts/tag_clippings.py
 """
@@ -53,7 +53,7 @@ try:
 except Exception:
     pass
 
-# Load API keys — resolves to ~/dev/secrets/.env on macOS and
+# Load configuration — resolves to ~/dev/secrets/.env on macOS and
 # %USERPROFILE%\dev\secrets\.env on Windows (Path.home() is cross-platform).
 load_dotenv(Path.home() / "dev" / "secrets" / ".env")
 
