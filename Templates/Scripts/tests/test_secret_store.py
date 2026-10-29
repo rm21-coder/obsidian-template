@@ -263,3 +263,332 @@ def test_cli_get_missing_is_nonzero(monkeypatch, linux_files, capsys):
 
 def test_cli_bad_usage(monkeypatch):
     assert secret_store._cli(["frobnicate"]) == 2
+
+
+# ---------- Azure Key Vault backend ---------------------------------------
+
+import base64  # noqa: E402
+import json  # noqa: E402
+import urllib.parse  # noqa: E402
+
+KV_URL = "https://example-kv.vault.azure.net/"
+THUMB = "C0" * 20
+FAKE_PEM = b"-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----\n"
+
+
+class FakeRequest:
+    def __init__(self, host, method, path, body, headers):
+        self.full_url = f"https://{host}{path}"
+        self.method, self.data, self.headers = method, body, headers
+
+    def get_header(self, name):
+        return self.headers.get(name)
+
+
+class FakeVault:
+    """Scripts the Entra token endpoint and the vault's secret GETs, at the
+    http.client.HTTPSConnection layer the backend really uses."""
+
+    def __init__(self):
+        self.secrets = {}
+        self.requests = []
+        self.connections = []
+        self.vault_error = None     # (status, body) returned for secret GETs
+        self.token_error = None
+        self.network_down = False
+
+    def connection(self, host, context=None, timeout=None):
+        vault = self
+        assert timeout, "every Key Vault call needs a timeout"
+        assert context is not None, "every Key Vault call needs a TLS context"
+        self.connections.append(host)
+
+        class Conn:
+            def request(self, method, path, body=None, headers=None):
+                if vault.network_down:
+                    raise OSError("nodename nor servname provided")
+                self.req = FakeRequest(host, method, path, body, headers or {})
+                vault.requests.append(self.req)
+
+            def getresponse(self):
+                status, payload = vault.answer(self.req)
+                return type("Resp", (), {
+                    "status": status,
+                    "read": lambda _self, n=-1: json.dumps(payload).encode()})()
+
+            def close(self):
+                pass
+
+        return Conn()
+
+    def answer(self, req):
+        url = req.full_url
+        if url.startswith("https://login.microsoftonline.com/"):
+            if self.token_error:
+                return self.token_error
+            return 200, {"access_token": "tok-123", "expires_in": 3599}
+        assert url.startswith(KV_URL.rstrip("/") + "/secrets/")
+        if self.vault_error:
+            return self.vault_error
+        name = url.split("/secrets/", 1)[1].split("?", 1)[0]
+        if name not in self.secrets:
+            return 404, {"error": {"code": "SecretNotFound"}}
+        return 200, {"value": self.secrets[name], "id": url}
+
+    def token_calls(self):
+        return [r for r in self.requests
+                if r.full_url.startswith("https://login.microsoftonline.com/")]
+
+
+@pytest.fixture
+def keyvault(monkeypatch: pytest.MonkeyPatch, fake_security: FakeSecurity):
+    """Vault on, certificate key in the (fake) Keychain, openssl faked."""
+    for k, v in (("KEYVAULT_URL", KV_URL), ("KEYVAULT_TENANT_ID", "tenant-1"),
+                 ("KEYVAULT_CLIENT_ID", "client-1"),
+                 ("KEYVAULT_CERT_THUMBPRINT", THUMB)):
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(secret_store, "_kv_token", {})
+    monkeypatch.setattr(secret_store, "_kv_cache", {})
+    monkeypatch.setattr(secret_store, "_last_source", {})
+    fake_security.store["azure_kv_client_key"] = base64.b64encode(FAKE_PEM).decode()
+    vault = FakeVault()
+    monkeypatch.setattr(secret_store.http.client, "HTTPSConnection", vault.connection)
+    vault.openssl_calls = []
+    security_run = fake_security.run
+
+    def run(args, **kwargs):
+        if args and args[0] == "/usr/bin/openssl":
+            fd = kwargs["pass_fds"][0]
+            vault.openssl_calls.append({"args": args, "kwargs": kwargs,
+                                        "key": os.read(fd, 65536)})
+            return subprocess.CompletedProcess(args, 0, stdout=b"SIG", stderr=b"")
+        return security_run(args, **kwargs)
+
+    monkeypatch.setattr(secret_store.subprocess, "run", run)
+    return vault
+
+
+def test_keyvault_off_without_url_uses_keychain(monkeypatch, fake_security):
+    monkeypatch.delenv("MY_TOKEN", raising=False)
+    fake_security.store["my_token"] = "from-keychain"
+    assert secret_store.get_secret("MY_TOKEN") == "from-keychain"
+    assert secret_store.last_source("MY_TOKEN") == "keystore"
+
+
+def test_keyvault_resolves_with_dashed_name(monkeypatch, keyvault, fake_security):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    keyvault.secrets["source-mail-token"] = "vault-value"
+    fake_security.store["source_mail_token"] = "stale-keychain-value"
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") == "vault-value"
+    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "keyvault"
+    get = keyvault.requests[-1]
+    assert get.full_url == (KV_URL + "secrets/source-mail-token?api-version="
+                            + secret_store.KEYVAULT_API_VERSION)
+    assert get.get_header("Authorization") == "Bearer tok-123"
+
+
+def test_keyvault_client_assertion_is_bound_to_the_certificate(monkeypatch, keyvault):
+    monkeypatch.delenv("OPEN_WEBUI_API_KEY", raising=False)
+    keyvault.secrets["open-webui-api-key"] = "v"
+    secret_store.get_secret("OPEN_WEBUI_API_KEY")
+    (tok,) = keyvault.token_calls()
+    assert tok.full_url == "https://login.microsoftonline.com/tenant-1/oauth2/v2.0/token"
+    form = urllib.parse.parse_qs(tok.data.decode())
+    assert form["client_id"] == ["client-1"]
+    assert form["scope"] == ["https://vault.azure.net/.default"]
+    header_b64, claims_b64, sig_b64 = form["client_assertion"][0].split(".")
+    pad = lambda s: s + "=" * (-len(s) % 4)
+    header = json.loads(base64.urlsafe_b64decode(pad(header_b64)))
+    claims = json.loads(base64.urlsafe_b64decode(pad(claims_b64)))
+    assert header["alg"] == "RS256"
+    assert base64.urlsafe_b64decode(pad(header["x5t"])) == bytes.fromhex(THUMB)
+    assert claims["aud"] == tok.full_url
+    assert claims["iss"] == claims["sub"] == "client-1"
+    assert claims["exp"] - claims["nbf"] <= 900
+    assert base64.urlsafe_b64decode(pad(sig_b64)) == b"SIG"
+
+
+def test_keyvault_private_key_reaches_openssl_on_a_pipe_not_argv(monkeypatch, keyvault):
+    monkeypatch.delenv("OPEN_WEBUI_API_KEY", raising=False)
+    keyvault.secrets["open-webui-api-key"] = "v"
+    secret_store.get_secret("OPEN_WEBUI_API_KEY")
+    (call,) = keyvault.openssl_calls
+    assert call["key"] == FAKE_PEM
+    assert call["args"][-1] == f"/dev/fd/{call['kwargs']['pass_fds'][0]}"
+    assert not any("PRIVATE KEY" in a for a in call["args"])
+    assert call["kwargs"]["timeout"]
+
+
+def test_keyvault_token_is_reused_within_a_process(monkeypatch, keyvault):
+    for n in ("SOURCE_MAIL_TOKEN", "OPEN_WEBUI_API_KEY"):
+        monkeypatch.delenv(n, raising=False)
+    keyvault.secrets.update({"source-mail-token": "a", "open-webui-api-key": "b"})
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") == "a"
+    assert secret_store.get_secret("OPEN_WEBUI_API_KEY") == "b"
+    assert len(keyvault.token_calls()) == 1
+
+
+def test_keyvault_env_still_wins_without_a_network_call(monkeypatch, keyvault):
+    monkeypatch.setenv("SOURCE_MAIL_TOKEN", "env-value")
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") == "env-value"
+    assert keyvault.requests == []
+
+
+def test_keyvault_firewall_refusal_is_named_and_does_not_fall_back(
+        monkeypatch, keyvault, fake_security, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    fake_security.store["source_mail_token"] = "keychain-value"
+    keyvault.vault_error = (403, {"error": {"code": "Forbidden", "innererror": {
+        "code": "ForbiddenByFirewall"}}})
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    err = capsys.readouterr().err
+    assert "SOURCE_MAIL_TOKEN: Key Vault refused the connection (ForbiddenByFirewall): off VPN?" in err
+    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "missing"
+
+
+def test_keyvault_unreachable_is_named(monkeypatch, keyvault, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    keyvault.network_down = True
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "Key Vault unreachable (nodename nor servname provided): off VPN?" in capsys.readouterr().err
+
+
+def test_keyvault_token_refusal_names_the_entra_code(monkeypatch, keyvault, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    keyvault.token_error = (401, {"error": "invalid_client", "error_codes": [700027],
+                                  "error_description": "cert mismatch"})
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "Key Vault HTTP 401 invalid_client AADSTS700027" in capsys.readouterr().err
+
+
+def test_keyvault_not_found_does_not_consult_the_keychain(
+        monkeypatch, keyvault, fake_security, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    fake_security.store["source_mail_token"] = "keychain-value"
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "SOURCE_MAIL_TOKEN: not in Key Vault" in capsys.readouterr().err
+    looked_up = [a[a.index("-s") + 1] for a, _ in fake_security.calls if "-s" in a]
+    assert "source_mail_token" not in looked_up
+
+
+def test_keyvault_fallback_flag_uses_the_keychain(
+        monkeypatch, keyvault, fake_security, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    monkeypatch.setenv("KEYVAULT_KEYCHAIN_FALLBACK", "1")
+    fake_security.store["source_mail_token"] = "keychain-value"
+    keyvault.network_down = True
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") == "keychain-value"
+    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "keystore"
+    assert "falling back to the Keychain (KEYVAULT_KEYCHAIN_FALLBACK)" in capsys.readouterr().err
+
+
+def test_keyvault_missing_config_is_named(monkeypatch, keyvault, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    monkeypatch.delenv("KEYVAULT_CLIENT_ID")
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "Key Vault is configured but missing KEYVAULT_CLIENT_ID" in capsys.readouterr().err
+    assert keyvault.requests == []
+
+
+@pytest.mark.parametrize("thumb", ["XYZ", "C0" * 19, "C0" * 32])
+def test_keyvault_bad_thumbprint_is_refused(monkeypatch, keyvault, capsys, thumb):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    monkeypatch.setenv("KEYVAULT_CERT_THUMBPRINT", thumb)
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "KEYVAULT_CERT_THUMBPRINT must be a 40-hex SHA-1" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("url", ["http://example-kv.vault.azure.net/",
+                                 "https://example-kv.vault.azure.net.evil.example/",
+                                 "https://evil.example/"])
+def test_keyvault_url_must_be_an_https_vault(monkeypatch, keyvault, capsys, url):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    monkeypatch.setenv("KEYVAULT_URL", url)
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "KEYVAULT_URL must be https://<name>.vault.azure.net" in capsys.readouterr().err
+    assert keyvault.requests == []
+
+
+def test_keyvault_name_outside_its_charset_is_refused(monkeypatch, keyvault, capsys):
+    monkeypatch.delenv("BAD.NAME", raising=False)
+    assert secret_store.get_secret("BAD.NAME") is None
+    assert "cannot be a Key Vault secret name" in capsys.readouterr().err
+    assert keyvault.requests == []
+
+
+def test_keyvault_missing_certificate_key_is_named(monkeypatch, keyvault, fake_security, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    del fake_security.store["azure_kv_client_key"]
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "certificate key azure_kv_client_key is not in the Keychain" in capsys.readouterr().err
+
+
+def test_keyvault_is_ignored_off_macos(monkeypatch, linux_files, capsys):
+    monkeypatch.setenv("KEYVAULT_URL", KV_URL)
+    monkeypatch.delenv("PF_KEY", raising=False)
+    assert secret_store.set_secret("PF_KEY", "file-value")
+    assert secret_store.get_secret("PF_KEY") == "file-value"
+    assert "the Key Vault backend is macOS-only; KEYVAULT_URL ignored" in capsys.readouterr().err
+
+
+def test_status_reports_sources_and_never_values(monkeypatch, keyvault, tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("# no secrets here\n")
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", env)
+    monkeypatch.setenv("LLM_API_KEY_NAME", "GW_KEY")
+    for n in ("GW_KEY", "SOURCE_MAIL_APP_PASSWORD", "SOURCE_MAIL_TOKEN",
+              "OPEN_WEBUI_API_KEY"):
+        monkeypatch.delenv(n, raising=False)
+    keyvault.secrets.update({"gw-key": "s1", "source-mail-app-password": "s2",
+                             "source-mail-token": "s3", "open-webui-api-key": "s4"})
+    assert secret_store._cli(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "GW_KEY: keyvault" in out and "OPEN_WEBUI_API_KEY: keyvault" in out
+    assert not any(v in out for v in ("s1", "s2", "s3", "s4"))
+
+
+def test_status_fails_when_dotenv_shadows_the_vault(monkeypatch, keyvault, tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("SOURCE_MAIL_TOKEN=leftover-plaintext\n")
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", env)
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    assert secret_store._cli(["status", "SOURCE_MAIL_TOKEN"]) == 1
+    out = capsys.readouterr().out
+    assert "SOURCE_MAIL_TOKEN: .env  <-- overrides Key Vault; remove it" in out
+    assert "leftover-plaintext" not in out
+
+
+def test_status_missing_is_nonzero(monkeypatch, keyvault, tmp_path, capsys):
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", tmp_path / "absent.env")
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    assert secret_store._cli(["status", "SOURCE_MAIL_TOKEN"]) == 1
+    assert "SOURCE_MAIL_TOKEN: MISSING" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("url", ["https://evil.example/x",
+                                 "http://example-kv.vault.azure.net/secrets/a",
+                                 "https://example-kv.vault.azure.net:8443/secrets/a",
+                                 "file:///etc/passwd"])
+def test_keyvault_http_refuses_any_other_host_or_scheme(keyvault, url):
+    with pytest.raises(secret_store.KeyVaultError, match="refusing a Key Vault call"):
+        secret_store._kv_http(url)
+    assert keyvault.connections == []
+
+
+def test_keyvault_redirect_is_not_followed(monkeypatch, keyvault, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    keyvault.vault_error = (302, {})
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "SOURCE_MAIL_TOKEN: Key Vault HTTP 302" in capsys.readouterr().err
+    assert [r.full_url.split("?")[0] for r in keyvault.requests][-1] == \
+        KV_URL + "secrets/source-mail-token"
+    assert len(keyvault.requests) == 2      # one token, one GET, no follow-up
+
+
+def test_keyvault_token_post_is_form_encoded(monkeypatch, keyvault):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    keyvault.secrets["source-mail-token"] = "v"
+    secret_store.get_secret("SOURCE_MAIL_TOKEN")
+    (tok,) = keyvault.token_calls()
+    assert tok.method == "POST"
+    assert tok.get_header("Content-Type") == "application/x-www-form-urlencoded"

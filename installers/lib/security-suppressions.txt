@@ -34,6 +34,16 @@ semgrep  installers/lib/pin_plugins.py   dynamic-urllib-use-detected   count=1  
 bandit   installers/lib/rag_pins.py   B310   count=4   # Ollama /api/tags on loopback only, and the two pinned registries (ghcr.io, registry.ollama.ai) for maintainer re-pins; both refused otherwise in code. 2026-10-20 (5268557): +2 for Open WebUI's /api/config and sign-in check, held to loopback by _loopback_url (tested). re-check 2027-01-16
 semgrep  installers/lib/rag_pins.py   dynamic-urllib-use-detected   count=4   # as above. re-check 2027-01-16
 
+# --- http.client.HTTPSConnection (semgrep httpsconnection-detected) ---------
+# The audit rule dates from Pythons (< 3.4.3) where HTTPSConnection did not
+# verify certificates by default. secret_store._kv_http passes an explicit
+# ssl.create_default_context() (verification and hostname checks on; a test
+# asserts a context is always given) and was moved OFF urllib on purpose
+# (F-20261029, obsidian-security): urllib follows redirects with the bearer
+# token, honours proxy variables and carries file:/ftp: handlers. The host is
+# held to login.microsoftonline.com or *.vault.azure.net, https, port 443.
+semgrep  Templates/Scripts/secret_store.py   httpsconnection-detected   count=1   # _kv_http, the Key Vault backend's one HTTPS call; verifying context, pinned hosts, no redirects. re-check 2027-01-29
+
 # --- subprocess with config-derived argv (semgrep) --------------------------
 # Both are list-form subprocess.run with no shell=True, so there is no
 # shell-injection surface. The argv elements come from constants, from

@@ -364,7 +364,14 @@ environment first, then the platform keystore:
 - Elsewhere: a mode-0600 file, a plainly weaker fallback.
 
 `python3 Templates/Scripts/secret_store.py set NAME` stores a value from a
-hidden prompt or stdin, never from the command line.
+hidden prompt or stdin, never from the command line, and `status` reports
+where each secret resolves from without printing it.
+
+Optionally, on macOS, setting `KEYVAULT_URL` in `.env` replaces the keystore
+step with an Azure Key Vault read as a certificate-authenticated service
+principal: standard library plus `/usr/bin/openssl`, no SDK, nothing cached
+on disk, and `None` with a named cause when the vault is out of reach. See
+[Key-Vault.md](Key-Vault.md).
 
 **State** lives under `~/.local/share/` on macOS and `%LOCALAPPDATA%` on
 Windows: `obsidian-security` (baselines, the signed plugin allowlist, the

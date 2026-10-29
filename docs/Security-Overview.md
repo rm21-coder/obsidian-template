@@ -286,7 +286,11 @@ baselines as its last step, after every job is in place.
 `secret_store.get_secret()` resolves a secret from the environment first
 (which includes `~/dev/secrets/.env`), then the platform keystore: the
 Keychain through Apple-signed `/usr/bin/security` on macOS, a DPAPI-encrypted
-file on Windows. The installer stores the model endpoint key, the Open WebUI
+file on Windows. An optional macOS backend reads Azure Key Vault instead, as a
+service principal whose certificate key is the one credential left in the
+Keychain; it fails closed off the vault's networks rather than falling back,
+and moves secrets off the disk without moving trust off the endpoint
+([Key-Vault.md](Key-Vault.md)). The installer stores the model endpoint key, the Open WebUI
 key, the mailbox app password and the mail-drop HMAC token in the keystore;
 since 2026-10-17 it also moves either mail secret an older install left in
 `.env` into the Keychain, unless the Keychain already holds a different value.

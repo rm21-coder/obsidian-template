@@ -108,6 +108,20 @@ def block_external_dns(request: pytest.FixtureRequest,
     monkeypatch.setattr(socket, "getaddrinfo", guarded)
 
 
+@pytest.fixture(autouse=True)
+def no_live_keyvault(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Strip the Key Vault backend's settings from every test's environment.
+
+    Several modules call load_dotenv on the real ~/dev/secrets/.env at
+    import. Where that file turns the vault on, every get_secret in an
+    unrelated test would set off for Azure. Tests of the backend set these
+    themselves."""
+    for key in ("KEYVAULT_URL", "KEYVAULT_TENANT_ID", "KEYVAULT_CLIENT_ID",
+                "KEYVAULT_CERT_THUMBPRINT", "KEYVAULT_KEY_NAME",
+                "KEYVAULT_KEYCHAIN_FALLBACK"):
+        monkeypatch.delenv(key, raising=False)
+
+
 @pytest.fixture
 def public_dns(monkeypatch: pytest.MonkeyPatch) -> str:
     """Resolve every hostname to one fixed public address.
