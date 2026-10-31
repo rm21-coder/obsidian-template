@@ -37,6 +37,7 @@ PLUGIN = "update-time-on-edit"
 # tracked note inside them. test_platform_hardening.py fails if a tracked
 # Markdown file is not covered.
 TRACKED = [
+    ".github",
     ".obsidian",
     "Templates",
     "Z_attachments",

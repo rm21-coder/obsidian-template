@@ -165,7 +165,7 @@ within milliseconds. Two distinct effects, both from Obsidian:
 
 - The `update-time-on-edit` plugin bumps `updated:`. The installer sets its
   ignore list to the files the repository tracks (`Templates`, `docs`,
-  `installers`, `.obsidian`, `Z_attachments` and the root documents; see
+  `installers`, `.obsidian`, `.github`, `Z_attachments` and the root documents; see
   `installers/lib/timestamp_ignores.py`), so content folders are exposed. A bulk pass with the app open stamps today's date on every note
   it touches and flattens the recency signal that dashboards and
   stale-content queries read. It re-bumps faster than a script can write the

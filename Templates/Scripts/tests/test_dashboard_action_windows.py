@@ -106,6 +106,9 @@ def harness(monkeypatch, tmp_path):
     monkeypatch.setattr(A, "task_state", fake_state)
     monkeypatch.setattr(A, "run_job", fake_run)
     monkeypatch.setattr(A, "pull_refused_today", lambda: state.get("refused"))
+    # Not the real ~/dev/secrets/.env: on a machine without RAG configured
+    # (CI, a fresh clone) every refresh-rag test took the not-set-up exit.
+    monkeypatch.setattr(A, "rag_set_up", lambda: state.get("rag", True))
     return calls, state
 
 
@@ -114,6 +117,14 @@ def test_a_refused_link_runs_nothing_and_reads_no_task(harness) -> None:
     assert A.main(["obsidian-dashboard://run/rebaseline-security"]) == 2
     assert calls["run"] == [] and calls["state_asked"] == []
     assert "Refused" in calls["notify"][0][1]
+
+
+def test_refresh_rag_where_rag_is_not_set_up_is_reported_not_run(harness) -> None:
+    calls, st = harness
+    st["rag"] = False
+    assert A.main(["obsidian-dashboard://run/refresh-rag"]) == 3
+    assert calls["run"] == []
+    assert "Not set up on this machine: the local RAG layer is not configured" in calls["notify"][0][1]
 
 
 @pytest.mark.parametrize("state,rc,marker", [
