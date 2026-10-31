@@ -129,6 +129,13 @@ touching it. Full detail in [`docs/Demo-Content.md`](docs/Demo-Content.md).
 
 - **Git:** the maintainer (Rich) normally drives `commit`/`push`. Make edits and
   stage them; only commit/push when explicitly asked.
+- **Contributors:** other contributors work on branches and open pull
+  requests; `main` has a ruleset (PR + code-owner approval + the `checks` job
+  in `.github/workflows/pr-checks.yml`, no force-push or deletion) that only
+  the maintainer bypasses. CI cannot see the gitignored identity deny-list or
+  contributor allow-list, so a PR is merged from a local checkout after
+  `security-checks.sh --full`, never with the GitHub merge button.
+  Contributor process: [`.github/CONTRIBUTING.md`](.github/CONTRIBUTING.md).
 - **Cross-platform first:** when touching a `.py` script, prefer making it
   platform-neutral (use `pathlib`, `platform.system()` guards, `shutil.which`)
   over forking a Windows copy. Fork only the OS-specific glue (schedulers,
