@@ -34,7 +34,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 45
     env:
-      # Scanner versions, held at the maintainer's. The two binaries are
+      # Scanner versions, held at the maintainer's. The binaries are
       # checked against these hashes; the Python scanners are exact releases
       # but not hash-locked (they run only on this throwaway runner, never in
       # an install). Raise them deliberately, in a reviewed diff.
@@ -42,6 +42,8 @@ jobs:
       GITLEAKS_SHA256: "b40ab0ae55c505963e365f271a8d3846efbc170aa17f2607f13df610a9aeb6a5"
       SHELLCHECK_VERSION: "0.11.0"
       SHELLCHECK_SHA256: "56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79"
+      UV_VERSION: "0.12.21"   # the SCA pass checks the locks with it
+      UV_SHA256: "b88bda573e566ef9bced66b155fe0408626fbbc053aee1c30ba686f0728c9447"
       SEMGREP_VERSION: "1.157.0"
       BANDIT_VERSION: "1.9.4"
       PIP_AUDIT_VERSION: "2.10.1"
@@ -69,6 +71,11 @@ jobs:
           echo "${SHELLCHECK_SHA256}  shellcheck.txz" | shasum -a 256 -c -
           tar -xJf shellcheck.txz
           mv "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" "$bin/"
+          curl -fsSL -o uv.tgz \
+            "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-aarch64-apple-darwin.tar.gz"
+          echo "${UV_SHA256}  uv.tgz" | shasum -a 256 -c -
+          tar -xzf uv.tgz
+          mv uv-aarch64-apple-darwin/uv "$bin/"
           # One venv per scanner, as pipx does: semgrep and pip-audit pin
           # conflicting dependencies and cannot share one.
           for spec in "semgrep==${SEMGREP_VERSION}" "bandit==${BANDIT_VERSION}" "pip-audit==${PIP_AUDIT_VERSION}"; do
