@@ -101,10 +101,10 @@ class TestSignatureSeparation:
         assert rc == online.EXIT_UNKNOWN
 
 
-def _run(mod, cli: str) -> int:
+def _run(mod, cli: str, *extra: str) -> int:
     import sys
     argv = sys.argv
-    sys.argv = ["claude_auth_check.py", "--claude", cli]
+    sys.argv = ["claude_auth_check.py", "--claude", cli, *extra]
     try:
         return mod.main()
     finally:
@@ -201,3 +201,98 @@ class TestProducerNetworkGate:
         loses the distinction the dashboard reads."""
         mp = self._producer()
         assert len({0, 1, mp.EXIT_AUTH, mp.EXIT_NO_NETWORK}) == 4
+
+
+class TestSignInReminder:
+    """The session's lifetime is absolute (expired 2026-10-02 and 11-08, about
+    28 and 35 days after a sign-in), so warming cannot save it. What can is a
+    reminder a few days ahead, which needs the sign-in date to survive every
+    ordinary evening check."""
+
+    MON = __import__("datetime").date(2026, 12, 7)      # a Monday
+    FRI = __import__("datetime").date(2026, 12, 4)
+
+    def _marker(self, signed_in, state="ok"):
+        return {"state": state, "signed_in": signed_in}
+
+    def test_not_due_before_the_threshold(self, online) -> None:
+        since = self.MON - __import__("datetime").timedelta(days=online.REMIND_DAYS - 1)
+        assert online.signin_reminder(self._marker(since.isoformat()), self.MON) is None
+
+    def test_due_at_the_threshold_names_the_age_and_the_fix(self, online) -> None:
+        since = self.MON - __import__("datetime").timedelta(days=online.REMIND_DAYS)
+        msg = online.signin_reminder(self._marker(since.isoformat()), self.MON)
+        assert msg.startswith("Claude sign-in is %d days old" % online.REMIND_DAYS)
+        assert "--signed-in" in msg
+
+    def test_friday_warns_when_the_threshold_falls_on_the_weekend(self, online) -> None:
+        """Both expiries so far landed between Friday and Monday."""
+        since = self.FRI - __import__("datetime").timedelta(days=online.REMIND_DAYS - 3)
+        assert online.signin_reminder(self._marker(since.isoformat()), self.FRI) \
+            .startswith("Claude sign-in is %d days old" % (online.REMIND_DAYS - 3))
+        thursday = self.FRI - __import__("datetime").timedelta(days=1)
+        assert online.signin_reminder(self._marker(since.isoformat()), thursday) is None
+
+    def test_a_failed_session_gets_no_reminder(self, online) -> None:
+        """It already has the louder "sign in now" warning."""
+        assert online.signin_reminder(
+            self._marker("2026-01-01", state="auth-failed"), self.MON) is None
+
+    @pytest.mark.parametrize("raw", [None, "", "not-a-date", 20261109])
+    def test_no_usable_date_gives_no_reminder(self, online, raw) -> None:
+        assert online.signin_reminder(self._marker(raw), self.MON) is None
+
+    def test_recovery_records_the_sign_in(self, online, tmp_path, capsys,
+                                          allow_subprocess) -> None:
+        import datetime
+        online.MARKER.write_text(json.dumps({"state": "auth-failed"}),
+                                 encoding="utf-8")
+        _run(online, fake_cli(tmp_path, "c-ok", "", 0))
+        data = json.loads(online.MARKER.read_text())
+        assert data["signed_in"] == datetime.date.today().isoformat()
+        assert "sign-in recorded as" in capsys.readouterr().out
+
+    def test_an_ordinary_check_keeps_the_recorded_date(self, online, tmp_path,
+                                                       allow_subprocess) -> None:
+        online.MARKER.write_text(json.dumps(self._marker("2026-11-09")),
+                                 encoding="utf-8")
+        _run(online, fake_cli(tmp_path, "c-ok", "", 0))
+        assert json.loads(online.MARKER.read_text())["signed_in"] == "2026-11-09"
+
+    def test_an_auth_failure_keeps_the_recorded_date(self, online, tmp_path,
+                                                     allow_subprocess) -> None:
+        online.MARKER.write_text(json.dumps(self._marker("2026-11-09")),
+                                 encoding="utf-8")
+        _run(online, fake_cli(tmp_path, "c-auth", "OAuth session expired", 1))
+        data = json.loads(online.MARKER.read_text())
+        assert data["state"] == "auth-failed" and data["signed_in"] == "2026-11-09"
+
+    def test_signed_in_flag_records_a_given_date(self, online, tmp_path,
+                                                 allow_subprocess) -> None:
+        _run(online, fake_cli(tmp_path, "c-ok", "", 0), "--signed-in", "2026-11-09")
+        assert json.loads(online.MARKER.read_text())["signed_in"] == "2026-11-09"
+
+    def test_signed_in_flag_is_not_recorded_when_the_probe_fails(
+            self, online, tmp_path, capsys, allow_subprocess) -> None:
+        _run(online, fake_cli(tmp_path, "c-auth", "OAuth session expired", 1),
+             "--signed-in")
+        assert "signed_in" not in json.loads(online.MARKER.read_text())
+        assert "--signed-in ignored: the sign-in has not taken." in capsys.readouterr().out
+
+    @pytest.mark.parametrize("bad, marker", [
+        ("2026-13-40", "wants a date as YYYY-MM-DD"),
+        ("2999-01-01", "is in the future; nothing recorded"),
+    ])
+    def test_signed_in_flag_rejects_bad_dates(self, online, tmp_path, capsys,
+                                              bad, marker) -> None:
+        assert _run(online, "ignored", "--signed-in", bad) == online.EXIT_UNKNOWN
+        assert marker in capsys.readouterr().out
+        assert not online.MARKER.exists()
+
+    def test_a_due_reminder_is_logged_and_still_exits_ok(
+            self, online, tmp_path, capsys, allow_subprocess) -> None:
+        """The session works, so the exit code must not call it a failure."""
+        online.MARKER.write_text(json.dumps(self._marker("2026-01-01")),
+                                 encoding="utf-8")
+        assert _run(online, fake_cli(tmp_path, "c-ok", "", 0)) == online.EXIT_OK
+        assert "REMINDER: Claude sign-in is" in capsys.readouterr().out

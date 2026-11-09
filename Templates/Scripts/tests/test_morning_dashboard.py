@@ -1215,3 +1215,52 @@ def test_the_rendered_to_do_carries_the_short_link():
                     [], [], None, [])
     assert ">Do it</a>" in out and 'class="ext"' in out and "Outlook ↗" in out
     assert "[open in Outlook]" not in out
+
+
+# ---------------------------------------------------------------------------
+# Claude sign-in reminder (2026-11-09): the auth-check row reads "due" while
+# the session still works but is near its observed lifetime.
+# ---------------------------------------------------------------------------
+
+_AUTH_OK = {"com.obsidian.claude-auth-check": (False, {"loaded": True, "exit": 0, "running": False})}
+
+
+def test_a_due_sign_in_makes_the_auth_row_due(monkeypatch, tmp_path):
+    msg = "Claude sign-in is 25 days old (signed in 2026-11-09)"
+    monkeypatch.setattr(md, "claude_signin_reminder", lambda: msg)
+    row = _mac_jobs(monkeypatch, tmp_path, _AUTH_OK)["com.obsidian.claude-auth-check"]
+    assert row["status"] == "due"
+    assert msg in row["problems"]
+
+
+def test_no_reminder_leaves_the_auth_row_pass(monkeypatch, tmp_path):
+    monkeypatch.setattr(md, "claude_signin_reminder", lambda: None)
+    row = _mac_jobs(monkeypatch, tmp_path, _AUTH_OK)["com.obsidian.claude-auth-check"]
+    assert row["status"] == "pass"
+
+
+def test_the_reminder_only_touches_the_auth_row(monkeypatch, tmp_path):
+    monkeypatch.setattr(md, "claude_signin_reminder", lambda: "due")
+    rows = _mac_jobs(monkeypatch, tmp_path, {
+        "com.obsidian.meeting-pull": (False, {"loaded": True, "exit": 0, "running": False})})
+    assert rows["com.obsidian.meeting-pull"]["status"] == "pass"
+
+
+def test_a_broken_checker_costs_nothing(monkeypatch):
+    import builtins
+    real = builtins.__import__
+
+    def boom(name, *a, **k):
+        if name == "claude_auth_check":
+            raise ImportError("simulated")
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", boom)
+    assert md.claude_signin_reminder() is None
+
+
+def test_due_is_amber_and_counts_as_needing_attention():
+    out = md.render(_dt.date(2026, 12, 7), [], [], [], None,
+                    [_row("due"), _row("pass")], show_actions=False)
+    assert '<span class="status-pill warn">due</span>' in out
+    assert "1 need attention" in out

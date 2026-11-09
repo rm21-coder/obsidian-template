@@ -857,6 +857,20 @@ def _gate_closed_hours(gate: tuple, now: _dt.datetime) -> float:
     return 0.0
 SCRIPTS_DIR = VAULT / "Templates" / "Scripts"
 
+AUTH_CHECK_LABEL = "com.obsidian.claude-auth-check"
+
+
+def claude_signin_reminder() -> str | None:
+    """claude_auth_check's sign-in reminder, read from its marker, or None.
+
+    Fails quiet: the reminder is advice, and a missing or broken checker must
+    not cost the dashboard its pipeline section."""
+    try:
+        import claude_auth_check
+        return claude_auth_check.signin_reminder()
+    except Exception:
+        return None
+
 CADENCE_FLOOR_HOURS = 1.0    # even fast jobs get at least this much slack
 DAILY_STALE_HOURS   = 28.0   # matches RAG_STALE_HOURS for once-a-day jobs
 
@@ -1672,7 +1686,7 @@ def _collect_pipeline_health_windows() -> list[dict]:
             "problems": problems,
         })
 
-    order = {"fail": 0, "inactive": 1, "stale": 2, "running": 3, "pass": 4}
+    order = {"fail": 0, "inactive": 1, "stale": 2, "due": 3, "running": 4, "pass": 5}
     results.sort(key=lambda r: (order.get(r["status"], 4), r["name"].lower()))
     return results
 
@@ -1939,6 +1953,14 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
                 f"until the gateway is reachable again -- usually meaning the "
                 f"VPN is down.")
 
+        # A working session nearing its observed lifetime. Not a failure, but
+        # the one row where acting a few days early saves a morning.
+        if status == "pass" and label == AUTH_CHECK_LABEL:
+            reminder = claude_signin_reminder()
+            if reminder:
+                status = "due"
+                problems.append(reminder)
+
         if security_hint(label, st["exit"]) is not None:
             status = "inactive"     # no baseline: protecting nothing, not drift
         hint = security_hint(label, st["exit"]) or pipeline_hint(label)
@@ -1957,7 +1979,7 @@ def collect_pipeline_health(gateway: dict | None = None) -> list[dict]:
             "problems": problems,
         })
 
-    order = {"fail": 0, "inactive": 1, "stale": 2, "running": 3, "pass": 4}
+    order = {"fail": 0, "inactive": 1, "stale": 2, "due": 3, "running": 4, "pass": 5}
     results.sort(key=lambda r: (order.get(r["status"], 4), r["name"].lower()))
     return results
 
@@ -2454,7 +2476,7 @@ def render(today: _dt.date,
     parts.append('  <section class="card combined">\n')
 
     # ----- Pipeline health sub-section (very top: a dead job must be unmissable) -----
-    n_bad = sum(1 for p in health if p["status"] in ("fail", "inactive", "stale"))
+    n_bad = sum(1 for p in health if p["status"] in ("fail", "inactive", "stale", "due"))
     n_running = sum(1 for p in health if p["status"] == "running")
     pipes_accent = ("var(--todo)" if n_bad else
                     "var(--new)" if n_running else "var(--meet)")
@@ -2474,7 +2496,7 @@ def render(today: _dt.date,
 
         parts.append(f'      <div class="meta">{summary}</div>\n')
         for p in health:
-            pill = {"pass": "pass", "stale": "warn", "running": "warn",
+            pill = {"pass": "pass", "stale": "warn", "due": "warn", "running": "warn",
                     "fail": "fail", "inactive": "fail"}[p["status"]]
             when = f'{p["last_run"]:%a %H:%M}' if p["last_run"] else "no runs"
             parts.append('      <div class="pipe-row">\n')

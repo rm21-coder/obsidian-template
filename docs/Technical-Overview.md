@@ -310,7 +310,13 @@ and are not retried.
 
 `claude_auth_check.py` sends one trivial request each evening, which both
 refreshes a sliding session and reports an expired one while someone can
-still sign in. The drift reviewer (below) uses the same CLI with
+still sign in. The session's lifetime has proved absolute, though (it expired
+about 28 and 35 days after a sign-in, and the CLI shows no expiry date), so
+the check also records the sign-in date: automatically when a failing session
+works again, or with `--signed-in` after signing in early. From day 24, and
+on a Friday when day 24 falls over the weekend, it sends a notification and
+the dashboard shows its row as **due**. The exit code stays 0, because the
+session still works. The drift reviewer (below) uses the same CLI with
 `--restricted`, `--strict-mcp-config`, `--tools Read,Grep,Glob` and
 `dontAsk`, against a temporary copy of the repository.
 

@@ -71,7 +71,7 @@ if path.exists():
 config.update({"display_name": display_name, "email": email, "mcp_prefix": mcp_prefix})
 # Preserve the user's own tuning on re-runs.
 for key, value in (("other_addresses", []), ("note", "Actions/Email Tasks.md"),
-                   ("team_ask_max_recipients", 10), ("max_lookback_hours", 72),
+                   ("team_ask_max_recipients", 10), ("max_lookback_hours", 96),
                    ("high_priority_senders", []), ("title_priority", False)):
     config.setdefault(key, value)
 path.write_text(json.dumps(config, indent=2) + "\n")
