@@ -282,3 +282,63 @@ def test_fallback_taxonomy_takes_only_canonical_tags_and_skips_clippings(tagger,
     (vault / "Clippings" / "Sub" / "deep.md").write_text(
         "---\ntags:\n  - AlsoPlanted\n---\nbody\n", encoding="utf-8")
     assert tagger.collect_all_tags(vault) == ["AI/LLM", "Strategy"]
+
+
+# ---------------------------------------------------------------------------
+# Named-entity guard. The scheduled tagger had none (only the RAG variant
+# did), so the model could tag a vendor the note never names: a meeting about
+# executive search firms got a consultancy's Vendors/ tag (2026-11-03).
+
+SEARCH_NOTE = (
+    "---\ntype: Individual\ntags: []\n---\n"
+    "Do not use the same search firm we used last time.\n"
+    "Spencer and First Group both did president searches for peers.\n"
+    "Benchmark compensation data comes from a survey vendor.\n"
+)
+
+
+def _run_with_suggestions(tagger, monkeypatch, tmp_path, note, suggestions):
+    monkeypatch.setattr(tagger, "get_tag_suggestions", lambda *a, **k: list(suggestions))
+    monkeypatch.setattr(tagger, "log_promotion_candidate", lambda *a, **k: None)
+    monkeypatch.setattr(tagger, "VAULT_ROOT", tmp_path)
+    path = tmp_path / "Meetings" / "2026-11-03 0800.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(note, encoding="utf-8")
+    valid = {t.lower(): t for t in ("Vendors/Huron", "Vendors/Microsoft", "Strategy")}
+    tagger.process_file(path, None, "", valid)
+    fm, _ = tagger.parse_frontmatter(path.read_text(encoding="utf-8"))
+    return fm["tags"]
+
+
+def test_vendor_tag_not_named_in_note_is_dropped(tagger, monkeypatch, tmp_path, capsys):
+    tags = _run_with_suggestions(tagger, monkeypatch, tmp_path, SEARCH_NOTE,
+                                 ["Vendors/Huron", "Strategy"])
+    assert tags == ["Strategy"]
+    assert "Dropped (entity not named in note): ['Vendors/Huron']" in capsys.readouterr().out
+
+
+def test_vendor_named_by_a_product_alias_is_kept(tagger, monkeypatch, tmp_path):
+    note = "---\ntags: []\n---\nRolling Copilot out to the HR team next quarter, all staff.\n"
+    assert _run_with_suggestions(tagger, monkeypatch, tmp_path, note,
+                                 ["Vendors/Microsoft"]) == ["Vendors/Microsoft"]
+
+
+def test_a_tag_already_on_the_note_is_never_stripped(tagger, monkeypatch, tmp_path):
+    note = SEARCH_NOTE.replace("tags: []", "tags:\n  - Vendors/Huron")
+    assert _run_with_suggestions(tagger, monkeypatch, tmp_path, note,
+                                 ["Vendors/Huron"]) == ["Vendors/Huron"]
+
+
+def test_entity_aliases_extend_from_the_environment(monkeypatch):
+    import tag_glosses
+    text = "phoenix go-live slipped two weeks"
+    assert not tag_glosses.entity_supported("Vendors/Workday", text)
+    monkeypatch.setenv("TAGGER_ENTITY_ALIASES", "Vendors/Workday=phoenix")
+    assert tag_glosses.entity_supported("Vendors/Workday", text)
+
+
+def test_vendor_leaf_fallback_matches_at_a_word_start_only():
+    import tag_glosses
+    assert tag_glosses.entity_supported("Vendors/Dell", "dell servers arrived")
+    assert not tag_glosses.entity_supported("Vendors/Dell", "met with wendell")
+    assert tag_glosses.entity_supported("Strategy", "anything at all")

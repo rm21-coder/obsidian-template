@@ -31,6 +31,7 @@ import os
 import sys
 import templater_guard  # noqa: E402
 import classification_tier  # noqa: E402
+from tag_glosses import entity_supported  # noqa: E402
 
 import json
 import re
@@ -426,6 +427,9 @@ RULES:
    coding agents, use "AI/Agents" rather than just "AI".
 4. Consider the full content meaning, not just keyword matches.
 5. If the content already has correct tags, return those same tags.
+6. Only assign a Vendors/* tag, or a product-specific tag, if the content NAMES
+   that vendor or product. Never infer a vendor from the topic or from what you
+   know about the people or firms involved.
 
 EXISTING TAG TAXONOMY:
 {taxonomy}
@@ -608,6 +612,18 @@ def process_file(
             log_promotion_candidate(normalize_tag(t), filepath)
     if dropped:
         print(f"     Logged promotion candidates (not written): {dropped}")
+
+    # Named-entity guard: a vendor/product tag needs that name in the title or
+    # body. The model will otherwise infer one from world knowledge -- a note
+    # about executive search firms got a consultancy's Vendors/ tag though the
+    # note never named it (2026-11-03). Tags already
+    # on the note are kept, so a hand-applied tag is never stripped.
+    text_lower = f"{title}\n{body}".lower()
+    unsupported = [t for t in validated
+                   if t not in existing_topical and not entity_supported(t, text_lower)]
+    if unsupported:
+        validated = [t for t in validated if t not in unsupported]
+        print(f"     Dropped (entity not named in note): {unsupported}")
 
     print(f"     Suggested tags: {validated}")
 

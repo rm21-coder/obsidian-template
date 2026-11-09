@@ -31,6 +31,56 @@ CURATED = {
 }
 
 
+# A named-entity tag survives only if the entity actually appears in the note.
+# Stops an AI/cloud-heavy corpus from over-applying vendor/product tags to notes
+# that merely discuss the general field, and stops the model from inferring a
+# vendor from world knowledge (a note about executive search firms tagged with
+# a consultancy it never names). Any Vendors/* tag not listed here falls back to
+# its own leaf name. Both taggers use this. Extend for your taxonomy here, or
+# per-install without editing code via TAGGER_ENTITY_ALIASES in
+# ~/dev/secrets/.env:  "Vendors/Workday=workday,myprogram;Vendors/Acme=acme"
+NAMED_ENTITY_ALIASES = {
+    "Vendors/AWS": ["aws", "amazon web services", "amazon", "bedrock"],
+    "Vendors/Azure": ["azure"],
+    "Vendors/GCP": ["gcp", "google cloud", "vertex"],
+    "Vendors/Google": ["google", "gemini", "gmail"],
+    "Vendors/Microsoft": ["microsoft", "m365", "o365", "office 365", "copilot",
+                          "windows", "entra", "azure", "teams", "sharepoint",
+                          "onedrive", "outlook", "intune", "defender"],
+    "Vendors/NVIDIA": ["nvidia", "cuda"],
+    "Vendors/OpenAI": ["openai", "chatgpt", "gpt-"],
+    "Vendors/Anthropic": ["anthropic", "claude"],
+    "Vendors/ServiceNow": ["servicenow", "service now"],
+    "Vendors/Salesforce": ["salesforce"],
+    "AI/Claude": ["claude", "anthropic"],
+    "AI/Copilot": ["copilot"],
+}
+
+
+def _entity_aliases() -> dict:
+    import os
+    aliases = {k: list(v) for k, v in NAMED_ENTITY_ALIASES.items()}
+    for entry in os.environ.get("TAGGER_ENTITY_ALIASES", "").split(";"):
+        tag, sep, words = entry.partition("=")
+        if sep and tag.strip():
+            extra = [w.strip().lower() for w in words.split(",") if w.strip()]
+            aliases.setdefault(tag.strip(), []).extend(extra)
+    return aliases
+
+
+def entity_supported(tag: str, text_lower: str) -> bool:
+    """True unless `tag` names an entity that `text_lower` never mentions.
+    Aliases match at a word start, so "gpt-" still catches "gpt-4o" but
+    "dell" does not match "wendell"."""
+    import re
+    aliases = _entity_aliases().get(tag)
+    if aliases is None and tag.startswith("Vendors/"):
+        aliases = [tag.split("/", 1)[1].lower()]
+    if not aliases:
+        return True
+    return any(re.search(r"\b" + re.escape(a), text_lower) for a in aliases)
+
+
 def derive_gloss(tag: str) -> str:
     """Auto-gloss for tags not in CURATED: de-CamelCase the leaf and prepend the
     de-CamelCased parent context."""

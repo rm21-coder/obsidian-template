@@ -93,7 +93,7 @@ except ImportError:
 from dotenv import load_dotenv
 load_dotenv(Path.home() / "dev" / "secrets" / ".env")   # edit to match your secrets
 
-from tag_glosses import gloss_for                         # ships alongside this script
+from tag_glosses import gloss_for, entity_supported       # ships alongside this script
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 VAULT_ROOT = Path(__file__).parent.parent.parent.resolve()   # two levels up from Templates/Scripts/
@@ -108,23 +108,8 @@ TOP_N = 30                 # candidates shown to the model (of the full taxonomy
 MAX_CONTENT_CHARS = 6000
 ADMIN_TAGS = {"clippings", "task"}   # structural tags; never proposed by the model
 
-# A named-entity tag survives only if the entity actually appears in the body.
-# Stops an AI/cloud-heavy corpus from over-applying vendor/product tags to notes
-# that merely discuss the general field. Extend for your taxonomy.
-NAMED_ENTITY_ALIASES = {
-    "Vendors/AWS": ["aws", "amazon web services", "amazon"],
-    "Vendors/Azure": ["azure"],
-    "Vendors/GCP": ["gcp", "google cloud"],
-    "Vendors/Google": ["google", "gemini"],
-    "Vendors/Microsoft": ["microsoft", "m365", "copilot", "windows", "entra", "azure"],
-    "Vendors/NVIDIA": ["nvidia", "cuda"],
-    "Vendors/OpenAI": ["openai", "chatgpt", "gpt-"],
-    "Vendors/Anthropic": ["anthropic"],
-    "Vendors/ServiceNow": ["servicenow", "service now"],
-    "Vendors/Salesforce": ["salesforce"],
-    "AI/Claude": ["claude", "anthropic"],
-    "AI/Copilot": ["copilot"],
-}
+# Named-entity guard (NAMED_ENTITY_ALIASES, entity_supported) lives in
+# tag_glosses.py, shared with tag_clippings.py.
 
 
 # ─── Taxonomy + frontmatter helpers ──────────────────────────────────────────
@@ -289,11 +274,6 @@ def candidate_tags(body: str, tags, tag_emb, current: list[str]):
 
 
 # ─── Guardrails ──────────────────────────────────────────────────────────────
-def entity_supported(tag: str, body_lower: str) -> bool:
-    aliases = NAMED_ENTITY_ALIASES.get(tag)
-    return True if aliases is None else any(a in body_lower for a in aliases)
-
-
 def drop_redundant_parents(tags: list[str]) -> list[str]:
     return [t for t in tags
             if "/" in t or not any(o.startswith(t + "/") for o in tags)]
