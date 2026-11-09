@@ -38,6 +38,7 @@ _security() {
     while [[ $# -gt 0 ]]; do
         case "$1" in -s) svc="$2"; shift 2;; *) shift;; esac
     done
+    if [[ -n "${KC_FIND_RC:-}" ]]; then return "$KC_FIND_RC"; fi
     [[ -f "$KC/$svc" ]] || return 44
     cat "$KC/$svc"
 }
@@ -49,7 +50,7 @@ _secret_store_set() {
 
 
 def run(tmp_path: Path, script: str, env_lines: str = "", kc: dict | None = None,
-        kc_fails: bool = False) -> tuple[str, str, dict]:
+        kc_fails: bool = False, find_rc: int | None = None) -> tuple[str, str, dict]:
     home = tmp_path / "home"
     (home / "dev" / "secrets").mkdir(parents=True)
     env_file = home / "dev" / "secrets" / ".env"
@@ -61,7 +62,8 @@ def run(tmp_path: Path, script: str, env_lines: str = "", kc: dict | None = None
     p = subprocess.run(
         ["bash", "-c", HARNESS + script],
         env={"HOME": str(home), "LIB": str(LIB), "USER": "u", "PATH": "/usr/bin:/bin",
-             "KC_FAILS": "1" if kc_fails else "0"},
+             "KC_FAILS": "1" if kc_fails else "0",
+             "KC_FIND_RC": "" if find_rc is None else str(find_rc)},
         capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stdout + p.stderr
     store = {f.name: f.read_text() for f in (home / "kc").iterdir()}
@@ -119,3 +121,88 @@ def test_mail_component_keeps_its_secrets_out_of_dotenv() -> None:
     # Telling the operator to grep .env for the token would print it from a
     # file it no longer lives in.
     assert "grep '^SOURCE_MAIL_TOKEN=' " not in src
+
+
+# ---- review S3: an unreadable Keychain is not an empty one --------------------
+
+@macos_shell
+@pytest.mark.parametrize("rc", [36, 51, 1])
+def test_migrate_moves_nothing_when_the_keychain_cannot_be_read(
+        tmp_path, allow_subprocess, rc):
+    """Moving the .env value in would replace a stored value with it, which
+    is what KV-1 exists to stop."""
+    out, env, kc = run(tmp_path, "migrate_env_secret SOURCE_MAIL_TOKEN",
+                       "SOURCE_MAIL_TOKEN=from-dotenv\n",
+                       kc={"source_mail_token": "stored"}, find_rc=rc)
+    assert "SOURCE_MAIL_TOKEN=from-dotenv" in env
+    assert kc == {"source_mail_token": "stored"}
+    assert f"the Keychain could not be read (exit {rc}); left it in" in out
+
+
+@macos_shell
+def test_migrate_latches_on_a_timeout(tmp_path, allow_subprocess):
+    out, env, kc = run(tmp_path, 'migrate_env_secret SOURCE_MAIL_TOKEN; '
+                       'echo "WEDGED=$KEYCHAIN_WEDGED"',
+                       "SOURCE_MAIL_TOKEN=from-dotenv\n", find_rc=142)
+    assert "WEDGED=1" in out and "SOURCE_MAIL_TOKEN=from-dotenv" in env
+
+
+@macos_shell
+@pytest.mark.parametrize("find_rc,kc,env_lines,want", [
+    (None, {"k1": "v"}, "", 0),             # held in the Keychain
+    (None, {}, "K1=v\n", 0),                # Keychain says absent, .env has it
+    (None, {}, "", 1),                       # nowhere
+    (36, {"k1": "v"}, "K1=v\n", 2),         # unreadable: not "held via .env"
+    (142, {}, "", 2),
+])
+def test_keystore_has_draws_the_python_line(tmp_path, allow_subprocess,
+                                            find_rc, kc, env_lines, want):
+    out, _, _ = run(tmp_path, 'keystore_has K1 && rc=0 || rc=$?; echo "RC=$rc"',
+                    env_lines, kc=kc, find_rc=find_rc)
+    assert f"RC={want}" in out
+
+
+@macos_shell
+def test_prompt_neither_prompts_nor_writes_when_unreadable(tmp_path, allow_subprocess):
+    out, env, kc = run(tmp_path,
+                       'FORCE=1; prompt_env_secret K1 "desc" "https://example.invalid" < /dev/null',
+                       "", kc={"k1": "stored"}, find_rc=36)
+    assert kc == {"k1": "stored"} and env == ""
+    assert "the Keychain could not be read; not prompting or" in out
+
+
+def test_the_token_step_does_not_generate_when_unreadable() -> None:
+    """Generating a token over an unreadable Keychain orphans the one the
+    phone holds. The branch must come before the generator."""
+    src = COMPONENT.read_text(encoding="utf-8")
+    assert 'keystore_has SOURCE_MAIL_TOKEN && token_rc=0 || token_rc=$?' in src
+    assert src.index('[[ "$token_rc" -eq 2 ]]') < src.index("secrets.choice")
+    assert "not generating a" in src
+
+
+@macos_shell
+def test_a_failed_write_shows_only_the_helper_s_own_lines(tmp_path, allow_subprocess):
+    """Review S8: removing the loop that shows the helper's reason failed no
+    test, because every test stubbed _secret_store_set."""
+    root = tmp_path / "repo"
+    helper = root / "Templates" / "Scripts" / "secret_store.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text(
+        "import sys\n"
+        "sys.stdin.read()\n"
+        "print('Traceback: value=sk-should-not-show', file=sys.stderr)\n"
+        "print('secret_store: K1: value cannot be written safely', file=sys.stderr)\n"
+        "sys.exit(1)\n")
+    script = (r'''
+set -euo pipefail
+ok() { echo "OK: $*"; }; warn() { echo "WARN: $*"; }; info() { :; }; err() { echo "ERR: $*"; }
+source "$LIB/secrets.sh"
+REPO_ROOT="$ROOT"
+_secret_store_set K1 sk-the-value && echo SET || echo NOTSET
+''')
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                       env={"HOME": str(tmp_path), "LIB": str(LIB), "ROOT": str(root),
+                            "USER": "u", "PATH": "/usr/bin:/bin:/opt/homebrew/bin"})
+    assert "NOTSET" in p.stdout, p.stdout + p.stderr
+    assert "WARN:   secret_store: K1: value cannot be written safely" in p.stdout
+    assert "sk-" not in p.stdout + p.stderr

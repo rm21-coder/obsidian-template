@@ -283,10 +283,13 @@ baselines as its last step, after every job is in place.
 
 ### Secrets and credentials
 
-`secret_store.get_secret()` resolves a secret from the environment first
-(which includes `~/dev/secrets/.env`), then the platform keystore: the
-Keychain through Apple-signed `/usr/bin/security` on macOS, a DPAPI-encrypted
-file on Windows. An optional macOS backend reads Azure Key Vault instead, as a
+`secret_store.get_secret()` resolves a secret from the platform keystore
+first, and from the environment (which includes `~/dev/secrets/.env`) only
+when the keystore has no value and Key Vault is off, so a planted `.env` line
+cannot replace a stored secret. The keystore is the
+Keychain through Apple-signed `/usr/bin/security` on macOS (values are written
+on its stdin, `security -i`, and read back, never passed on a command line
+another local account could read with `ps`), a DPAPI-encrypted file on Windows. An optional macOS backend reads Azure Key Vault instead, as a
 service principal whose certificate key is the one credential left in the
 Keychain; it fails closed off the vault's networks rather than falling back,
 and moves secrets off the disk without moving trust off the endpoint

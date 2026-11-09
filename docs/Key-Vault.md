@@ -1,7 +1,8 @@
 # Azure Key Vault secret backend (optional, macOS)
 
-By default `secret_store.get_secret()` reads the environment, then the
-platform keystore (the Keychain on macOS). An organisation that wants its
+By default `secret_store.get_secret()` reads the platform keystore (the
+Keychain on macOS), and the environment only for a secret the keystore
+reports it does not hold. An organisation that wants its
 secrets held centrally, rotated in one place and every read logged can point
 the store at an Azure Key Vault instead. It is off unless configured, and it
 is macOS-only for now; Windows keeps DPAPI.
@@ -10,15 +11,32 @@ is macOS-only for now; Windows keeps DPAPI.
 
 With the vault on, the lookup order is:
 
-1. The environment, including `~/dev/secrets/.env`. An env value still wins,
-   which is why `status` (below) fails if a secret is left there.
-2. The vault. The secret's name is lowercased with `_` turned into `-`
+1. The vault. The secret's name is lowercased with `_` turned into `-`
    (Key Vault names allow letters, digits and dashes): `SOURCE_MAIL_TOKEN`
    is read from `source-mail-token`.
-3. Nothing. A vault that is unreachable, refuses the call or lacks the
+2. Nothing. A vault that is unreachable, refuses the call or lacks the
    secret makes `get_secret` return `None`, with the cause on stderr. The
    Keychain is consulted only when `KEYVAULT_KEYCHAIN_FALLBACK=1`, which is
    meant for a parallel run while migrating and nothing else.
+
+The environment, including `~/dev/secrets/.env`, is never a source of a
+secret while the vault is on, fallback mode included: a copy left there is
+ignored rather than overriding the vault, and `status` (below) names it.
+There is no switch that restores the old env-first order, because any such
+switch would be read from the same `.env` it is meant to protect against.
+Configuration that is not secret (the mailbox address, the allowlist,
+`LLM_BASE_URL`) is still read from `.env`.
+
+One limit to state plainly: `KEYVAULT_URL` itself lives in `.env`. Whoever
+can edit that file can remove the line, which turns the vault off; the jobs
+then read the Keychain, and `.env` for any name the Keychain lacks. Once the
+Keychain copies are deleted (step 5), that means `.env` supplies every
+secret. The same editor can instead point `KEYVAULT_URL`, the tenant id and
+the client id at a vault they control. The code only insists on an
+`https://*.vault.azure.net` host, so the jobs would sign in there with the
+certificate (whose public half is not secret) and read whatever that vault
+holds. Protecting `.env` (mode 0600, outside any synced folder) is therefore
+still part of the control, not made redundant by the vault.
 
 Jobs sign in as a **service principal with a certificate**, not as a person,
 so no interactive sign-in can expire under an unattended job. The
@@ -62,6 +80,12 @@ On the Mac:
    /usr/bin/openssl x509 -in ~/Downloads/kv-client.cer -noout -fingerprint -sha1
    ```
 
+   Keep the key at 3072 bits or smaller. A Keychain write goes to
+   `security -i` on stdin as one command line, and lines over 4,000 bytes
+   are refused (longer ones split). The base64 PEM of a 3072-bit key is
+   about 3,300 characters; a 4096-bit key is about 4,400 and is refused with
+   "value cannot be written safely".
+
 2. Load each secret into the vault without putting it on a command line
    (`printf` is a shell builtin, so the value never reaches a process
    listing):
@@ -89,7 +113,8 @@ On the Mac:
    ```
 
    This prints each secret's source (`keyvault`, `keystore`, `.env`,
-   `MISSING`), never a value, and exits 1 if any is missing or left in `.env`.
+   `MISSING`), never a value, names any `.env` copy that is being ignored, and
+   exits 1 if any secret is missing from the vault.
 
 5. Once the jobs have run cleanly against the vault, rotate each key at its
    source, write the new value only to the vault, and delete the Keychain
@@ -109,6 +134,7 @@ control that has to work with the network down.
 | `Key Vault HTTP 403 Forbidden…` | Signed in, but the identity lacks Key Vault Secrets User on this vault. |
 | `NAME: not in Key Vault` | The vault has no secret under the dashed name. |
 | `certificate key … is not in the Keychain` | Step 1 was not completed, or `KEYVAULT_KEY_NAME` points elsewhere. |
+| `certificate key … could not be read from the Keychain` | The Keychain is locked, an ACL prompt is pending, or the read timed out. The key may well be stored: do not store it again; unlock the Keychain or dismiss the prompt, then re-run. |
 | `Key Vault is configured but missing …` | `KEYVAULT_URL` is set without its companions. |
 
 To roll back, comment out `KEYVAULT_URL` in `.env`: the store reverts to the

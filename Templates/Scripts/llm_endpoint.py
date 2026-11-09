@@ -73,8 +73,17 @@ class MissingCredential(EndpointError):
     .env, not the platform keystore. Carries a ready-to-print remediation so
     every call site reports the SAME fix for the SAME problem."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, unavailable: bool = False) -> None:
         self.name = name
+        self.unavailable = unavailable
+        if unavailable:
+            # Review S2: the keystore read failed; the key may well be stored,
+            # and writing to a Keychain that just failed is never the fix.
+            super().__init__(
+                f"{name}: the keystore could not be read, so it may well be "
+                "stored; do not store it again. Fix the keystore (the "
+                "secret_store line above says why) and re-run.")
+            return
         super().__init__(
             f"{name} not found in the environment or the keystore. "
             f"Store it with:\n"
@@ -221,7 +230,7 @@ def client(**kwargs):
     """
     import anthropic  # noqa: PLC0415 — lazy on purpose, see docstring
 
-    from secret_store import get_secret
+    from secret_store import get_secret, last_source
 
     url = base_url()
     if url:
@@ -241,7 +250,8 @@ def client(**kwargs):
     name = key_name()
     key = get_secret(name)
     if not key:
-        raise MissingCredential(name)
+        raise MissingCredential(
+            name, unavailable=last_source(name) == "unavailable")
     c = anthropic.Anthropic(api_key=key, **kwargs)
     if kwargs.get("base_url"):
         _translate_models(c)

@@ -531,7 +531,7 @@ class TestHangGuards:
         time.sleep(1.5)          # would raise if still armed
 
     def test_a_socket_timeout_is_reported_not_raised(self, monkeypatch,
-                                                     tmp_path) -> None:
+                                                     tmp_path, caplog) -> None:
         """TimeoutError is an OSError, and main() has to catch it: before the
         timeout existed there was nothing to catch, so the handler did not
         cover it and a raise would surface as a traceback instead of a line."""
@@ -540,14 +540,84 @@ class TestHangGuards:
 
         monkeypatch.setattr(smp, "process_mailbox", _boom)
         monkeypatch.setattr(smp, "_secret", lambda name: (
-            "tok" if name == "SOURCE_MAIL_TOKEN" else
-            "a@example.com" if name == "SOURCE_MAIL_ALLOWED_SENDERS" else "x"))
+            "tok" if name == "SOURCE_MAIL_TOKEN" else "x"))
+        monkeypatch.setenv("SOURCE_MAIL_USER", "u@example.com")
+        monkeypatch.setenv("SOURCE_MAIL_ALLOWED_SENDERS", "a@example.com")
 
         class _Lock:
             def close(self): pass
 
         monkeypatch.setattr(smp, "acquire_lock", lambda: _Lock())
-        assert smp.main(["--once", "--root", str(tmp_path)]) == 1
+        with caplog.at_level("ERROR"):
+            assert smp.main(["--once", "--root", str(tmp_path)]) == 1
+        assert "IMAP error: timed out" in caplog.text
+
+
+class TestUnreadableKeystoreMessages:
+    """Review S2: a failed keystore read must not be reported as "not set,
+    store it", for either mail-drop secret."""
+
+    def _main(self, monkeypatch, tmp_path, caplog, held):
+        import secret_store
+        monkeypatch.setattr(secret_store, "get_secret",
+                            lambda name, **_k: held.get(name))
+        monkeypatch.setattr(secret_store, "last_source",
+                            lambda name: None if name in held else "unavailable")
+        monkeypatch.setenv("SOURCE_MAIL_USER", "intake@example.com")
+        monkeypatch.setenv("SOURCE_MAIL_ALLOWED_SENDERS", "a@example.com")
+        with caplog.at_level("ERROR"):
+            return smp.main(["--once", "--root", str(tmp_path)])
+
+    def test_token(self, monkeypatch, tmp_path, caplog) -> None:
+        assert self._main(monkeypatch, tmp_path, caplog, {}) == 1
+        assert ("SOURCE_MAIL_TOKEN is not set (checked keystore and .env); the "
+                "keystore could not be read, so SOURCE_MAIL_TOKEN may well be "
+                "stored; do not store it again") in caplog.text
+
+    def test_app_password(self, monkeypatch, tmp_path, caplog) -> None:
+        assert self._main(monkeypatch, tmp_path, caplog,
+                          {"SOURCE_MAIL_TOKEN": "tok"}) == 1
+        assert ("SOURCE_MAIL_APP_PASSWORD: the keystore could not be read, so "
+                "SOURCE_MAIL_APP_PASSWORD may well be stored") in caplog.text
+
+
+class TestConfigIsNotASecret:
+    """Review R2: the mailbox address and the allowlist are configuration in
+    .env. Through get_secret, with Key Vault on, they were asked of the vault,
+    never found, and the pull exited 1 on every run."""
+
+    def test_vault_on_with_config_only_in_the_environment(
+            self, monkeypatch, tmp_path, caplog) -> None:
+        import secret_store
+        vault = {"SOURCE_MAIL_TOKEN": "tok", "SOURCE_MAIL_APP_PASSWORD": "pw"}
+        asked = []
+
+        def _vault_only(name, **_k):     # a vault-on, fallback-off resolver
+            asked.append(name)
+            return vault.get(name)
+
+        monkeypatch.setattr(secret_store, "get_secret", _vault_only)
+        monkeypatch.setenv("SOURCE_MAIL_USER", "intake@example.com")
+        monkeypatch.setenv("SOURCE_MAIL_ALLOWED_SENDERS", "Phone@Example.com, b@example.com")
+        seen = {}
+
+        def _pull(**kw):
+            seen.update(kw)
+            return 0, 0
+
+        monkeypatch.setattr(smp, "process_mailbox", _pull)
+
+        class _Lock:
+            def close(self): pass
+
+        monkeypatch.setattr(smp, "acquire_lock", lambda: _Lock())
+        with caplog.at_level("INFO"):
+            assert smp.main(["--once", "--root", str(tmp_path)]) == 0
+        assert "missing config" not in caplog.text
+        assert seen["user"] == "intake@example.com"
+        assert seen["password"] == "pw"
+        assert seen["allowed"] == ["phone@example.com", "b@example.com"]
+        assert sorted(asked) == ["SOURCE_MAIL_APP_PASSWORD", "SOURCE_MAIL_TOKEN"]
 
 
 class TestReplaySeenCache:
@@ -687,6 +757,70 @@ class TestProcessedDropsLeaveTheMailbox:
         fake = _FakeIMAP([_raw_drop(_signed())])
         assert self._pull(fake, tmp_path, monkeypatch, dry_run=True) == (1, 0)
         assert (fake.stored, fake.copied, fake.expunges) == ([], [], 0)
+
+
+def _raw_utf7_drop(payload_utf7: str, sender: str = "phone@example.com") -> bytes:
+    """A drop whose body is declared utf-7, a codec that can decode to a lone
+    surrogate ('+2AA-' -> '\\ud800'). The sender picks the codec."""
+    body = ("v: 1\ntype: podcast\nts: %s\npayload: %s\nhmac: %s\n"
+            % (_now(), payload_utf7, "0" * 64))
+    return ("From: %s\r\nSubject: voice drop\r\nMIME-Version: 1.0\r\n"
+            "Content-Type: text/plain; charset=utf-7\r\n"
+            "Content-Transfer-Encoding: 7bit\r\n\r\n%s"
+            % (sender, body.replace("\n", "\r\n"))).encode("ascii")
+
+
+class TestUnauthenticatedMessageCannotWedgeTheDrain:
+    """F01 (v2.6 assessment, scan 011CgePQ3JL): verify() ran outside the
+    per-message guard. A spoofed allowlisted From with a utf-7 body decoding
+    to a lone surrogate raised UnicodeEncodeError in compute_hmac, the run
+    aborted without retiring the message, and every later run died on it,
+    so the signed drops queued behind it never landed."""
+
+    def _pull(self, fake, root, monkeypatch):
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", fake)
+        return smp.process_mailbox(
+            user="u", password="p", key=KEY,
+            allowed=["phone@example.com"], root=root, dry_run=False)
+
+    def test_lone_surrogate_payload_is_rejected_and_the_drain_continues(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        fake = _FakeIMAP([_raw_utf7_drop("a+2AA-b"), _raw_drop(_signed())])
+        assert self._pull(fake, tmp_path, monkeypatch) == (1, 1)
+        assert (b"1", "\\Seen") in fake.stored
+        assert (b"1", "\\Deleted") in fake.stored
+
+    def test_a_verify_that_raises_is_a_rejection_not_a_crash(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+            caplog) -> None:
+        real = smp.verify
+        calls = {"n": 0}
+
+        def _flaky(fields, *, key):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("boom")
+            return real(fields, key=key)
+
+        monkeypatch.setattr(smp, "verify", _flaky)
+        fake = _FakeIMAP([_raw_drop(_signed(payload="https://example.com/x.mp3")),
+                          _raw_drop(_signed())])
+        assert self._pull(fake, tmp_path, monkeypatch) == (1, 1)
+        assert (b"1", "\\Seen") in fake.stored
+        assert (b"1", "\\Deleted") in fake.stored
+        assert "REJECT message 1: verification raised (RuntimeError)" in caplog.text
+
+    def test_decoded_body_is_always_utf8_encodable(self) -> None:
+        msg = email.message_from_bytes(_raw_utf7_drop("a+2AA-b"))
+        text = smp.plain_text_body(msg)
+        text.encode("utf-8")          # must not raise
+        assert "\ud800" not in text
+
+    def test_verify_refuses_a_surrogate_instead_of_raising(self) -> None:
+        fields = _signed()
+        fields["payload"] = "a\ud800b"
+        ok, reason = smp.verify(fields, key=KEY)
+        assert (ok, reason) == (False, "field is not valid UTF-8")
 
 
 class TestMessageSizeGate:

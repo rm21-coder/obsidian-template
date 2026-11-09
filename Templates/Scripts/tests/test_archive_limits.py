@@ -155,6 +155,7 @@ def test_markitdown_dropper_refuses_before_convert():
     src = (HERE / "markitdown_dropper.py").read_text(encoding="utf-8")
     body = re.search(r"\ndef convert_one\(.*?(?=\ndef |\nclass )", src, re.S).group(0)
     assert "import archive_limits" in src
-    refusal = body.index("refused = archive_limits.refusal(src)")
+    # F36 puts the audio/video refusal first on the same line.
+    refusal = body.index("refused = media_refusal(src) or archive_limits.refusal(src)")
     assert refusal < body.index("md.convert(")
     assert 'return False, f"{src.name}: {refused}"' in body

@@ -23,7 +23,7 @@ import pytest
 
 HERE = Path(__file__).resolve().parent.parent
 
-ENGINE = "from markitdown import MarkItDown\nmd = MarkItDown()\n"
+ENGINE = "    from markitdown import MarkItDown\n"
 FAKE_ENGINE = (
     "class _MD:\n"
     "    def convert(self, path):\n"
@@ -83,8 +83,11 @@ def dropper(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     mod = importlib.import_module("markitdown_dropper")
     # The engine lives in markitdown_bounded, shared with markitdown_convert.
     import markitdown_bounded as mb
-    assert ENGINE in mb._CHILD_CODE
-    monkeypatch.setattr(mb, "_CHILD_CODE", mb._CHILD_CODE.replace(ENGINE, FAKE_ENGINE))
+    # The real setup also removes MarkItDown's audio converter (F36); the
+    # stand-in has none, so it only needs to clear the refusal flag.
+    assert ENGINE in mb._CHILD_SETUP and mb._CHILD_SETUP in mb._CHILD_CODE
+    monkeypatch.setattr(mb, "_CHILD_CODE", mb._CHILD_CODE.replace(
+        mb._CHILD_SETUP, "refuse = None\n" + FAKE_ENGINE))
     yield mod
     sys.modules.pop("markitdown_dropper", None)
 

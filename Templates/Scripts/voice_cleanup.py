@@ -403,8 +403,8 @@ def main():
         log.error("%s", exc)
         sys.exit(1)
 
-    # The endpoint and its credential (env/.env first, then the platform
-    # keystore; stock Anthropic unless LLM_BASE_URL redirects it) are resolved
+    # The endpoint and its credential (the platform keystore, then env/.env
+    # for a name it lacks; stock Anthropic unless LLM_BASE_URL redirects it) are resolved
     # on first use, not here — see _resolve_client.
     import llm_endpoint
     endpoint: dict = {}

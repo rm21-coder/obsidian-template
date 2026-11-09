@@ -205,13 +205,17 @@ class TestDpapiKeyStore:
         sc.get_or_create_hmac_key("test-service", "test-account")
         assert_owner_only(tmp_path / "test-service.key.dpapi")
 
-    def test_corrupt_blob_regenerates_rather_than_crashing(
-            self, allow_subprocess: None, tmp_path: Path) -> None:
+    def test_an_undecryptable_blob_is_kept_and_fails_closed(
+            self, allow_subprocess: None, tmp_path: Path, capsys) -> None:
+        """Review S6: overwriting a file DPAPI cannot decrypt destroys the one
+        copy that may decrypt later, and only ever led to ALLOWLIST_TAMPER on
+        the next check. It is kept, and the caller gets None with a reason."""
         sc.get_or_create_hmac_key("test-service", "test-account")
         key_path = tmp_path / "test-service.key.dpapi"
         key_path.write_bytes(b"not a dpapi blob")
-        regenerated = sc.get_or_create_hmac_key("test-service", "test-account")
-        assert regenerated is not None and len(regenerated) >= 16
+        assert sc.get_or_create_hmac_key("test-service", "test-account") is None
+        assert key_path.read_bytes() == b"not a dpapi blob"
+        assert "could not be decrypted" in capsys.readouterr().err
 
     def test_short_key_is_treated_as_missing(self, allow_subprocess: None,
                                              tmp_path: Path) -> None:
@@ -222,6 +226,39 @@ class TestDpapiKeyStore:
         key = sc.get_or_create_hmac_key("test-service", "test-account")
         assert key is not None and len(key) >= 16
         assert key != b"tooshort"
+
+
+class TestDpapiFailurePathAnyPlatform:
+    """The DPAPI decision of review S6, with _dpapi_crypt stubbed so it runs
+    on every platform (the real-DPAPI tests above are Windows-only)."""
+
+    def test_undecryptable_file_is_kept_and_named(self, monkeypatch, tmp_path,
+                                                  capsys) -> None:
+        monkeypatch.setattr(sc, "state_dir", lambda: tmp_path)
+        key_path = tmp_path / "svc.key.dpapi"
+        key_path.write_bytes(b"blob from another profile")
+
+        def _crypt(data, *, protect):
+            if not protect:
+                raise OSError("CryptUnprotectData failed")
+            raise AssertionError("must not write a new key")
+
+        monkeypatch.setattr(sc, "_dpapi_crypt", _crypt)
+        assert sc._dpapi_get_or_create("svc") is None
+        assert key_path.read_bytes() == b"blob from another profile"
+        err = capsys.readouterr().err
+        assert "could not be decrypted (OSError); not creating a new key" in err
+        assert "delete that file and re-adopt the plugin allowlist" in err
+
+    def test_a_decrypted_short_key_is_still_replaced(self, monkeypatch,
+                                                     tmp_path) -> None:
+        monkeypatch.setattr(sc, "state_dir", lambda: tmp_path)
+        monkeypatch.setattr(sc, "restrict_file", lambda p: True)
+        (tmp_path / "svc.key.dpapi").write_bytes(b"x")
+        monkeypatch.setattr(sc, "_dpapi_crypt",
+                            lambda data, *, protect: data if protect else b"short")
+        k = sc._dpapi_get_or_create("svc")
+        assert k is not None and len(k) >= 16
 
 
 class TestKeychainKeyStore:
@@ -247,16 +284,42 @@ class TestKeychainKeyStore:
         from types import SimpleNamespace
         calls: list[list[str]] = []
 
+        import shlex
+        stored = {"v": "00ff"}           # too short: must be replaced
+        inputs: list[str] = []
+
         def fake_run(cmd, *a, **k):
             calls.append(cmd)
+            if cmd == ["/usr/bin/security", "-i"]:
+                inputs.append(k["input"])
+                toks = shlex.split(k["input"])
+                if toks[0] == "add-generic-password":
+                    stored["v"] = toks[toks.index("-w") + 1]
+                return SimpleNamespace(returncode=0, stdout="", stderr="")
             if "find-generic-password" in cmd:
-                return SimpleNamespace(returncode=0, stdout="00ff\n", stderr="")
+                return SimpleNamespace(returncode=0, stdout=stored["v"] + "\n",
+                                       stderr="")
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
         monkeypatch.setattr(sc.subprocess, "run", fake_run)
         key = sc.get_or_create_hmac_key("svc", "acct")
         assert key is not None and len(key) >= 16
-        assert any("add-generic-password" in c for c in calls)
+        # F09: the new key travels on stdin, never in any argv.
+        assert any(i.startswith('"add-generic-password"') for i in inputs)
+        assert not any(key.hex() in arg for c in calls for arg in c)
+
+    def test_a_key_that_does_not_read_back_is_not_used(
+            self, monkeypatch: pytest.MonkeyPatch,
+            allow_subprocess: None) -> None:
+        from types import SimpleNamespace
+
+        def fake_run(cmd, *a, **k):
+            if "find-generic-password" in cmd:
+                return SimpleNamespace(returncode=0, stdout="00ff\n", stderr="")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(sc.subprocess, "run", fake_run)
+        assert sc.get_or_create_hmac_key("svc", "acct") is None
 
     def test_returns_none_when_it_cannot_persist(
             self, monkeypatch: pytest.MonkeyPatch,
@@ -531,10 +594,13 @@ class TestKeychainCallsAreBounded:
     Nothing here touches the real Keychain -- subprocess is replaced.
     """
 
-    def _spy(self, monkeypatch, find_rc=1):
+    def _spy(self, monkeypatch, find_rc=44):   # 44: no such item
         calls = []
 
         def fake_run(args, **kw):
+            if list(args) == ["/usr/bin/security", "-i"]:   # F09: stdin form
+                import shlex
+                args = ["/usr/bin/security", *shlex.split(kw["input"])]
             calls.append((args, kw.get("timeout")))
             rc = find_rc if args[1] == "find-generic-password" else 0
             return subprocess.CompletedProcess(args, rc, stdout="", stderr="")
@@ -564,6 +630,35 @@ class TestKeychainCallsAreBounded:
         subs = [a[1] for a, _ in calls]
         assert "delete-generic-password" in subs
         assert subs.index("delete-generic-password") < subs.index("add-generic-password")
+
+    @pytest.mark.parametrize("rc", [1, 36, 51])
+    def test_a_failed_read_never_replaces_the_key(self, monkeypatch, rc) -> None:
+        """Only "no such item" (44) means there is no key. A locked Keychain
+        or a denied ACL says nothing about whether the live allowlist key
+        exists, so it must not be deleted and regenerated."""
+        calls = self._spy(monkeypatch, find_rc=rc)
+        assert sc._keychain_get_or_create("svc", "acct") is None
+        assert [a[1] for a, _ in calls] == ["find-generic-password"]
+
+    def test_a_failed_read_says_why(self, monkeypatch, capsys) -> None:
+        """Review S6: the control logged only "could not obtain the HMAC key",
+        every run, with no cause anywhere."""
+        self._spy(monkeypatch, find_rc=51)
+        assert sc._keychain_get_or_create("svc", "acct") is None
+        assert ("the Keychain read of svc failed (exit 51); not creating a new "
+                "key") in capsys.readouterr().err
+
+    @pytest.mark.parametrize("account", ['a"b', "a\\b", "a\nb", "a\u00e9b"])
+    def test_an_unsafe_account_name_creates_nothing(
+            self, monkeypatch, capsys, account) -> None:
+        """Review R11: the same refusals as secret_store, from the same
+        builder. A backslash would otherwise be written under one account and
+        read back under another, leaving an orphan live key."""
+        calls = self._spy(monkeypatch)
+        assert sc._keychain_get_or_create("svc", account) is None
+        assert "add-generic-password" not in [a[1] for a, _ in calls]
+        assert ("the account or service name cannot be written safely "
+                "through security -i") in capsys.readouterr().err
 
     def test_the_new_item_trusts_the_security_binary(self, monkeypatch) -> None:
         """`-T /usr/bin/security` so later reads by this helper do not prompt.

@@ -402,7 +402,8 @@ def get_or_create_hmac_key(service: str, account: str) -> bytes | None:
 KEYCHAIN_TIMEOUT_SEC = 10
 
 
-def _security(args: list[str]) -> subprocess.CompletedProcess | None:
+def _security(args: list[str],
+              stdin: str | None = None) -> subprocess.CompletedProcess | None:
     """Run /usr/bin/security with a hard timeout. None means it did not finish.
 
     Returning None rather than raising keeps the caller's degrade path intact:
@@ -411,7 +412,8 @@ def _security(args: list[str]) -> subprocess.CompletedProcess | None:
     """
     try:
         return subprocess.run(args, check=False, capture_output=True,
-                              text=True, timeout=KEYCHAIN_TIMEOUT_SEC)
+                              text=True, timeout=KEYCHAIN_TIMEOUT_SEC,
+                              input=stdin)
     except subprocess.TimeoutExpired:
         print("security_common: /usr/bin/security did not return within %ds "
               "(%s) -- treating the key as unavailable. A pending Keychain "
@@ -423,6 +425,30 @@ def _security(args: list[str]) -> subprocess.CompletedProcess | None:
         print("security_common: could not run /usr/bin/security: %s" % e,
               file=sys.stderr)
         return None
+
+
+# F09 (v2.6 assessment): a Keychain write sends its command to `security -i`
+# on stdin, never in argv. Probed live: lines up to 4,000 characters answer
+# normally; past ~4,096 the line is split and the rest runs as a second
+# command. The tool's quoting rules are not documented, so every argument is
+# double-quoted and anything outside printable ASCII, or a quote or
+# backslash, is refused rather than escaped. One builder for both writers
+# (here and secret_store), so they cannot drift (review R11).
+SECURITY_I_MAX_LINE = 4000
+
+
+def security_i_line(*args: str) -> str | None:
+    """One `security -i` command line, every argument double-quoted, or None
+    when an argument holds a quote, a backslash or anything outside
+    printable ASCII, or the line would exceed SECURITY_I_MAX_LINE."""
+    for a in args:
+        for c in a:
+            if c in '"\\' or not (0x20 <= ord(c) <= 0x7e):
+                return None
+    line = " ".join('"%s"' % a for a in args)
+    if len(line) > SECURITY_I_MAX_LINE:
+        return None
+    return line
 
 
 def _keychain_get_or_create(service: str, account: str) -> bytes | None:
@@ -440,6 +466,17 @@ def _keychain_get_or_create(service: str, account: str) -> bytes | None:
         # The read never came back. Writing now would queue a second call
         # behind whatever is blocking the first, so stop.
         return None
+    if p.returncode not in (0, 44):
+        # Only "no such item" (44), or an item that is not a usable key (0,
+        # above), means there is no key to keep. Any other failure (a locked
+        # Keychain, a denied ACL) says nothing about whether the key exists,
+        # and regenerating it would replace the live key that signs the
+        # plugin allowlist: the next check would report ALLOWLIST_TAMPER and
+        # the allowlist would have to be vetted and signed again.
+        print("security_common: the Keychain read of %s failed (exit %d); "
+              "not creating a new key. A locked Keychain or a denied ACL is "
+              "the usual cause." % (service, p.returncode), file=sys.stderr)
+        return None
 
     new = secrets.token_bytes(32)
     # delete-then-add, never -U.
@@ -456,10 +493,27 @@ def _keychain_get_or_create(service: str, account: str) -> bytes | None:
     # signed, so unlike a Homebrew interpreter the trust survives upgrades.
     _security(["/usr/bin/security", "delete-generic-password",
                "-a", account, "-s", service])
-    w = _security(["/usr/bin/security", "add-generic-password",
-                   "-a", account, "-s", service, "-w", new.hex(),
-                   "-T", "/usr/bin/security"])
-    return new if (w is not None and w.returncode == 0) else None
+    #
+    # The key travels on stdin to `security -i`, never in argv, where another
+    # local account could read it with `ps` (F09). The line is ~130 bytes of
+    # quoted hex and names, well inside the ~4 KB line `security -i` reads
+    # (probed 2026-11-06), and the write is read back before it counts.
+    line = security_i_line("add-generic-password", "-a", account,
+                           "-s", service, "-w", new.hex(),
+                           "-T", "/usr/bin/security")
+    if line is None:
+        print("security_common: the account or service name cannot be "
+              "written safely through security -i; key not created",
+              file=sys.stderr)
+        return None
+    w = _security(["/usr/bin/security", "-i"], stdin=line + "\n")
+    if w is None or w.returncode != 0:
+        return None
+    r = _security(["/usr/bin/security", "find-generic-password",
+                   "-a", account, "-s", service, "-w"])
+    if r is None or r.returncode != 0 or r.stdout.strip() != new.hex():
+        return None
+    return new
 
 
 def _dpapi_get_or_create(service: str) -> bytes | None:
@@ -468,10 +522,21 @@ def _dpapi_get_or_create(service: str) -> bytes | None:
     if key_path.exists():
         try:
             k = _dpapi_crypt(key_path.read_bytes(), protect=False)
-            if len(k) >= 16:
-                return k
-        except Exception:
-            pass  # unreadable/corrupt — regenerate below
+        except Exception as e:
+            # Review S6, the same rule as the Keychain path: a file that
+            # cannot be read or decrypted says nothing about whether the key
+            # is lost (another user, a profile not yet loaded), and
+            # overwriting it destroys the one copy that may decrypt later.
+            # Regenerating never healed anything anyway: the next check
+            # reports ALLOWLIST_TAMPER. Fail closed and say how to recover.
+            print("security_common: %s could not be decrypted (%s); not "
+                  "creating a new key. If the key is truly lost, delete that "
+                  "file and re-adopt the plugin allowlist."
+                  % (key_path, type(e).__name__), file=sys.stderr)
+            return None
+        if len(k) >= 16:
+            return k
+        # Decrypted but not a usable key: nothing to keep, replace it below.
     new = secrets.token_bytes(32)
     try:
         blob = _dpapi_crypt(new, protect=True)

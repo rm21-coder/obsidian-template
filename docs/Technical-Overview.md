@@ -357,7 +357,10 @@ settings that name people or tools (such as
 `Templates/Scripts/.config/meeting_pull.json`) are gitignored.
 
 **Secrets** go through `secret_store.get_secret(name)`, which checks the
-environment first, then the platform keystore:
+platform keystore first and the environment (including `.env`) only for a
+secret the keystore reports it does not hold, so a planted `.env` line cannot
+replace a stored value. A keystore read that fails returns nothing rather
+than falling back to `.env`, and there is no switch that restores env-first:
 
 - macOS: a Keychain generic password read and written by shelling out to
   `/usr/bin/security`. Keychain access is granted per calling binary, and

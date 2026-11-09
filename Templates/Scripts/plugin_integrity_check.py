@@ -174,7 +174,9 @@ def _require_hmac_key() -> bytes:
     key = security_common.get_or_create_hmac_key(HMAC_SERVICE, HMAC_ACCOUNT)
     if key is None or len(key) < 16:
         security_common.log("plugin-check",
-                            "FATAL: could not obtain the HMAC key.")
+                            "FATAL: could not obtain the HMAC key (the cause "
+                            "is on this job's stderr: a locked Keychain, a "
+                            "denied ACL or an undecryptable key file).")
         sys.exit(2)
     return key
 

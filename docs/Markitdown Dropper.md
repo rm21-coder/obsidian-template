@@ -17,7 +17,7 @@ This is **optional**. The vault works fine without it — you can paste content 
 
 ## What it does
 
-Drag any supported file (Word, Excel, PowerPoint, PDF, HTML, audio, image, etc.) onto the drop zone. The file is converted to Markdown by a time-limited converter process the dropper keeps running, run through the [cleanup pass](#cleanup-pass), and written to `~/Obsidian/Creations/<original-name>.md`. Extracted images land in `~/Obsidian/Z_attachments/`. Originals are not touched. If a file with the same name already exists in `Creations/`, a timestamp is appended so nothing gets overwritten.
+Drag any supported file (Word, Excel, PowerPoint, PDF, HTML, image, etc.) onto the drop zone. Audio and video are refused, with a reason: MarkItDown's own transcription uploads the recording to Google over plain HTTP, so the converter removes it, and recordings go to the local Whisper path (the podcast or voice-note inbox) instead. The file is converted to Markdown by a time-limited converter process the dropper keeps running, run through the [cleanup pass](#cleanup-pass), and written to `~/Obsidian/Creations/<original-name>.md`. Extracted images land in `~/Obsidian/Z_attachments/`. Originals are not touched. If a file with the same name already exists in `Creations/`, a timestamp is appended so nothing gets overwritten.
 
 ## Files
 

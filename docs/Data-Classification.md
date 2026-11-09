@@ -411,9 +411,10 @@ What it checks, since 2026-10-04:
 Both scripts resolve credentials through `llm_endpoint.py`: stock Anthropic with
 `ANTHROPIC_API_KEY` by default, or set `LLM_BASE_URL` and `LLM_API_KEY_NAME` in
 `~/dev/secrets/.env` to route through an institutional gateway. The key itself
-is looked up by that name through `secret_store.get_secret`: the environment
-(which includes `.env`) first, then the platform keystore (the macOS Keychain,
-or DPAPI on Windows), where the installer stores it. Routing is
+is looked up by that name through `secret_store.get_secret`: the platform
+keystore first (the macOS Keychain, or DPAPI on Windows), where the installer
+stores it, then the environment (which includes `.env`) only for a key the
+keystore does not hold. Routing is
 therefore configuration, not a code divergence between your vault's copy of
 these files and this repo's.
 

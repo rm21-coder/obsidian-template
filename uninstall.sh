@@ -17,7 +17,11 @@
 #
 # Removed ONLY when asked (flags below), because they hold data or need sudo:
 #   --llm         stop + remove the open-webui Docker container
-#   --secrets     delete ~/dev/secrets/.env and the Keychain entries
+#   --secrets     delete the Keychain entries the installer wrote (the
+#                 model key, Open WebUI key and admin password, mail-drop
+#                 password and token, Key Vault certificate key, allowlist
+#                 HMAC key). ~/dev/secrets/.env is kept (shared file; its
+#                 keys are listed). Key Vault values are not touched.
 #   --newsyslog   remove /etc/newsyslog.d/obsidian-security.conf (sudo)
 #   --plugins     remove the DOWNLOADED plugin files named in
 #                 installers/plugin-pins.json. Each plugin's data.json - your
@@ -343,13 +347,42 @@ if [[ "$DO_SECRETS" -eq 1 ]]; then
     # a machine-wide secrets location, not a per-project one, so removing the
     # file to uninstall one project can break everything else reading it.
     # Name this project's keys instead and let the operator edit.
-    ENV_FILE="$HOME/dev/secrets/.env"
-    if [[ -f "$ENV_FILE" ]]; then
+    ENV_FILE="$SECRETS_ENV"          # ~/dev/secrets/.env, from secrets.sh
+    # Read before anything else: the gateway key's Keychain name comes from
+    # this line, and the advice below is to delete it (review R7).
+    gw_key_name="$(env_config_value LLM_API_KEY_NAME)"
+    if [[ -f "$ENV_FILE" && ! -r "$ENV_FILE" ]]; then
+        # Review S4: an unreadable file used to end the script here under
+        # pipefail, before any Keychain entry was removed.
+        warn "  $ENV_FILE exists but cannot be read, so the configurable"
+        warn "  names (LLM_API_KEY_NAME, KEYVAULT_KEY_NAME) cannot be read: a"
+        warn "  gateway key or Key Vault certificate key stored under a custom"
+        warn "  name is NOT checked. Remove it with:"
+        warn "    python3 Templates/Scripts/secret_store.py rm <NAME>"
+    elif [[ -f "$ENV_FILE" ]]; then
         info "  keeping $ENV_FILE - a shared secrets file this project does"
-        info "  not own. To remove only this project's entries, delete these"
-        info "  keys by hand:"
-        info "    LLM_BASE_URL, LLM_API_KEY_NAME, OPEN_WEBUI_API_KEY,"
-        info "    SOURCE_MAIL_*, TAGGER_*, CLASSIFIER_*"
+        info "  not own. Delete this project's entries by hand AFTER this run"
+        info "  (the gateway key's Keychain name is read from LLM_API_KEY_NAME)."
+        # Review R8: name the keys actually present, by name only. A secret
+        # lands here whenever a Keychain write fails, so a fixed list of
+        # "usual" keys misses exactly the ones that matter.
+        present="$(env_project_keys "$gw_key_name")"
+        if [[ -n "$present" ]]; then
+            info "  this project's keys present in it:"
+            while IFS= read -r k; do info "    $k"; done <<< "$present"
+        else
+            info "  it holds none of this project's keys."
+        fi
+    else
+        warn "  $ENV_FILE not found, so LLM_API_KEY_NAME and KEYVAULT_KEY_NAME"
+        warn "  cannot be read: a gateway key or Key Vault certificate key stored"
+        warn "  under a custom name is NOT checked. Remove it with:"
+        warn "    python3 Templates/Scripts/secret_store.py rm <NAME>"
+    fi
+    if [[ -r "$ENV_FILE" && -z "$gw_key_name" ]]; then
+        info "  LLM_API_KEY_NAME is not set, so the gateway key is assumed to be"
+        info "  anthropic_api_key. If you stored it under another name, remove"
+        info "  it with: python3 Templates/Scripts/secret_store.py rm <NAME>"
     fi
     # gemini_api_key is LEGACY: the YouTube summarizer used Gemini before it
     # moved to llm_endpoint, and nothing writes this item any more. It stays in
@@ -367,7 +400,20 @@ if [[ "$DO_SECRETS" -eq 1 ]]; then
     # 2026-08-20 and this caller was missed -- so an uninstall could still wedge
     # a machine whose Keychain was already unhappy, which is the state someone
     # reaching for uninstall.sh is most likely to be in.
-    for svc in gemini_api_key obsidian-allowlist-hmac; do
+    # F10 (v2.6 assessment): this used to name only the two items above, so
+    # the gateway key, the Open WebUI key and admin password, the mail-drop
+    # app password and token, and the Key Vault certificate key all survived
+    # a teardown the operator believed was complete. The list now comes from
+    # the same names the components store. Values held in Azure Key Vault are
+    # central and are not touched here: revoke or delete them in the vault.
+    # Read into an array first: confirm() reads stdin, so a `while read`
+    # loop fed from the list would hand it the next name as an answer.
+    keystore_names=()
+    while IFS= read -r svc; do
+        [[ -n "$svc" ]] && keystore_names+=("$svc")
+    done < <(installed_keystore_names | sort -u)
+    # ${a[@]+...}: bash 3.2 calls an empty array unbound under set -u.
+    for svc in ${keystore_names[@]+"${keystore_names[@]}"}; do
         if _security "$KEYCHAIN_TIMEOUT_SECONDS" find-generic-password \
                 -a "$USER" -s "$svc" >/dev/null 2>&1; then
             if [[ "$INTERACTIVE" -eq 0 ]] || confirm "Delete Keychain entry '$svc'?" N; then

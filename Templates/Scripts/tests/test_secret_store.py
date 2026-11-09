@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import io
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -25,14 +26,30 @@ def linux_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     return tmp_path
 
 
+def _expand(args, kwargs):
+    """`security -i` takes its command on stdin: expand it into the argv it
+    stands for, so the fakes dispatch on the verb either way. Returns
+    (effective args, True if it came on stdin)."""
+    if list(args) == ["/usr/bin/security", "-i"]:
+        line = kwargs.get("input") or ""
+        assert line.endswith("\n") and line.count("\n") == 1, repr(line)
+        return ["/usr/bin/security", *shlex.split(line)], True
+    return list(args), False
+
+
 class FakeSecurity:
-    """Records /usr/bin/security invocations and scripts their results."""
+    """Records /usr/bin/security invocations and scripts their results.
+    `calls` holds (effective args, kwargs); `argvs` the literal argv."""
 
     def __init__(self):
         self.calls = []
+        self.argvs = []
         self.store = {}
+        self.corrupt_writes = False
 
     def run(self, args, **kwargs):
+        self.argvs.append(list(args))
+        args, _ = _expand(args, kwargs)
         self.calls.append((args, kwargs))
         if args[:2] == ["/usr/bin/security", "find-generic-password"]:
             service = args[args.index("-s") + 1]
@@ -42,7 +59,8 @@ class FakeSecurity:
             return subprocess.CompletedProcess(args, 44, stdout="", stderr="")
         if args[:2] == ["/usr/bin/security", "add-generic-password"]:
             svc = args[args.index("-s") + 1]
-            self.store[svc] = args[args.index("-w") + 1]
+            value = args[args.index("-w") + 1]
+            self.store[svc] = value + "x" if self.corrupt_writes else value
             return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
         if args[:2] == ["/usr/bin/security", "delete-generic-password"]:
             service = args[args.index("-s") + 1]
@@ -61,10 +79,55 @@ def fake_security(monkeypatch: pytest.MonkeyPatch) -> FakeSecurity:
 
 # ---------- resolution order -------------------------------------------------
 
-def test_env_wins(monkeypatch, fake_security):
+def test_stored_value_wins_over_env(monkeypatch, fake_security, capsys):
+    # KV-1: a planted .env line (loaded into the environment) must not
+    # silently replace a stored secret. Said by name, never by value.
     fake_security.store["some_key"] = "keychain-value"
     monkeypatch.setenv("SOME_KEY", "env-value")
+    assert secret_store.get_secret("SOME_KEY") == "keychain-value"
+    assert secret_store.last_source("SOME_KEY") == "keystore"
+    err = capsys.readouterr().err
+    assert ("SOME_KEY: ignoring a different value in the environment; "
+            "the stored value wins") in err
+    assert "env-value" not in err and "keychain-value" not in err
+
+
+def test_a_planted_dotenv_cannot_switch_the_order_back(
+        monkeypatch, fake_security, tmp_path):
+    """Review R1: the env-first switch lived in the same environment the
+    planted .env fills, so two lines (the secret and the switch) replaced a
+    stored value with no warning. There is no switch any more; this loads a
+    two-line .env the way the jobs do and checks the stored value still wins."""
+    from dotenv import load_dotenv
+    for k in ("SOURCE_MAIL_TOKEN", "OBSIDIAN_ENV_SECRETS_FIRST",
+              "OBSIDIAN_ALLOW_ENV_SECRETS"):
+        monkeypatch.delenv(k, raising=False)
+    planted = tmp_path / ".env"
+    planted.write_text("SOURCE_MAIL_TOKEN=PLANTED\n"
+                       "OBSIDIAN_ENV_SECRETS_FIRST=1\n"
+                       "OBSIDIAN_ALLOW_ENV_SECRETS=1\n")
+    load_dotenv(planted)
+    try:
+        fake_security.store["source_mail_token"] = "KEYCHAIN"
+        assert secret_store.get_secret("SOURCE_MAIL_TOKEN") == "KEYCHAIN"
+        assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "keystore"
+    finally:
+        for k in ("SOURCE_MAIL_TOKEN", "OBSIDIAN_ENV_SECRETS_FIRST",
+                  "OBSIDIAN_ALLOW_ENV_SECRETS"):
+            os.environ.pop(k, None)
+
+
+def test_no_env_first_switch_is_left_in_the_module():
+    src = Path(secret_store.__file__).read_text(encoding="utf-8")
+    assert "OBSIDIAN_ENV_SECRETS_FIRST" not in src
+    assert not hasattr(secret_store, "ENV_FIRST_FLAG")
+
+
+def test_env_supplies_a_secret_the_keystore_lacks(monkeypatch, fake_security):
+    # The documented .env-only install keeps working.
+    monkeypatch.setenv("SOME_KEY", "env-value")
     assert secret_store.get_secret("SOME_KEY") == "env-value"
+    assert secret_store.last_source("SOME_KEY") == "env"
 
 
 def test_blank_env_falls_through_to_keystore(monkeypatch, fake_security):
@@ -93,20 +156,43 @@ def test_keychain_roundtrip(monkeypatch, fake_security):
     assert fake_security.store["my_token"] == "s3cret"  # service is lowercased
 
 
-def test_keychain_set_uses_direct_argv_not_interactive_mode(
-        monkeypatch, fake_security):
-    """Pins two deliberate choices (both verified live 2026-08-18): argv
-    over `security -i` (interactive mode hangs on realistic key lengths),
-    and delete-then-add over `-U` (updating an existing item can raise a
-    GUI consent prompt, which under launchd wedges silently). If someone
-    'improves' either back, this test is the tripwire."""
-    secret_store.set_secret("MY_TOKEN", "hunter2")
+def test_keychain_set_never_puts_the_value_in_argv(monkeypatch, fake_security):
+    """F09: another local account can read any process's argv with `ps`.
+    The value goes to `security -i` on stdin; delete-then-add over `-U`
+    stays (updating an existing item can raise a consent prompt, which
+    under launchd wedges silently); the write is read back."""
+    value = "hunter2-" + "k" * 3300          # the KV certificate key's size
+    assert secret_store.set_secret("MY_TOKEN", value)
     ops = [args[1] for args, _ in fake_security.calls]
-    assert ops == ["delete-generic-password", "add-generic-password"]
-    add = fake_security.calls[-1][0]
-    assert "hunter2" in add          # value travels as argv, by design
-    assert "-i" not in add
+    assert ops == ["delete-generic-password", "add-generic-password",
+                   "find-generic-password"]
+    for argv in fake_security.argvs:
+        assert not any("hunter2" in a for a in argv), argv
+    add_argv = fake_security.argvs[1]
+    assert add_argv == ["/usr/bin/security", "-i"]
+    add = fake_security.calls[1][0]
+    assert add[add.index("-w") + 1] == value
     assert "-U" not in add
+
+
+@pytest.mark.parametrize("value", ['has"quote', "back\\slash", "new\nline",
+                                   "tab\there", "k" * 5000, "caf\u00e9", "emoji\U0001f511",
+                                   "del\x7f"])
+def test_keychain_set_refuses_what_it_cannot_send_safely(
+        monkeypatch, fake_security, capsys, value):
+    assert secret_store.set_secret("MY_TOKEN", value) is False
+    assert fake_security.calls == []
+    assert "value cannot be written safely through security -i" \
+        in capsys.readouterr().err
+
+
+def test_keychain_set_removes_a_value_that_does_not_read_back(
+        monkeypatch, fake_security, capsys):
+    fake_security.corrupt_writes = True
+    assert secret_store.set_secret("MY_TOKEN", "v") is False
+    assert "my_token" not in fake_security.store
+    assert "the Keychain did not return the value that was written" \
+        in capsys.readouterr().err
 
 
 def test_keychain_set_preauthorizes_security_binary(monkeypatch, fake_security):
@@ -117,10 +203,18 @@ def test_keychain_set_preauthorizes_security_binary(monkeypatch, fake_security):
     assert t_target == "/usr/bin/security"
 
 
-def test_keychain_value_with_quotes_survives(monkeypatch, fake_security):
-    tricky = 'pa"ss\\word'
-    assert secret_store.set_secret("Q_KEY", tricky)
-    assert secret_store.get_secret("Q_KEY") == tricky
+def test_keychain_value_with_quotes_is_refused_not_mangled(
+        monkeypatch, fake_security, capsys):
+    # Since F09 the value goes through `security -i`, whose escaping rules
+    # are undocumented, so a quote or backslash is refused rather than risk
+    # storing something else. Every value the installer generates is
+    # letters, digits, '-' and '_'; a hand-pasted one with a quote falls
+    # back to .env (0600), as any failed Keychain write does.
+    monkeypatch.delenv("Q_KEY", raising=False)
+    assert secret_store.set_secret("Q_KEY", 'pa"ss\\word') is False
+    assert secret_store.get_secret("Q_KEY") is None
+    assert "value cannot be written safely through security -i" \
+        in capsys.readouterr().err
 
 
 def test_keychain_delete(monkeypatch, fake_security):
@@ -147,8 +241,9 @@ class HangingSecurity:
         self.attempts: list[str] = []
 
     def run(self, args, **kwargs):
-        self.attempts.append(args[1])
-        if args[1] == self.hang_verb:
+        verb = _expand(args, kwargs)[0][1]
+        self.attempts.append(verb)
+        if verb == self.hang_verb:
             raise subprocess.TimeoutExpired(cmd=args,
                                             timeout=kwargs.get("timeout"))
         return self.inner.run(args, **kwargs)
@@ -202,13 +297,65 @@ def test_set_reports_failure_when_the_add_times_out(hanging_security, capsys):
 
 def test_get_is_none_on_timeout_rather_than_raising(monkeypatch,
                                                     hanging_security, capsys):
-    """A wedged read resolves to 'not found', so callers fall through to
-    .env instead of dying — and says so on stderr."""
-    monkeypatch.delenv("MY_TOKEN", raising=False)
+    """A wedged read returns None rather than raising, says so on stderr,
+    and does not fall through to an environment copy (review R4): during a
+    wedge that copy may be planted or a rotated-out key."""
+    monkeypatch.setenv("MY_TOKEN", "env-copy")
     hung = hanging_security("find-generic-password")
     assert secret_store.get_secret("MY_TOKEN") is None
+    assert secret_store.last_source("MY_TOKEN") == "unavailable"
     assert hung.attempts == ["find-generic-password"]
-    assert _timeout_marker("find-generic-password") in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert _timeout_marker("find-generic-password") in err
+    assert ("MY_TOKEN: the keystore could not be read; not falling back to "
+            "the environment") in err
+
+
+@pytest.mark.parametrize("rc", [1, 36, 51])
+def test_a_failed_keychain_read_does_not_fall_through_to_env(
+        monkeypatch, fake_security, capsys, rc):
+    """Review R4: only exit 44 means "no such item". Any other failure says
+    nothing about what is stored, so the environment is not consulted."""
+    fake_security.store["my_token"] = "stored"
+    real = fake_security.run
+
+    def _failing_read(args, **kw):
+        if list(args)[:2] == ["/usr/bin/security", "find-generic-password"]:
+            return subprocess.CompletedProcess(args, rc, stdout="", stderr="")
+        return real(args, **kw)
+
+    monkeypatch.setattr(secret_store.subprocess, "run", _failing_read)
+    monkeypatch.setenv("MY_TOKEN", "PLANTED")
+    assert secret_store.get_secret("MY_TOKEN") is None
+    assert secret_store.last_source("MY_TOKEN") == "unavailable"
+    err = capsys.readouterr().err
+    assert f"MY_TOKEN: the Keychain read failed (exit {rc})" in err
+    assert "PLANTED" not in err
+
+
+def test_a_missing_keychain_item_still_falls_through_to_env(monkeypatch, fake_security):
+    monkeypatch.setenv("MY_TOKEN", "env-value")
+    assert secret_store.get_secret("MY_TOKEN") == "env-value"
+    assert secret_store.last_source("MY_TOKEN") == "env"
+
+
+def test_an_undecryptable_dpapi_file_does_not_fall_through_to_env(
+        monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(security_common, "state_dir", lambda: tmp_path)
+
+    def _bad(data, protect):
+        raise OSError("CryptUnprotectData failed")
+
+    monkeypatch.setattr(security_common, "_dpapi_crypt", _bad)
+    path = secret_store._file_path("MY_TOKEN", dpapi=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"not a blob")
+    monkeypatch.setenv("MY_TOKEN", "PLANTED")
+    assert secret_store.get_secret("MY_TOKEN") is None
+    assert secret_store.last_source("MY_TOKEN") == "unavailable"
+    assert "MY_TOKEN: the DPAPI file could not be decrypted (OSError)" \
+        in capsys.readouterr().err
 
 
 def test_delete_is_false_on_timeout(hanging_security, capsys):
@@ -428,10 +575,38 @@ def test_keyvault_token_is_reused_within_a_process(monkeypatch, keyvault):
     assert len(keyvault.token_calls()) == 1
 
 
-def test_keyvault_env_still_wins_without_a_network_call(monkeypatch, keyvault):
+def test_keyvault_value_wins_over_env(monkeypatch, keyvault):
     monkeypatch.setenv("SOURCE_MAIL_TOKEN", "env-value")
-    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") == "env-value"
-    assert keyvault.requests == []
+    keyvault.secrets["source-mail-token"] = "vault-value"
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") == "vault-value"
+    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "keyvault"
+
+
+def test_keyvault_miss_never_falls_back_to_env(monkeypatch, keyvault, capsys):
+    # The vault is authoritative: with it on, an env copy is not a fallback.
+    monkeypatch.setenv("SOURCE_MAIL_TOKEN", "env-value")
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert "an environment copy exists but is not used while Key Vault is on" \
+        in capsys.readouterr().err
+
+
+def test_keyvault_old_env_first_switch_has_no_effect(monkeypatch, keyvault):
+    monkeypatch.setenv("SOURCE_MAIL_TOKEN", "env-value")
+    monkeypatch.setenv("OBSIDIAN_ENV_SECRETS_FIRST", "1")
+    keyvault.secrets["source-mail-token"] = "vault-value"
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") == "vault-value"
+
+
+def test_keyvault_fallback_mode_still_never_uses_env(
+        monkeypatch, keyvault, fake_security, capsys):
+    """Review R5: with KEYVAULT_KEYCHAIN_FALLBACK on, a name the vault and
+    the Keychain both lack used to come from the environment."""
+    monkeypatch.setenv("KEYVAULT_KEYCHAIN_FALLBACK", "1")
+    monkeypatch.setenv("SOURCE_MAIL_TOKEN", "PLANTED")
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "missing"
+    assert ("SOURCE_MAIL_TOKEN: an environment copy exists but is not used "
+            "while Key Vault is on") in capsys.readouterr().err
 
 
 def test_keyvault_firewall_refusal_is_named_and_does_not_fall_back(
@@ -547,15 +722,53 @@ def test_status_reports_sources_and_never_values(monkeypatch, keyvault, tmp_path
     assert not any(v in out for v in ("s1", "s2", "s3", "s4"))
 
 
-def test_status_fails_when_dotenv_shadows_the_vault(monkeypatch, keyvault, tmp_path, capsys):
+def test_status_fails_when_only_dotenv_holds_it_while_the_vault_is_on(
+        monkeypatch, keyvault, tmp_path, capsys):
     env = tmp_path / ".env"
     env.write_text("SOURCE_MAIL_TOKEN=leftover-plaintext\n")
     monkeypatch.setattr(secret_store, "SECRETS_ENV", env)
     monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
     assert secret_store._cli(["status", "SOURCE_MAIL_TOKEN"]) == 1
     out = capsys.readouterr().out
-    assert "SOURCE_MAIL_TOKEN: .env  <-- overrides Key Vault; remove it" in out
+    assert ("SOURCE_MAIL_TOKEN: MISSING from Key Vault (a .env copy exists "
+            "but is not used while the vault is on)") in out
     assert "leftover-plaintext" not in out
+
+
+def test_status_names_an_ignored_dotenv_copy(monkeypatch, keyvault, tmp_path, capsys):
+    env = tmp_path / ".env"
+    env.write_text("SOURCE_MAIL_TOKEN=leftover-plaintext\n")
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", env)
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    keyvault.secrets["source-mail-token"] = "vault-value"
+    assert secret_store._cli(["status", "SOURCE_MAIL_TOKEN"]) == 0
+    out = capsys.readouterr().out
+    assert ("SOURCE_MAIL_TOKEN: keyvault  (a .env copy exists and is "
+            "ignored; remove it)") in out
+    assert "leftover-plaintext" not in out and "vault-value" not in out
+
+
+def test_status_reports_an_unreadable_keystore(monkeypatch, fake_security,
+                                               tmp_path, capsys):
+    """Review R6: status must say what the jobs will actually get. A read
+    that fails is not a source, and a .env copy is not used instead."""
+    env = tmp_path / ".env"
+    env.write_text("SOURCE_MAIL_TOKEN=leftover\n")
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", env)
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    real = fake_security.run
+
+    def _locked(args, **kw):
+        if list(args)[:2] == ["/usr/bin/security", "find-generic-password"]:
+            return subprocess.CompletedProcess(args, 36, stdout="", stderr="")
+        return real(args, **kw)
+
+    monkeypatch.setattr(secret_store.subprocess, "run", _locked)
+    assert secret_store._cli(["status", "SOURCE_MAIL_TOKEN"]) == 1
+    out = capsys.readouterr().out
+    assert ("SOURCE_MAIL_TOKEN: UNAVAILABLE (the keystore could not be read; "
+            "jobs get nothing until it can)") in out
+    assert "leftover" not in out
 
 
 def test_status_missing_is_nonzero(monkeypatch, keyvault, tmp_path, capsys):
@@ -592,3 +805,106 @@ def test_keyvault_token_post_is_form_encoded(monkeypatch, keyvault):
     (tok,) = keyvault.token_calls()
     assert tok.method == "POST"
     assert tok.get_header("Content-Type") == "application/x-www-form-urlencoded"
+
+
+# ---------- re-review of 8062ecb (S1, S2, S8, S9) ------------------------------
+
+def _cert_read(monkeypatch, fake_security, outcome):
+    """Make the Keychain read of the certificate key fail: 'timeout' or an
+    exit code. Every other call goes to the fake store."""
+    real = fake_security.run
+
+    def run(args, **kw):
+        a = _expand(args, kw)[0]
+        if a[1:2] == ["find-generic-password"] and "azure_kv_client_key" in a:
+            if outcome == "timeout":
+                raise subprocess.TimeoutExpired(cmd=args, timeout=kw.get("timeout"))
+            return subprocess.CompletedProcess(args, outcome, stdout="", stderr="")
+        return real(args, **kw)
+
+    monkeypatch.setattr(secret_store.subprocess, "run", run)
+
+
+@pytest.mark.parametrize("outcome", ["timeout", 36, 51])
+def test_an_unreadable_certificate_key_is_reported_not_raised(
+        monkeypatch, keyvault, fake_security, capsys, outcome):
+    """Review S1: READ_FAILED is truthy, so `if not blob` passed it to
+    b64decode, and a TypeError escaped get_secret, status and the mail pull."""
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    keyvault.secrets["source-mail-token"] = "vault-value"
+    _cert_read(monkeypatch, fake_security, outcome)
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert ("SOURCE_MAIL_TOKEN: certificate key azure_kv_client_key could not "
+            "be read from the Keychain") in capsys.readouterr().err
+    assert keyvault.requests == []          # never reached the network
+
+
+def test_status_survives_an_unreadable_certificate_key(
+        monkeypatch, keyvault, fake_security, tmp_path, capsys):
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", tmp_path / "absent.env")
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    _cert_read(monkeypatch, fake_security, 36)
+    assert secret_store._cli(["status", "SOURCE_MAIL_TOKEN"]) == 1
+    assert "SOURCE_MAIL_TOKEN: MISSING" in capsys.readouterr().out
+
+
+def test_not_found_hint_never_advises_storing_after_a_failed_read(
+        monkeypatch, fake_security):
+    """Review S2: after a failed read the key may well be stored, and writing
+    to a Keychain that just failed is the one thing never to do."""
+    monkeypatch.delenv("MY_TOKEN", raising=False)
+    assert secret_store.get_secret("MY_TOKEN") is None           # not held
+    assert secret_store.not_found_hint("MY_TOKEN") == (
+        "store it with: python3 secret_store.py set MY_TOKEN")
+    fake_security.store["my_token"] = "stored"
+    real = fake_security.run
+    monkeypatch.setattr(secret_store.subprocess, "run", lambda a, **k: (
+        subprocess.CompletedProcess(a, 36, stdout="", stderr="")
+        if list(a)[:2] == ["/usr/bin/security", "find-generic-password"]
+        else real(a, **k)))
+    assert secret_store.get_secret("MY_TOKEN") is None
+    hint = secret_store.not_found_hint("MY_TOKEN")
+    assert hint.startswith("the keystore could not be read, so MY_TOKEN may "
+                           "well be stored; do not store it again")
+    assert " set " not in hint
+
+
+def test_an_unreadable_plain_file_does_not_fall_through_to_env(
+        monkeypatch, linux_files):
+    """Review S8: returning None here instead of READ_FAILED failed no test."""
+    path = secret_store._file_path("PF_KEY", dpapi=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe not utf-8")
+    monkeypatch.setenv("PF_KEY", "PLANTED")
+    assert secret_store.get_secret("PF_KEY") is None
+    assert secret_store.last_source("PF_KEY") == "unavailable"
+
+
+def test_beside_an_older_security_common_reads_work_and_writes_refuse(
+        monkeypatch, fake_security, capsys):
+    """Review S9: a deploy that copied secret_store.py without
+    security_common.py used to die at import in every job."""
+    monkeypatch.delattr(security_common, "security_i_line")
+    fake_security.store["my_token"] = "stored"
+    assert secret_store.get_secret("MY_TOKEN", use_env=False) == "stored"
+    assert secret_store.set_secret("MY_TOKEN", "new") is False
+    assert fake_security.store["my_token"] == "stored"
+    assert ("security_common.py is older than secret_store.py (no "
+            "security_i_line); deploy both files together") in capsys.readouterr().err
+
+
+def test_secret_store_imports_beside_a_security_common_without_the_builder(
+        tmp_path, allow_subprocess):
+    import shutil
+    here = Path(secret_store.__file__).parent
+    shutil.copy(here / "secret_store.py", tmp_path / "secret_store.py")
+    old = (here / "security_common.py").read_text(encoding="utf-8")
+    old = old.replace("def security_i_line(", "def _gone_security_i_line(")
+    old = old.replace("SECURITY_I_MAX_LINE = 4000", "_GONE = 4000")
+    (tmp_path / "security_common.py").write_text(old, encoding="utf-8")
+    p = subprocess.run([sys.executable, "-I", "-B", "-c",
+                        "import sys; sys.path.insert(0, sys.argv[1]); "
+                        "import secret_store; print(secret_store.SECURITY_I_MAX_LINE)",
+                        str(tmp_path)], capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.strip() == "4000"

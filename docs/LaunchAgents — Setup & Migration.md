@@ -334,7 +334,7 @@ The deletion ceiling tripped — usually because you reorganized the vault betwe
 The script auto-backs up `state.json` before mutating, so if you change your mind there's a `state.bak.YYYYMMDD-HHMMSS.json` to restore from.
 
 **`obsidian-rag-sync` reports `OPEN_WEBUI_API_KEY not found` on a manual run.**
-The key is read from the environment (including `~/dev/secrets/.env`), then the Keychain. Confirm it is stored with `python3 Templates/Scripts/secret_store.py get OPEN_WEBUI_API_KEY >/dev/null && echo stored`, and store it with `secret_store.py set OPEN_WEBUI_API_KEY` if not. A line for it left in `.env` wins over the Keychain, so delete one that holds an old key.
+The key is read from the Keychain, and from the environment (including `~/dev/secrets/.env`) only if the Keychain does not hold it. Check where it resolves from with `python3 Templates/Scripts/secret_store.py status OPEN_WEBUI_API_KEY`, and store it with `secret_store.py set OPEN_WEBUI_API_KEY` if not. A Keychain value wins over a line in `.env`, so if you rotated the key, update the Keychain copy, not only `.env`; `status` names a `.env` copy that is being ignored.
 
 **A specific note got tagged with only the base tag (`clippings`) and no topical tags.** Older versions of `tag_clippings.py` could fail to parse Claude's response if Claude appended reasoning text after the JSON array. Affected files end up tracked as "processed" even though they have no real tags. Fix: delete those entries from `~/Obsidian/.tag_tracking.json` and the next run will re-tag them with the current parser, or run `tag_clippings.py --force` once to re-tag everything.
 

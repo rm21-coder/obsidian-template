@@ -108,8 +108,17 @@ if [[ -f "$ENDPOINT_PY" && -n "$VENV_PY" ]]; then
         # on the next line. Observed on a Mac Studio verify run 2026-08-25.
         info "  endpoint: $endpoint"
         endpoint_key="${endpoint%% *}"
-        if keystore_has "$endpoint_key"; then
-            ok "  $endpoint_key resolves (.env or Keychain)"
+        keystore_has "$endpoint_key" && key_rc=0 || key_rc=$?
+        if [[ -n "$(env_config_value KEYVAULT_URL)" ]]; then
+            # With the vault on, neither the Keychain nor .env is the source
+            # (review S7): only secret_store can say where it resolves.
+            info "  Key Vault is on: check $endpoint_key with"
+            info "     python3 $VAULT/Templates/Scripts/secret_store.py status"
+        elif [[ "$key_rc" -eq 0 ]]; then
+            ok "  $endpoint_key resolves (Keychain, or .env where the Keychain lacks it)"
+        elif [[ "$key_rc" -eq 2 ]]; then
+            warn "  $endpoint_key: the Keychain could not be read, so the scheduled"
+            warn "  runs get no key until it answers. Do not store it again."
         else
             warn "  $endpoint_key not resolvable - the scheduled tagger/voice runs will fail"
             info "     store it with: python3 $VAULT/Templates/Scripts/secret_store.py set $endpoint_key"

@@ -26,6 +26,36 @@ from pathlib import Path
 MAX_SOURCE_BYTES = 100 * 1024 * 1024
 CONVERT_TIMEOUT_SEC = 600
 
+# F36 (v2.6 assessment): markitdown[all] registers an AudioConverter whose
+# transcription calls speech_recognition's recognize_google, which uploads the
+# whole recording to Google over plain http://. A dropped document must never
+# leave the machine, so the child removes that converter before it converts
+# anything -- which also covers audio inside a zip, that the parent cannot
+# see -- and refuses every conversion if it cannot. Recordings go to the
+# local Whisper path (podcast_transcribe / voice_cleanup) instead.
+_CHILD_SETUP = (
+    "refuse = None\n"
+    "md = None\n"
+    "try:\n"
+    "    from markitdown import MarkItDown\n"
+    "except Exception as e:\n"
+    "    refuse = ('MarkItDown could not be loaded (' + type(e).__name__ + '); '\n"
+    "              'not converting')\n"
+    "if refuse is None:\n"
+    "    try:\n"
+    "        from markitdown.converters import AudioConverter\n"
+    "        md = MarkItDown()\n"
+    "        md._converters[:] = [r for r in md._converters\n"
+    "                             if not isinstance(r.converter, AudioConverter)]\n"
+    "        if any(isinstance(r.converter, AudioConverter) for r in md._converters):\n"
+    "            raise RuntimeError('still registered')\n"
+    "    except Exception as e:\n"
+    "        md = None\n"
+    "        refuse = ('audio transcription (which uploads audio to Google) could not '\n"
+    "                  'be disabled in this MarkItDown (' + type(e).__name__ + '); '\n"
+    "                  'not converting')\n"
+)
+
 # The converter child, run by the dropper venv's own interpreter under -I. It
 # loads MarkItDown once (its models take about a second warm, ten cold) and
 # then answers one request per line: {"path": ...} in, {"text", "title"} or
@@ -36,10 +66,11 @@ _CHILD_CODE = (
     "reply = os.fdopen(os.dup(1), 'w')\n"
     "os.dup2(2, 1)\n"
     "sys.stdout = sys.stderr\n"
-    "from markitdown import MarkItDown\n"
-    "md = MarkItDown()\n"
+    + _CHILD_SETUP +
     "for line in sys.stdin:\n"
     "    try:\n"
+    "        if refuse:\n"
+    "            raise RuntimeError(refuse)\n"
     "        r = md.convert(json.loads(line)['path'])\n"
     "        text = getattr(r, 'text_content', None) or getattr(r, 'markdown', None) or ''\n"
     "        title = getattr(r, 'title', None)\n"
@@ -49,6 +80,15 @@ _CHILD_CODE = (
     "    reply.write(json.dumps(out) + '\\n')\n"
     "    reply.flush()\n"
 )
+
+# Audio and video are refused by name before they reach the child, so the
+# user gets a reason rather than a metadata-only note. The child's converter
+# removal above is the control; this is the explanation.
+MEDIA_EXTENSIONS = frozenset((
+    ".wav", ".mp3", ".m4a", ".mp4", ".aac", ".flac", ".ogg", ".oga", ".opus",
+    ".aif", ".aiff", ".wma", ".webm", ".mov", ".m4v", ".mkv", ".avi", ".3gp",
+    ".caf", ".amr", ".m4b", ".m4r", ".mpga", ".mpeg", ".mpg", ".wave",
+    ".weba", ".mka", ".wmv", ".3g2"))
 
 
 class ConversionFailed(Exception):
@@ -128,6 +168,15 @@ class BoundedMarkItDown:
             title = out.get("title")
             return _Converted(str(out["text"]),
                               None if title is None else str(title))
+
+
+def media_refusal(path) -> str | None:
+    """Why `path` must not be converted because it is audio or video, or None."""
+    if Path(path).suffix.lower() in MEDIA_EXTENSIONS:
+        return ("audio and video are not converted here (MarkItDown would send "
+                "them to Google for transcription); use the local Whisper "
+                "path: the podcast or voice-note inbox")
+    return None
 
 
 def size_refusal(path) -> str | None:

@@ -674,8 +674,9 @@ def main():
         ]
         TRACKING_FILE = VAULT_ROOT / ".tag_tracking.json"
 
-    # Resolve the endpoint and its credential (env/.env first, then the
-    # platform keystore). Stock Anthropic unless LLM_BASE_URL redirects it.
+    # Resolve the endpoint and its credential (the platform keystore, then
+    # env/.env for a key it lacks). Stock Anthropic unless LLM_BASE_URL
+    # redirects it.
     import llm_endpoint
     try:
         client = llm_endpoint.client()

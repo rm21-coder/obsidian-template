@@ -112,7 +112,8 @@ def save_config(cfg: dict) -> None:
 
 # The bounded engine is shared with markitdown_convert.py (finding 5278110).
 from markitdown_bounded import (  # noqa: E402
-    CONVERT_TIMEOUT_SEC, MAX_SOURCE_BYTES, BoundedMarkItDown, ConversionFailed)
+    CONVERT_TIMEOUT_SEC, MAX_SOURCE_BYTES, BoundedMarkItDown, ConversionFailed,
+    media_refusal)
 
 
 def unique_destination(dest_dir: Path, base_name: str) -> Path:
@@ -135,7 +136,7 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
         return False, f"Not found: {src}"
     if src.is_dir():
         return False, f"Skipped folder: {src.name}"
-    refused = archive_limits.refusal(src)
+    refused = media_refusal(src) or archive_limits.refusal(src)
     if refused:
         return False, f"{src.name}: {refused}"
     try:

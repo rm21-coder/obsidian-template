@@ -4,10 +4,7 @@
 Every script that needs an API key, app password, or token resolves it
 through get_secret(), in this order:
 
-  1. The environment (after the caller's own load_dotenv). An explicitly
-     set env var always wins, so .env files, CI, and one-off overrides
-     keep working exactly as before.
-  2. The platform keystore:
+  1. The platform keystore (or Azure Key Vault, below):
        macOS   — Keychain generic password (service = the secret's name
                  lowercased, account = the current user), read via
                  /usr/bin/security.
@@ -15,10 +12,19 @@ through get_secret(), in this order:
                  CryptUnprotectData only succeeds for the logged-in user.
        other   — a 0600 file under state_dir() (best effort, plainly a
                  weaker fallback).
+  2. The environment (after the caller's own load_dotenv), only for a
+     secret the keystore reports it does not hold, and never while Key
+     Vault is on (fallback mode included). A stored value always wins over
+     an env var of the same name, so a planted .env line cannot replace it
+     (KV-1), and there is no switch that restores the old env-first order:
+     any switch would be read from the same .env (review R1). A keystore
+     read that fails, rather than finding nothing, returns None and does
+     not fall through to the environment.
 
-Nothing here is required: an install that keeps everything in .env never
-touches the keystore. Moving a secret out of .env and into the keystore is
-what removes the plaintext from disk.
+An install that keeps everything in .env still works, but every lookup asks
+the keystore first. Moving a secret out of .env and into the keystore is
+what removes the plaintext from disk. Whoever can edit .env can still switch
+Key Vault off (KEYVAULT_URL lives there); see docs/Key-Vault.md.
 
 Why the macOS reads shell out to /usr/bin/security instead of a native
 Keychain binding: Keychain ACLs bind to the *calling binary*. Homebrew's
@@ -42,12 +48,12 @@ CLI (for setup and the installer):
   python3 secret_store.py rm NAME
   python3 secret_store.py status [NAME...]
                                        where each secret resolves from
-                                       (env, keyvault, keystore); never
+                                       (keyvault, keystore, env); never
                                        prints a value. Exit 1 if any is
-                                       missing or shadowed by .env.
+                                       missing.
 
 Azure Key Vault (macOS, opt-in): set KEYVAULT_URL and its companions in
-~/dev/secrets/.env and step 2 becomes the vault. See the Key Vault section
+~/dev/secrets/.env and step 1 becomes the vault. See the Key Vault section
 below and docs/Key-Vault.md.
 """
 from __future__ import annotations
@@ -90,8 +96,8 @@ def _secrets_dir() -> Path:
 # Hard ceiling on every /usr/bin/security call. A Keychain op that has not
 # returned by now is not slow, it is wedged: something is waiting on a GUI
 # consent dialog that an unattended run (launchd, --auto, CI) can never
-# answer. Bound it, report failure, let the caller fall back to .env — and
-# never retry, because every retry queues another dialog onto a stack that
+# answer. Bound it and report failure (a failed read returns nothing; it does
+# not fall back to .env, see KV-1 below) — and never retry, because every retry queues another dialog onto a stack that
 # blocks all later Keychain ops on the machine, git-over-HTTPS through the
 # osxkeychain helper included.
 KEYCHAIN_TIMEOUT_SECONDS = 15
@@ -113,22 +119,85 @@ def _security(*args: str) -> subprocess.CompletedProcess | None:
         return None
 
 
-def _keychain_get(name: str) -> str | None:
+class _ReadFailed:
+    """The keystore could not answer (a timeout, a locked Keychain, a denied
+    ACL, an undecryptable file). Distinct from None, "it holds no such
+    secret": only that may fall through to the environment (review R4)."""
+
+    def __repr__(self) -> str:
+        return "READ_FAILED"
+
+
+READ_FAILED = _ReadFailed()
+
+# `security find-generic-password` exits 44 for "no such item".
+_KEYCHAIN_NOT_FOUND = 44
+
+
+def _keychain_get(name: str):
+    """The stored value, None when the Keychain holds no such item, or
+    READ_FAILED when the read itself failed."""
     p = _security("find-generic-password",
                   "-a", _account(), "-s", _service(name), "-w")
-    if p is None or p.returncode != 0:
+    if p is None:
+        return READ_FAILED
+    if p.returncode == _KEYCHAIN_NOT_FOUND:
         return None
+    if p.returncode != 0:
+        print(f"secret_store: {name}: the Keychain read failed (exit "
+              f"{p.returncode})", file=sys.stderr)
+        return READ_FAILED
     value = p.stdout.rstrip("\n")
     return value if value else None
 
 
+# F09 (v2.6 assessment): writes used to pass the value as `-w <value>`, and
+# another local account can read any process's arguments with `ps` on macOS.
+# The add now goes to `security -i` on stdin, through the line builder shared
+# with security_common (the limits and refusals are described there). What
+# has been proven live, on the maintainer's login Keychain: read-only lookups
+# of 100 to 9,000 characters (2026-11-06: up to 4,000 answer normally in
+# ~0.02 s with no hang; longer lines split); and full write, read-back and
+# delete round-trips of 40- and 3,400-character values drawn from
+# [A-Za-z0-9-_+/=] (2026-11-06); and on 2026-11-10 round-trips of values
+# holding a space, ', #, $, `, and the mixed set ;&|<>*?~!%^(){}[]=+,. --
+# all read back byte for byte -- plus security_common's HMAC-key create and
+# re-read. Every write is read back and compared before it counts, so a value
+# the tool parses differently fails closed.
+# Review S9: guarded, so this file beside an older security_common still
+# imports and reads; only a write refuses. Deploy the two files together.
+SECURITY_I_MAX_LINE = getattr(security_common, "SECURITY_I_MAX_LINE", 4000)
+
+
+def _security_i_line(*args: str) -> str | None:
+    builder = getattr(security_common, "security_i_line", None)
+    if builder is None:
+        print("secret_store: security_common.py is older than secret_store.py "
+              "(no security_i_line); deploy both files together. Not writing.",
+              file=sys.stderr)
+        return None
+    return builder(*args)
+
+
+def _security_stdin(verb: str, line: str) -> subprocess.CompletedProcess | None:
+    """Run one command through `/usr/bin/security -i` on stdin, under the
+    same hard timeout. Nothing secret is on the command line."""
+    try:
+        return subprocess.run(
+            ["/usr/bin/security", "-i"], input=line + "\n",
+            check=False, capture_output=True, text=True,
+            timeout=KEYCHAIN_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        print(f"secret_store: /usr/bin/security -i {verb} timed out after "
+              f"{KEYCHAIN_TIMEOUT_SECONDS}s; Keychain appears wedged behind a "
+              "consent prompt. Not retrying.", file=sys.stderr)
+        return None
+
+
 def _keychain_set(name: str, value: str) -> bool:
-    # Two hard-won constraints (both verified live, 2026-08-18):
-    #   1. Direct argv, NOT `security -i` — interactive mode hangs on
-    #      realistic key lengths. Cost: the value is visible in the process
-    #      table for the milliseconds the command runs; acceptable on a
-    #      single-user machine, and how the installer's keychain_set has
-    #      always worked.
+    # Hard-won constraints (verified live 2026-08-18 and 2026-11-06):
+    #   1. The value travels on stdin to `security -i`, never in argv (F09,
+    #      see SECURITY_I_MAX_LINE above for the limits that were probed).
     #   2. Delete-then-add, NOT `-U` — updating an existing item raises a
     #      GUI consent prompt whenever the item's ACL doesn't already cover
     #      the caller, and under launchd (or any unattended run) that prompt
@@ -138,15 +207,32 @@ def _keychain_set(name: str, value: str) -> bool:
     #   3. Every call is bounded by KEYCHAIN_TIMEOUT_SECONDS. If the delete
     #      hangs we stop there rather than issuing the add: a wedged Keychain
     #      answers nothing, and a second call only queues a second dialog.
+    #   4. The write is read back; a value the Keychain does not return
+    #      byte for byte is removed and the write reports failure.
     # -T pre-authorizes /usr/bin/security itself so later reads by launchd
     # jobs (which all shell out to it) need no consent.
+    line = _security_i_line("add-generic-password", "-a", _account(),
+                            "-s", _service(name), "-w", value,
+                            "-T", "/usr/bin/security")
+    if line is None:
+        print(f"secret_store: {name}: value cannot be written safely "
+              "through security -i (a quote, a backslash, a character outside "
+              f"printable ASCII, or over {SECURITY_I_MAX_LINE} bytes); "
+              "not stored",
+              file=sys.stderr)
+        return False
     if _security("delete-generic-password",
                  "-a", _account(), "-s", _service(name)) is None:
         return False
-    p = _security("add-generic-password",
-                  "-a", _account(), "-s", _service(name), "-w", value,
-                  "-T", "/usr/bin/security")
-    return p is not None and p.returncode == 0
+    p = _security_stdin("add-generic-password", line)
+    if p is None or p.returncode != 0:
+        return False
+    if _keychain_get(name) != value:
+        _keychain_delete(name)
+        print(f"secret_store: {name}: the Keychain did not return the value "
+              "that was written; removed it, not stored", file=sys.stderr)
+        return False
+    return True
 
 
 def _keychain_delete(name: str) -> bool:
@@ -332,6 +418,11 @@ def _kv_access_token(cfg: dict) -> str:
     if _kv_token.get("value") and _kv_token.get("expires", 0) - 120 > now:
         return _kv_token["value"]
     blob = _keychain_get(cfg["key_name"])
+    if blob is READ_FAILED:
+        # Review S1: READ_FAILED is truthy, and b64decode() on it raised a
+        # TypeError that escaped every caller.
+        raise KeyVaultError(f"certificate key {cfg['key_name']} could not be "
+                            "read from the Keychain")
     if not blob:
         raise KeyVaultError(f"certificate key {cfg['key_name']} is not in "
                             "the Keychain")
@@ -397,15 +488,19 @@ def _file_path(name: str, *, dpapi: bool) -> Path:
     return _secrets_dir() / (_service(name) + suffix)
 
 
-def _dpapi_get(name: str) -> str | None:
+def _dpapi_get(name: str):
+    """The stored value, None when there is no file, or READ_FAILED when the
+    file exists but cannot be read or decrypted."""
     path = _file_path(name, dpapi=True)
     if not path.exists():
         return None
     try:
         raw = security_common._dpapi_crypt(path.read_bytes(), protect=False)
         return raw.decode("utf-8") or None
-    except Exception:
-        return None
+    except Exception as e:
+        print(f"secret_store: {name}: the DPAPI file could not be decrypted "
+              f"({type(e).__name__})", file=sys.stderr)
+        return READ_FAILED
 
 
 def _dpapi_set(name: str, value: str) -> bool:
@@ -419,15 +514,15 @@ def _dpapi_set(name: str, value: str) -> bool:
         return False
 
 
-def _plainfile_get(name: str) -> str | None:
+def _plainfile_get(name: str):
     path = _file_path(name, dpapi=False)
     if not path.exists():
         return None
     try:
         value = path.read_text(encoding="utf-8").strip()
         return value or None
-    except OSError:
-        return None
+    except (OSError, UnicodeDecodeError):
+        return READ_FAILED
 
 
 def _plainfile_set(name: str, value: str) -> bool:
@@ -442,52 +537,110 @@ def _plainfile_set(name: str, value: str) -> bool:
 
 # ---------- public API --------------------------------------------------------
 
-def get_secret(name: str, *, use_env: bool = True) -> str | None:
-    """Resolve a secret by NAME. Environment first (unless use_env=False),
-    then Azure Key Vault when KEYVAULT_URL is set (macOS), else the platform
-    keystore. Returns None when nowhere has it; a vault failure is reported on
-    stderr by cause and also returns None, unless KEYVAULT_KEYCHAIN_FALLBACK
-    sends it on to the Keychain."""
-    if use_env:
-        env = os.environ.get(name, "").strip()
-        if env:
-            _last_source[name] = "env"
-            return env
-    if keyvault_enabled():
-        if sys.platform != "darwin":
-            print("secret_store: the Key Vault backend is macOS-only; "
-                  "KEYVAULT_URL ignored", file=sys.stderr)
-        else:
-            try:
-                value = _keyvault_get(name)
-            except KeyVaultError as e:
-                print(f"secret_store: {name}: {e}", file=sys.stderr)
-                value = None
-            else:
-                if value is not None:
-                    _last_source[name] = "keyvault"
-                    return value
-                print(f"secret_store: {name}: not in Key Vault",
-                      file=sys.stderr)
-            if not _keyvault_fallback():
-                _last_source[name] = "missing"
-                return None
-            print(f"secret_store: {name}: falling back to the Keychain "
-                  "(KEYVAULT_KEYCHAIN_FALLBACK)", file=sys.stderr)
+# KV-1 (v2.6 assessment): the environment used to win over every stored
+# secret, so one planted line in .env silently replaced a Keychain or Key
+# Vault value. Now the stored value wins, always. The environment still
+# supplies a secret the keystore reports it does not hold, so an install that
+# keeps everything in .env keeps working, but never while Key Vault is on.
+# There is deliberately no override switch: it would be read from the same
+# environment the planted .env fills (review R1).
+
+
+def _vault_active() -> bool:
+    return keyvault_enabled() and sys.platform == "darwin"
+
+
+def _keystore_get(name: str):
     if sys.platform == "darwin":
-        value = _keychain_get(name)
-    elif sys.platform == "win32":
-        value = _dpapi_get(name)
-    else:
-        value = _plainfile_get(name)
-    _last_source[name] = "keystore" if value is not None else "missing"
-    return value
+        return _keychain_get(name)
+    if sys.platform == "win32":
+        return _dpapi_get(name)
+    return _plainfile_get(name)
+
+
+def get_secret(name: str, *, use_env: bool = True) -> str | None:
+    """Resolve a secret by NAME. Azure Key Vault when KEYVAULT_URL is set
+    (macOS), else the platform keystore; the environment only when the
+    keystore reports it holds no such secret, and never while the vault is
+    on. Returns None when nowhere has it. A vault failure is reported on
+    stderr by cause and returns None, unless KEYVAULT_KEYCHAIN_FALLBACK sends
+    it on to the Keychain; a keystore read that fails returns None too.
+    use_env=False never consults the environment."""
+    env = os.environ.get(name, "").strip() if use_env else ""
+    if keyvault_enabled() and sys.platform != "darwin":
+        print("secret_store: the Key Vault backend is macOS-only; "
+              "KEYVAULT_URL ignored", file=sys.stderr)
+    vault = _vault_active()
+    if vault:
+        try:
+            value = _keyvault_get(name)
+        except KeyVaultError as e:
+            print(f"secret_store: {name}: {e}", file=sys.stderr)
+            value = None
+        else:
+            if value is not None:
+                _warn_env_ignored(name, env, value)
+                _last_source[name] = "keyvault"
+                return value
+            print(f"secret_store: {name}: not in Key Vault", file=sys.stderr)
+        if not _keyvault_fallback():
+            _note_env_unused(name, env)
+            _last_source[name] = "missing"
+            return None
+        print(f"secret_store: {name}: falling back to the Keychain "
+              "(KEYVAULT_KEYCHAIN_FALLBACK)", file=sys.stderr)
+    value = _keystore_get(name)
+    if value is READ_FAILED:
+        print(f"secret_store: {name}: the keystore could not be read; not "
+              "falling back to the environment", file=sys.stderr)
+        _last_source[name] = "unavailable"
+        return None
+    if value is not None:
+        _warn_env_ignored(name, env, value)
+        _last_source[name] = "keystore"
+        return value
+    if env and not vault:
+        _last_source[name] = "env"
+        return env
+    if vault:
+        # Fallback mode reaches here: the vault and the Keychain both lack
+        # it. The environment is still not a source while the vault is on.
+        _note_env_unused(name, env)
+    _last_source[name] = "missing"
+    return None
+
+
+def _note_env_unused(name: str, env: str) -> None:
+    if env:
+        print(f"secret_store: {name}: an environment copy exists but is not "
+              "used while Key Vault is on", file=sys.stderr)
+
+
+def _warn_env_ignored(name: str, env: str, stored: str) -> None:
+    """Say so (by name, never value) when an environment copy differs from
+    the stored value it no longer overrides."""
+    if env and env != stored:
+        print(f"secret_store: {name}: ignoring a different value in the "
+              "environment; the stored value wins", file=sys.stderr)
 
 
 def last_source(name: str) -> str | None:
     """Where the last get_secret(name) in this process found it: env,
-    keyvault, keystore or missing. A name, never a value."""
+    keyvault, keystore, unavailable (the keystore read failed) or missing.
+    A name, never a value."""
     return _last_source.get(name)
+
+
+def not_found_hint(name: str) -> str:
+    """What to tell an operator when get_secret(name) returned None: store it,
+    or, when the keystore read itself failed, do NOT store it again (review
+    S2: re-writing to a Keychain that just failed is the one thing never to
+    do after a hang)."""
+    if last_source(name) == "unavailable":
+        return (f"the keystore could not be read, so {name} may well be "
+                "stored; do not store it again. Fix the keystore (the "
+                "secret_store line above says why) and re-run")
+    return f"store it with: python3 secret_store.py set {name}"
 
 
 def set_secret(name: str, value: str) -> bool:
@@ -546,9 +699,9 @@ def _env_file_keys(path: Path) -> dict:
 def _status(names: list[str]) -> int:
     """Report where each secret resolves from. Never prints a value.
 
-    Exit 1 when any is missing, or sits in the environment or .env while the
-    vault is on: an env value always wins, so a stale copy there would
-    silently override the vault."""
+    Exit 1 when any is missing from where it will be read: the keystore or
+    vault, or (vault off) .env. A copy in .env next to a stored value is
+    reported, since it is ignored (KV-1) and only invites confusion."""
     file_keys = _env_file_keys(SECRETS_ENV)
     for key in ("KEYVAULT_URL", "KEYVAULT_TENANT_ID", "KEYVAULT_CLIENT_ID",
                 "KEYVAULT_CERT_THUMBPRINT", "KEYVAULT_KEY_NAME",
@@ -558,22 +711,36 @@ def _status(names: list[str]) -> int:
     if not names:
         names = [os.environ.get("LLM_API_KEY_NAME", "").strip()
                  or "ANTHROPIC_API_KEY", *_STATUS_NAMES]
-    vault = keyvault_enabled()
+    vault = _vault_active()
     print("backend:", "keyvault " + os.environ["KEYVAULT_URL"].strip()
           if vault else "platform keystore")
     if vault and _keyvault_fallback():
         print("note: KEYVAULT_KEYCHAIN_FALLBACK is on (parallel run only)")
     bad = 0
     for name in names:
-        if os.environ.get(name, "").strip() or file_keys.get(name):
-            where = ".env" if file_keys.get(name) else "environment"
-            print(f"{name}: {where}" + ("  <-- overrides Key Vault; remove it"
-                                        if vault else ""))
-            bad += 1 if vault else 0
-            continue
+        copy = ""
+        if file_keys.get(name):
+            copy = ".env"
+        elif os.environ.get(name, "").strip():
+            copy = "environment"
         found = get_secret(name, use_env=False) is not None
-        print(f"{name}: {last_source(name) if found else 'MISSING'}")
-        bad += 0 if found else 1
+        if last_source(name) == "unavailable":
+            print(f"{name}: UNAVAILABLE (the keystore could not be read; "
+                  "jobs get nothing until it can)")
+            bad += 1
+        elif found:
+            print(f"{name}: {last_source(name)}"
+                  + (f"  (a {copy} copy exists and is ignored; remove it)"
+                     if copy else ""))
+        elif copy and not vault:
+            print(f"{name}: {copy} (not in the keystore)")
+        elif copy:
+            print(f"{name}: MISSING from Key Vault (a {copy} copy exists "
+                  "but is not used while the vault is on)")
+            bad += 1
+        else:
+            print(f"{name}: MISSING")
+            bad += 1
     return 1 if bad else 0
 
 

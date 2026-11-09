@@ -181,15 +181,29 @@ def _secret(name: str) -> str:
     DPAPI would be the stronger store, but security_common only exposes
     get_or_create_hmac_key -- a *generated* trust anchor, not a vault for
     externally-issued secrets like an app password. secret_store provides
-    exactly that (env/.env first, then Keychain on macOS / DPAPI on Windows),
-    so route through it; the ImportError fallback keeps a partial deploy of
-    just this file working the way it always did.
+    exactly that (Keychain on macOS / DPAPI on Windows, then env/.env for a
+    name it lacks), so route through it; the ImportError fallback keeps a
+    partial deploy of just this file working the way it always did.
+    Configuration (the mailbox address, the allowlist) goes through _config.
     """
     try:
         from secret_store import get_secret
         return (get_secret(name) or "").strip()
     except ImportError:
         return os.environ.get(name, "").strip()
+
+
+def _not_found_hint(name: str) -> str:
+    try:
+        from secret_store import not_found_hint
+        return not_found_hint(name)
+    except ImportError:
+        return f"store it with: python3 secret_store.py set {name}"
+
+
+def _config(name: str) -> str:
+    """A configuration value from the environment / ~/dev/secrets/.env."""
+    return os.environ.get(name, "").strip()
 
 
 def default_source_media_root() -> Path:
@@ -270,6 +284,13 @@ def _ts_within_window(ts: str) -> tuple[bool, str]:
 
 def verify(fields: dict[str, str], *, key: str) -> tuple[bool, str]:
     """Authenticate a parsed drop. Returns (ok, reason)."""
+    # Every field is hashed or written as UTF-8 below; one that cannot encode
+    # (a lone surrogate) is a bad drop, never an exception (F01).
+    for value in fields.values():
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return False, "field is not valid UTF-8"
     if fields.get("v") != PROTOCOL_VERSION:
         return False, f"unsupported protocol version {fields.get('v')!r}"
     msg_type = fields.get("type", "")
@@ -392,6 +413,9 @@ def _rfc822_size(data) -> int | None:
     return None
 
 
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+
+
 def _collect_parts(msg: Message, content_type: str) -> str:
     """Concatenate parts of the given MIME content type, size-capped."""
     chunks: list[str] = []
@@ -418,7 +442,11 @@ def _collect_parts(msg: Message, content_type: str) -> str:
             chunks.append(payload.decode(charset, errors="replace"))
         except LookupError:
             chunks.append(payload.decode("utf-8", errors="replace"))
-    return "\n".join(chunks)
+    # The sender picks the codec, and some (utf-7, for one) decode to lone
+    # surrogates, which later fail .encode("utf-8") in compute_hmac and
+    # write_drop (F01). Replace them here so every downstream step sees text
+    # that encodes; a genuine drop never contains one, so its HMAC is intact.
+    return _SURROGATE_RE.sub("�", "\n".join(chunks))
 
 
 def plain_text_body(msg: Message) -> str:
@@ -629,7 +657,24 @@ def process_mailbox(*, user: str, password: str, key: str,
                     _retire(conn, num, trash)
                 continue
 
-            ok, reason = verify(fields, key=key)
+            # verify() and the seen-cache lookup still run on an
+            # unauthenticated message, so they sit behind the same guard:
+            # an exception is a rejection, and the drain goes on (F01).
+            try:
+                ok, reason = verify(fields, key=key)
+                digest = fields["hmac"].strip().lower() if ok else ""
+                replay = ok and digest in seen
+            except RunDeadlineExceeded:
+                raise
+            except Exception as exc:  # noqa: BLE001 -- see above
+                log.warning("REJECT message %s: verification raised (%s)",
+                            num.decode(errors="replace")
+                            if isinstance(num, bytes) else num,
+                            type(exc).__name__)
+                rejected += 1
+                if not dry_run:
+                    _retire(conn, num, trash)
+                continue
             if not ok:
                 # Deliberately terse: do not echo payload content from an
                 # unauthenticated message into the log.
@@ -639,8 +684,7 @@ def process_mailbox(*, user: str, password: str, key: str,
                     _retire(conn, num, trash)
                 continue
 
-            digest = fields["hmac"].strip().lower()
-            if digest in seen:
+            if replay:
                 log.warning("REJECT [%s] from %s: replay of an "
                             "already-accepted drop", subject, who)
                 rejected += 1
@@ -770,7 +814,8 @@ def main(argv: list[str] | None = None) -> int:
 
     key = _secret("SOURCE_MAIL_TOKEN")
     if not key:
-        log.error("SOURCE_MAIL_TOKEN is not set (checked keystore and .env)")
+        log.error("SOURCE_MAIL_TOKEN is not set (checked keystore and .env); %s",
+                  _not_found_hint("SOURCE_MAIL_TOKEN"))
         return 1
 
     if args.emit:
@@ -787,16 +832,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"hmac: {compute_hmac(key, msg_type, ts, payload)}")
         return 0
 
-    user = _secret("SOURCE_MAIL_USER")
+    # The mailbox address and the allowlist are configuration, not secrets:
+    # the installer writes them to .env, and they never go to a keystore.
+    # Read them from the environment directly. Through get_secret they
+    # would be asked of Key Vault and, with the vault on, never found
+    # (review R2).
+    user = _config("SOURCE_MAIL_USER")
     password = _secret("SOURCE_MAIL_APP_PASSWORD")
     allowed = [a.strip().lower()
-               for a in _secret("SOURCE_MAIL_ALLOWED_SENDERS").split(",")
+               for a in _config("SOURCE_MAIL_ALLOWED_SENDERS").split(",")
                if a.strip()]
     missing = [n for n, v in (("SOURCE_MAIL_USER", user),
                               ("SOURCE_MAIL_APP_PASSWORD", password),
                               ("SOURCE_MAIL_ALLOWED_SENDERS", allowed)) if not v]
     if missing:
         log.error("missing config: %s", ", ".join(missing))
+        if not password:
+            log.error("SOURCE_MAIL_APP_PASSWORD: %s",
+                      _not_found_hint("SOURCE_MAIL_APP_PASSWORD"))
         return 1
 
     # None means "resolve per drop kind", which keeps the writer and the

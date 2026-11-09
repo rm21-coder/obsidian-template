@@ -434,7 +434,7 @@ How the Windows layer maps onto the macOS original:
 | Runtime state | `~/.local/share/*` | `%LOCALAPPDATA%\*` |
 | State-file permissions | `chmod 0600` | `icacls`: inheritance dropped, owner + `SYSTEM` only (`chmod` alone is a no-op on Windows) |
 | Trust-anchor key | Keychain | DPAPI-encrypted file under `%LOCALAPPDATA%` |
-| Secrets | Keychain via `secret_store.py`; `~/dev/secrets/.env` for config, and an env value wins | DPAPI-encrypted file via `secret_store.py`; `%USERPROFILE%\dev\secrets\.env` for config, and an env value wins |
+| Secrets | Keychain via `secret_store.py`; `~/dev/secrets/.env` for config, and for a secret only when the Keychain does not hold it | DPAPI-encrypted file via `secret_store.py`; `%USERPROFILE%\dev\secrets\.env` for config, and for a secret only when the DPAPI store does not hold it |
 | Interpreter | Homebrew python3 venv | `Templates\Scripts\.venv\Scripts\python.exe` |
 | Working directory | none set (launchd starts jobs in `/`) | `%LOCALAPPDATA%\obsidian-logs`, never the vault: Windows looks up a program started by bare name, and `shutil.which` looks, in the working directory first, so a planted `claude.cmd` or `ffprobe.exe` in `Templates\Scripts` would run. External programs (`ffmpeg`, `ffprobe`, `claude`) are found through `exe_lookup.py`, which searches only absolute `PATH` entries outside the working directory and the vault. Re-run `Register-Tasks.ps1` (any install or update does) to move existing tasks. |
 | Vault link | symlink (`10-vault-bootstrap.sh`) | directory junction (no admin / Developer Mode needed) |

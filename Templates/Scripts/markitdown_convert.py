@@ -66,7 +66,9 @@ def convert_one(md, src_path: str, dest_dir: Path) -> tuple[bool, str]:
         return False, f"not found: {src}"
     if src.is_dir():
         return False, f"skipped folder: {src.name}"
-    refused = archive_limits.refusal(src) or markitdown_bounded.size_refusal(src)
+    refused = (markitdown_bounded.media_refusal(src)
+               or archive_limits.refusal(src)
+               or markitdown_bounded.size_refusal(src))
     if refused:
         return False, f"{src.name}: {refused}"
 

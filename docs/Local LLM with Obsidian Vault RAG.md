@@ -288,7 +288,7 @@ This is the recommended way to use a high-memory second machine: rather than rep
 
 ### Secrets configuration
 
-Read by `obsidian-rag-sync.py` itself. `OPEN_WEBUI_API_KEY` comes from the environment, then the OS keystore, where the installer's secrets step stores it. The others come from `~/dev/secrets/.env`, which the script loads:
+Read by `obsidian-rag-sync.py` itself. `OPEN_WEBUI_API_KEY` comes from the OS keystore, where the installer's secrets step stores it, and from the environment only if the keystore does not hold it. The others come from `~/dev/secrets/.env`, which the script loads:
 
 | Variable | Purpose |
 |---|---|

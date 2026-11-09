@@ -180,6 +180,21 @@ def test_extra_kwargs_reach_the_sdk(fake_anthropic, vault_secrets):
     assert fake_anthropic[0]["max_retries"] == 5
 
 
+def test_an_unreadable_keystore_is_not_reported_as_a_missing_key(
+        monkeypatch, fake_anthropic, vault_secrets):
+    """Review S2: after a failed read the key may well be stored; telling
+    the operator to `set` it sends a write at a Keychain that just failed."""
+    monkeypatch.setenv("LLM_API_KEY_NAME", "EXAMPLE_AI_API_KEY")
+    monkeypatch.setattr(secret_store, "last_source", lambda name: "unavailable")
+    with pytest.raises(llm_endpoint.MissingCredential) as excinfo:
+        llm_endpoint.client()
+    message = str(excinfo.value)
+    assert excinfo.value.unavailable is True
+    assert message.startswith("EXAMPLE_AI_API_KEY: the keystore could not be "
+                              "read, so it may well be stored; do not store it again")
+    assert "secret_store.py set" not in message
+
+
 def test_missing_credential_names_the_key_and_the_fix(monkeypatch,
                                                       fake_anthropic,
                                                       vault_secrets):
