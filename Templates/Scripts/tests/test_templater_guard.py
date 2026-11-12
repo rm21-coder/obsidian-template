@@ -83,7 +83,7 @@ WRITERS = {
         "path.write_text(templater_guard.neutralize(content), encoding='utf-8')",
     ],
     "youtube_summarize.py": ['templater_guard.neutralize(frontmatter + "\\n" + body)'],
-    "podcast_transcribe.py": ['templater_guard.neutralize("\\n".join(lines) + "\\n")'],
+    "podcast_transcribe.py": ["templater_guard.neutralize(text)"],
     "voice_cleanup.py": ["templater_guard.neutralize(note_content)"],
     "markitdown_convert.py": ["templater_guard.neutralize(body)"],
     "markitdown_dropper.py": ["templater_guard.neutralize(body)"],
@@ -96,7 +96,7 @@ WRITERS = {
         'REPORT_FILE.write_text(templater_guard.neutralize("\\n".join(lines) + "\\n"),',
     ],
     "meeting_group_backfill.py": ["text = templater_guard.neutralize('\\n'.join(out))"],
-    "obsidian-rag-sync.py": ['templater_guard.neutralize("\\n".join(lines))'],
+    "obsidian-rag-sync.py": ["templater_guard.neutralize(report)"],
 }
 
 

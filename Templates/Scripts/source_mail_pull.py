@@ -591,7 +591,10 @@ def process_mailbox(*, user: str, password: str, key: str,
                              ssl_context=_imap_tls_context())
     try:
         conn.login(user, password)
-        conn.select("INBOX")
+        # A dry run opens the mailbox read-only (EXAMINE). Selected read-write,
+        # the RFC822 fetch below sets \Seen on a real server, so a dry run
+        # consumed the drops it promised to leave unread (N1).
+        conn.select("INBOX", readonly=dry_run)
         trash = None if dry_run else _trash_folder(conn)
         status, data = conn.search(None, "UNSEEN")
         if status != "OK":
@@ -814,7 +817,7 @@ def main(argv: list[str] | None = None) -> int:
 
     key = _secret("SOURCE_MAIL_TOKEN")
     if not key:
-        log.error("SOURCE_MAIL_TOKEN is not set (checked keystore and .env); %s",
+        log.error("SOURCE_MAIL_TOKEN is not available; %s",
                   _not_found_hint("SOURCE_MAIL_TOKEN"))
         return 1
 

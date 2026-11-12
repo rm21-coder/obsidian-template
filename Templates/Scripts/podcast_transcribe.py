@@ -59,6 +59,7 @@ import re
 import subprocess
 import sys
 import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+import output_sanitizer  # noqa: E402  -- nor load anything when the note opens
 
 import tempfile
 import time
@@ -708,8 +709,11 @@ def write_transcript_md(*, out_dir: Path, title: str, source_url: str,
         # Fall back to raw "text"
         lines.append((result.get("text") or "").strip())
 
-    return _write_new(out_dir, safe_filename(title),
-                      templater_guard.neutralize("\n".join(lines) + "\n"))
+    # The transcript is a publisher's audio, transcribed: nothing in it may
+    # load or act when the note opens (F13). The frontmatter goes through too;
+    # its values are YAML-quoted, so only an opener in one changes.
+    text, _counts = output_sanitizer.sanitize_report("\n".join(lines) + "\n")
+    return _write_new(out_dir, safe_filename(title), templater_guard.neutralize(text))
 
 
 # ---------- Main ------------------------------------------------------------

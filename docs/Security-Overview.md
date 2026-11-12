@@ -183,10 +183,25 @@ LaunchAgent runs with umask 077 and keeps Python bytecode out of the vault
 
 `output_sanitizer.sanitize_report()` runs first wherever outside text could
 load or act when a note opens: the weekly and monthly reports, drift-review
-task lines, converted documents, and the unmatched-meeting digest. It inserts
-a zero-width space into every remote-image opener, HTML tag opener, non-http(s)
-link scheme (entity and escape spellings included) and Mermaid block,
-everywhere including code. It parses no markdown.
+task lines, converted documents, the unmatched-meeting digest, YouTube
+summaries, podcast transcripts, email tasks, the tagger's promotion log, the
+RAG sync report, and the lines `vault_lint --fix-links` rewrites (which leaves
+a link in place rather than unlink it into a live tag). It inserts a
+zero-width space into every remote-image opener, HTML tag opener (including
+`<` before a wikilink), non-http(s) link scheme (entity and escape spellings
+included, and a scheme whose colon is followed directly by a web URL, such as
+`ms-word:https://...`) and Mermaid block, everywhere including code. It parses
+no markdown.
+
+A converted document or a YouTube summary cannot plant a task: every
+`#task` in it, however it is glued to the text around it, is broken the same
+way, so no line carries the string the Tasks plugin and the dashboard look
+for. The dashboard also marks any task it finds in a note converted before
+that change ("[from a converted document]"). One limit: a `#task` line in a
+web clip saved by Obsidian's own clipper is not marked, because the user's
+own tasks live in that folder too. The note is named from the
+document's file name with markdown and HTML characters, and any leading dot,
+removed.
 
 `templater_guard.neutralize()` is applied by every script that writes text
 from outside the vault into a note: meeting pre-population, clipping cleanup,

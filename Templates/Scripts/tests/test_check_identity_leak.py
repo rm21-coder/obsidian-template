@@ -350,10 +350,13 @@ class TestStalenessWarning:
 class TestRepoIsClean:
     """The gate must pass on the committed tree, or it gets bypassed."""
 
-    def test_committed_tree_has_no_real_addresses(self, allow_subprocess: None) -> None:
-        """Runs the real scanner with its real allow-list over tracked files.
-        No deny-list is involved: that is machine-local, and this assertion has
-        to hold in any clone."""
+    def test_working_tree_has_no_real_addresses(self, allow_subprocess: None) -> None:
+        """Runs the real scanner (`--worktree`) with its real allow-list over
+        the working tree: tracked files AND untracked ones git does not
+        ignore, as the gate itself does. It was named "committed tree", which
+        hid that (W4, 2026-11-12): an untracked folder of private notes in a
+        vault fails it, and the fix is to ignore that folder, not this test.
+        Where a machine-local deny-list exists, it applies too."""
         repo_root = SCANNER.parent.parent.parent
         r = subprocess.run(
             (sys.executable, str(SCANNER), "--worktree", "--quiet"),

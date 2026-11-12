@@ -29,19 +29,74 @@ LIVE_TAG = re.compile(r"<[A-Za-z/!?]")
 _ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 
 
+_SCHEME_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-")
+_ASCII_WS = " \t\r\n\f\v"
+# Where a web URL ends, as a renderer would cut a bare URL. Written out here,
+# not taken from the module: review F11 found the oracle had copied the
+# sanitizer's own URL regex, so both missed the same cases.
+_URL_STOP = set("<>\"'`()[]|")          # and any whitespace: see _web_spans
+_COLONS = (":", "&colon;", "\\:")
+
+
+def _colon_at(t, i):
+    """Length of a colon spelling at t[i], or 0."""
+    for c in _COLONS:
+        if t.startswith(c, i):
+            return len(c)
+    if t.startswith("&#", i):
+        j = i + 2
+        hexa = j < len(t) and t[j] in "xX"
+        j += 1 if hexa else 0
+        k = j
+        while k < len(t) and (t[k] in "0123456789abcdefABCDEF" if hexa else t[k].isdigit()):
+            k += 1
+        digits = t[j:k]
+        if digits and int(digits, 16 if hexa else 10) == 58:
+            return k - i + (1 if k < len(t) and t[k] == ";" else 0)
+    return 0
+
+
+def _web_spans(t):
+    """(start, end) of each bare http(s) URL: it starts only where no scheme
+    character precedes it, and runs to the first stop character."""
+    spans, i, low = [], 0, t.lower()
+    while True:
+        a = min([x for x in (low.find("http://", i), low.find("https://", i)) if x >= 0],
+                default=-1)
+        if a < 0:
+            return spans
+        if a > 0 and t[a - 1] in _SCHEME_CHARS:
+            i = a + 1
+            continue
+        b = a
+        while b < len(t) and t[b] not in _URL_STOP and not t[b].isspace():
+            b += 1
+        spans.append((a, b))
+        i = b
+
+
 def _schemes_in(t):
-    outside = re.sub(r"https?://[^\s<>\"'`()\[\]]*", " ", t, flags=re.I)
-    found = re.findall(r"(?<![A-Za-z0-9+.\-])([A-Za-z][A-Za-z0-9+.\-]*)"
-                       r"(?::|&#0*58;?|&#[xX]0*3[aA];?|&colon;|\\:)"
-                       r"(?!\*+(?:[ \t\r\n\f\v]|$))([^ \t\r\n\f\v])", outside)
-    live = []
-    for name, nxt in found:
-        n = name.lower()
-        if n in ("http", "https"):
+    web = _web_spans(t)
+    live, i = [], 0
+    while i < len(t):
+        if not t[i].isalpha() or (i > 0 and t[i - 1] in _SCHEME_CHARS):
+            i += 1
             continue
-        if nxt in "0123456789" and n not in o._ALWAYS_DEFUSE and not n.startswith("ms-"):
-            continue
-        live.append(name)
+        j = i
+        while j < len(t) and t[j] in _SCHEME_CHARS:
+            j += 1
+        n = _colon_at(t, j)
+        if n and j + n < len(t) and not any(a <= i < b for a, b in web):
+            nxt, rest = t[j + n], t[j + n:]
+            bold_end = rest.lstrip("*") != rest and (
+                rest.lstrip("*") == "" or rest.lstrip("*")[0] in _ASCII_WS)
+            name = t[i:j].lower()
+            digit_ok = nxt.isdigit() and name not in o._ALWAYS_DEFUSE \
+                and not name.startswith("ms-")
+            if nxt not in _ASCII_WS and not bold_end and not digit_ok \
+                    and name not in ("http", "https"):
+                live.append(t[i:j])
+        i = j
     return live
 
 
@@ -91,6 +146,11 @@ ATTACKS = [
     "[x](obsidian:\u00a0//open?vault=v)", "[x](ms-word:\u2003ofe|u|https://e.example/a.docx)",
     "[x](obsidian:*//open)", "[x](ms-word:*ofe|u|https://e.example/a)",
     "[x](javascript:1;alert(1))", "[x](obsidian:1)", "[x](ms-word:1)",
+    # F11: a scheme whose colon is followed by a web URL, one that ends in
+    # "https", and one in the next table cell
+    "[x](ms-word:https://e.example/a)", "[x](onenote:https://e.example/a)",
+    "[x](ms-word&#58;https://e.example/a)", "x-safari-https://e.example",
+    "|https://a.example/x|obsidian://open|", "a ms-excel:https://e.example/b.xlsx z",
 ]
 
 # F-20261020 work-D/repro_weekly.py: every case it showed passing unchanged.
@@ -122,6 +182,39 @@ def test_every_known_attack_is_inert():
         t, c = S(case)
         assert inert(t), (case, t)
         assert sum(c.values()) >= 1, case
+
+
+def test_the_oracle_flags_the_f11_forms_before_cleaning():
+    """The oracle must see these on its own, not only after the module has
+    (or has not) acted: otherwise it shares the module's blind spot."""
+    for case in ("[x](ms-word:https://e.example/a)", "[x](onenote:https://e.example/a)",
+                 "[x](ms-word&#58;https://e.example/a)", "x-safari-https://e.example",
+                 "|https://a.example/x|obsidian://open|"):
+        assert live_schemes(case), case
+
+
+@pytest.mark.parametrize("case,expect", [
+    ("[x](ms-word:https://e.example/a)", "[x](ms-word" + Z + ":https://e.example/a)"),
+    ("[x](onenote:https://e.example/a)", "[x](onenote" + Z + ":https://e.example/a)"),
+    ("[x](ms-word&#58;https://e.example/a)", "[x](ms-word" + Z + "&#58;https://e.example/a)"),
+    ("x-safari-https://e.example", "x-safari-https" + Z + "://e.example"),
+    ("|https://a.example/x|obsidian://open|", "|https://a.example/x|obsidian" + Z + "://open|"),
+])
+def test_f11_the_space_lands_after_the_scheme(case, expect):
+    assert S(case)[0] == expect
+
+
+def test_f11_web_citations_still_whole():
+    src = "[a](https://e.example/x?u=obsidian://y) | https://e.example/b | ok"
+    assert S(src) == (src, {"images": 0, "html": 0, "schemes": 0, "diagrams": 0})
+
+
+def test_f16_a_tag_opener_before_a_wikilink_is_defused():
+    """A tool that later unlinks [[x|alias]] (vault_lint --fix-links) would
+    otherwise turn "<[[x|img src=y]]>" into a live <img> tag."""
+    t, c = S('<[[zq7x|img src="https://example.invalid/b.png"]]>')
+    assert t.startswith("<" + Z + "[[") and c["html"] == 1
+    assert S("![[x|img]]")[0].startswith("!" + Z)
 
 
 def test_old_code_spans_no_longer_shield():
@@ -222,6 +315,13 @@ SANITIZED_WRITERS = {
     "Templates/Scripts/meeting_group_backfill.py": "sanitize_report(subject)",
     "Templates/Scripts/markitdown_convert.py": "output_sanitizer.sanitize_keeping_embeds(",
     "Templates/Scripts/markitdown_dropper.py": "output_sanitizer.sanitize_keeping_embeds(",
+    # v2.6 assessment WP4 (2026-11-12)
+    "Templates/Scripts/youtube_summarize.py": "output_sanitizer.sanitize_report(body)",
+    "Templates/Scripts/podcast_transcribe.py": "output_sanitizer.sanitize_report(",
+    "Templates/Scripts/tag_clippings.py": "output_sanitizer.sanitize_report(",
+    "Templates/Scripts/obsidian-rag-sync.py": "output_sanitizer.sanitize_report(",
+    "Templates/Scripts/vault_lint.py": "output_sanitizer.sanitize_report(",
+    "Templates/Scripts/email_task_transform.py": "output_sanitizer.sanitize_report(",
 }
 
 
@@ -229,3 +329,43 @@ SANITIZED_WRITERS = {
 def test_writer_sanitizes(path):
     src = (_ROOT / path).read_text(encoding="utf-8")
     assert SANITIZED_WRITERS[path] in src, path
+
+
+def test_f11_the_left_boundary_is_pinned():
+    """Review B10: without the look-behind, "x-safari-https://" would start a
+    web URL whose span then shelters the obsidian: link after it."""
+    t, _ = S("x-safari-https://e.example/a?u=obsidian://y")
+    assert "obsidian" + Z in t and "https" + Z in t
+
+
+def test_a_unicode_space_ends_a_url_for_the_oracle_too():
+    t = "https://e.example/a\u2003obsidian://open"
+    assert live_schemes(t) and inert(S(t)[0])
+
+
+def test_b1_the_scheme_pass_is_linear():
+    """Review B1: many URLs and many scheme-shaped tokens cost their product
+    (200 KB took 25 s). Generous bounds: a quadratic pass is far past them."""
+    import time
+    for text in ("http://a x:y " * 16000, "obsidia&#110;:y " * 16000):
+        start = time.perf_counter()
+        S(text)
+        assert time.perf_counter() - start < 2.0, len(text)
+
+
+@pytest.mark.parametrize("text", ["(#task)", "x#task", ",#task", "\\#task", "-->#task",
+                                  "#tasks", "#TASK", "- [ ] Wire $9,800 today (#task)"])
+def test_b3_task_is_broken_wherever_it_appears(text):
+    t, n = o.defuse_task_tags(text)
+    assert "#task" not in t.lower() and n == 1
+
+
+@pytest.mark.parametrize("stem", ["con#", "NUL!", "aux&", "COM1?", "lpt9", "prn.txt"])
+def test_b7_no_windows_device_name(stem):
+    out = o.safe_note_stem(stem)
+    assert out.split(".")[0].strip().lower() not in o._WINDOWS_RESERVED, out
+
+
+def test_b7_ordinary_names_untouched():
+    assert o.safe_note_stem("console") == "console"
+    assert o.safe_note_stem("Comms plan") == "Comms plan"

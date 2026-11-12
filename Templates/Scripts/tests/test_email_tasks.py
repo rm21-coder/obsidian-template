@@ -444,7 +444,8 @@ class TestFlagged:
 
     @pytest.mark.parametrize("item", [
         {"message_id": "https://evil.example", "sender_address": "eve@example.edu"},
-        {"message_id": "mail:///messages/X", "sender_address": "nope"},
+        # A sender that is not an address is no longer a reason to drop the
+        # warning (review C3): test_c3_... in test_writers_sanitize.py.
         {"message_id": "mail:///messages/X", "sender_address": "ada@example.edu"},
         "not an object",
     ])

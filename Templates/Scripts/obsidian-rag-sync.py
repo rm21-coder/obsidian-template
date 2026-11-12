@@ -130,6 +130,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import classification_tier  # noqa: E402
 import script_lock  # noqa: E402
 import templater_guard  # noqa: E402
+import output_sanitizer  # noqa: E402
 
 try:
     from dotenv import load_dotenv
@@ -197,6 +198,10 @@ def is_excluded_path(rel: Path) -> bool:
     notes. EXCLUDE_ROOT_DIRS / EXCLUDE_ROOT_FILES match only at the root."""
     folders = rel.parts[:-1]
     if any(part in EXCLUDE_DIRS or part.startswith(".") for part in folders):
+        return True
+    # A note whose own name starts with a dot is hidden in Obsidian: never
+    # one the user can see they are indexing (F37, review B4).
+    if rel.name.startswith("."):
         return True
     if folders and folders[0] in EXCLUDE_ROOT_DIRS:
         return True
@@ -808,9 +813,11 @@ def write_run_report(start_time: datetime, summary: dict, dry_run: bool) -> Path
         lines.append(f"- Completed: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append("")
 
-        # Server errors and file names are echoed here; keep a "<%" in one
-        # from running as Templater code in reading view.
-        target.write_text(templater_guard.neutralize("\n".join(lines)), encoding="utf-8")
+        # Server errors and file names are echoed here, and a file name can
+        # come from an outside document: nothing in one may load or act when
+        # the report opens (F15), nor run as Templater code.
+        report, _counts = output_sanitizer.sanitize_report("\n".join(lines))
+        target.write_text(templater_guard.neutralize(report), encoding="utf-8")
         log.info(f"run report written to {target.relative_to(VAULT_PATH)}")
         return target
     except Exception as exc:
@@ -836,8 +843,7 @@ def main() -> int:
             hint = not_found_hint("OPEN_WEBUI_API_KEY")
         except ImportError:
             hint = "store it with: python3 secret_store.py set OPEN_WEBUI_API_KEY"
-        log.error("OPEN_WEBUI_API_KEY not found in the environment or the "
-                  "keystore; %s", hint)
+        log.error("OPEN_WEBUI_API_KEY is not available; %s", hint)
         return 1
     if not COLLECTION_ID:
         log.error("OBSIDIAN_COLLECTION_ID env var not set")

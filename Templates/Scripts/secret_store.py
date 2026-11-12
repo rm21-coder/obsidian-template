@@ -571,12 +571,14 @@ def get_secret(name: str, *, use_env: bool = True) -> str | None:
         print("secret_store: the Key Vault backend is macOS-only; "
               "KEYVAULT_URL ignored", file=sys.stderr)
     vault = _vault_active()
+    vault_failed = False
     if vault:
         try:
             value = _keyvault_get(name)
         except KeyVaultError as e:
             print(f"secret_store: {name}: {e}", file=sys.stderr)
             value = None
+            vault_failed = True
         else:
             if value is not None:
                 _warn_env_ignored(name, env, value)
@@ -585,7 +587,10 @@ def get_secret(name: str, *, use_env: bool = True) -> str | None:
             print(f"secret_store: {name}: not in Key Vault", file=sys.stderr)
         if not _keyvault_fallback():
             _note_env_unused(name, env)
-            _last_source[name] = "missing"
+            # T1: a vault that could not be asked (off VPN, firewall, sign-in,
+            # an unreadable certificate key) is not a missing secret, and
+            # storing it again is never the fix.
+            _last_source[name] = "vault-error" if vault_failed else "missing"
             return None
         print(f"secret_store: {name}: falling back to the Keychain "
               "(KEYVAULT_KEYCHAIN_FALLBACK)", file=sys.stderr)
@@ -605,7 +610,10 @@ def get_secret(name: str, *, use_env: bool = True) -> str | None:
     if vault:
         # Fallback mode reaches here: the vault and the Keychain both lack
         # it. The environment is still not a source while the vault is on.
+        # A vault that could not be asked stays the reason (review B8).
         _note_env_unused(name, env)
+        _last_source[name] = "vault-error" if vault_failed else "missing"
+        return None
     _last_source[name] = "missing"
     return None
 
@@ -626,8 +634,8 @@ def _warn_env_ignored(name: str, env: str, stored: str) -> None:
 
 def last_source(name: str) -> str | None:
     """Where the last get_secret(name) in this process found it: env,
-    keyvault, keystore, unavailable (the keystore read failed) or missing.
-    A name, never a value."""
+    keyvault, keystore, unavailable (the keystore read failed), vault-error
+    (Key Vault could not be asked) or missing. A name, never a value."""
     return _last_source.get(name)
 
 
@@ -640,6 +648,10 @@ def not_found_hint(name: str) -> str:
         return (f"the keystore could not be read, so {name} may well be "
                 "stored; do not store it again. Fix the keystore (the "
                 "secret_store line above says why) and re-run")
+    if last_source(name) == "vault-error":
+        return (f"Key Vault could not be asked, so {name} may well be "
+                "stored there; nothing to store. The secret_store line above "
+                "says why (off VPN, the vault firewall, or the sign-in)")
     return f"store it with: python3 secret_store.py set {name}"
 
 
@@ -727,6 +739,10 @@ def _status(names: list[str]) -> int:
         if last_source(name) == "unavailable":
             print(f"{name}: UNAVAILABLE (the keystore could not be read; "
                   "jobs get nothing until it can)")
+            bad += 1
+        elif last_source(name) == "vault-error":
+            print(f"{name}: UNAVAILABLE (Key Vault could not be asked; the "
+                  "line above says why)")
             bad += 1
         elif found:
             print(f"{name}: {last_source(name)}"

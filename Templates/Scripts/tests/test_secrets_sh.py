@@ -115,8 +115,8 @@ def test_mail_component_keeps_its_secrets_out_of_dotenv() -> None:
     assert "env_set SOURCE_MAIL_TOKEN" not in src
     assert "env_set SOURCE_MAIL_APP_PASSWORD" not in src
     assert 'keystore_set SOURCE_MAIL_TOKEN "$TOKEN"' in src
-    assert "keystore_has SOURCE_MAIL_TOKEN" in src
-    assert src.index("migrate_env_secret SOURCE_MAIL_TOKEN") < src.index("keystore_has SOURCE_MAIL_TOKEN")
+    assert "keystore_plan SOURCE_MAIL_TOKEN" in src
+    assert src.index("migrate_env_secret SOURCE_MAIL_TOKEN") < src.index("keystore_plan SOURCE_MAIL_TOKEN")
     assert "migrate_env_secret SOURCE_MAIL_APP_PASSWORD" in src
     # Telling the operator to grep .env for the token would print it from a
     # file it no longer lives in.
@@ -168,16 +168,54 @@ def test_prompt_neither_prompts_nor_writes_when_unreadable(tmp_path, allow_subpr
                        'FORCE=1; prompt_env_secret K1 "desc" "https://example.invalid" < /dev/null',
                        "", kc={"k1": "stored"}, find_rc=36)
     assert kc == {"k1": "stored"} and env == ""
-    assert "the Keychain could not be read; not prompting or" in out
+    assert "the Keychain could not be read; not prompting," in out
 
 
 def test_the_token_step_does_not_generate_when_unreadable() -> None:
     """Generating a token over an unreadable Keychain orphans the one the
-    phone holds. The branch must come before the generator."""
+    phone holds. The skip must come before the generator."""
     src = COMPONENT.read_text(encoding="utf-8")
-    assert 'keystore_has SOURCE_MAIL_TOKEN && token_rc=0 || token_rc=$?' in src
-    assert src.index('[[ "$token_rc" -eq 2 ]]') < src.index("secrets.choice")
-    assert "not generating a" in src
+    assert "keystore_plan SOURCE_MAIL_TOKEN" in src
+    assert src.index('[[ "$KEYSTORE_PLAN" == skip ]]') < src.index("secrets.choice")
+    assert "not generating a new token" in src
+
+
+@macos_shell
+@pytest.mark.parametrize("find_rc,kc,force,want", [
+    (None, {"source_mail_token": "t"}, 0, "keep"),
+    (None, {"source_mail_token": "t"}, 1, "create"),
+    (None, {}, 0, "create"),
+    (36, {"source_mail_token": "t"}, 0, "skip"),
+    (36, {"source_mail_token": "t"}, 1, "skip"),      # --force never overrides
+    (142, {}, 1, "skip"),
+])
+def test_keystore_plan_is_what_the_token_step_acts_on(tmp_path, allow_subprocess,
+                                                      find_rc, kc, force, want):
+    """T3: the token step's decision, run (not read from the source). Only
+    "create" leads to a new token; the component branches on this value."""
+    out, _, store = run(tmp_path, f'FORCE={force}; keystore_plan SOURCE_MAIL_TOKEN; '
+                        'echo "PLAN=$KEYSTORE_PLAN"', kc=kc, find_rc=find_rc)
+    assert f"PLAN={want}" in out
+    assert store == kc
+
+
+@macos_shell
+def test_a_hang_inside_keystore_has_is_explained_and_names_the_way_out(
+        tmp_path, allow_subprocess):
+    """T2: _keychain_state sent the latch's explanation to /dev/null, and the
+    old text said secrets "fall back to .env", which no longer happens."""
+    script = r'''
+info() { echo "INFO: $*"; }
+_security() { _keychain_latch "find-generic-password (10s)"; return 142; }
+keystore_plan K1; keystore_plan K2
+'''
+    out, env, kc = run(tmp_path, script, "K2=v\n")
+    assert "ERR:   Keychain call timed out: the Keychain read of k1" in out
+    assert "every later secret is skipped" in out
+    assert "secret_store.py rm <NAME>" in out
+    assert "fall back" not in out
+    assert "K2: skipped; the Keychain is not answering this run" in out
+    assert env == "K2=v\n" and kc == {}
 
 
 @macos_shell
@@ -206,3 +244,23 @@ _secret_store_set K1 sk-the-value && echo SET || echo NOTSET
     assert "NOTSET" in p.stdout, p.stdout + p.stderr
     assert "WARN:   secret_store: K1: value cannot be written safely" in p.stdout
     assert "sk-" not in p.stdout + p.stderr
+
+
+@macos_shell
+@pytest.mark.parametrize("env_lines,kc,find_rc,want", [
+    ("", {"k1": "v"}, None, "OK:   K1 resolves (Keychain, or .env where the Keychain lacks it)"),
+    ("K1=v\n", {}, None, "OK:   K1 resolves"),
+    ("", {}, None, "WARN:   K1 not resolvable"),
+    ("K1=v\n", {"k1": "v"}, 36, "WARN:   K1: the Keychain could not be read, so the scheduled"),
+    ("KEYVAULT_URL=https://x.vault.azure.net/\n", {}, 36, "INFO:   Key Vault is on: check K1 with"),
+    ("# KEYVAULT_URL=https://x.vault.azure.net/\n", {"k1": "v"}, None, "OK:   K1 resolves"),
+])
+def test_verify_reports_each_resolution_state(tmp_path, allow_subprocess,
+                                              env_lines, kc, find_rc, want):
+    """T3: 90-verify's key report, every branch run, including that the vault
+    case never reads the Keychain (find_rc 36 would say "could not be read")."""
+    out, _, _ = run(tmp_path, 'info() { echo "INFO: $*"; }; report_key_resolution K1 /s',
+                    env_lines, kc=kc, find_rc=find_rc)
+    assert want in out, out
+    if "Key Vault" in want:
+        assert "could not be read" not in out

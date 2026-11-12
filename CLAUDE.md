@@ -163,7 +163,7 @@ One entry point, `installers/lib/security-checks.sh`:
 
 ```bash
 installers/lib/security-checks.sh            # --full, every pass
-installers/lib/security-checks.sh --changed  # only what the diff implicates
+installers/lib/security-checks.sh --changed  # only what the diff implicates (exit 3 on a clean tree)
 installers/lib/security-checks.sh --fast     # secrets + shell + hooks, ~1.5s
 installers/lib/security-checks.sh --dast     # the dynamic checks alone
 ```

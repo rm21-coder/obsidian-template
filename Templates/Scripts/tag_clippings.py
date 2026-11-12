@@ -30,6 +30,7 @@ from __future__ import annotations
 import os
 import sys
 import templater_guard  # noqa: E402
+import output_sanitizer  # noqa: E402
 import classification_tier  # noqa: E402
 from tag_glosses import entity_supported  # noqa: E402
 
@@ -321,11 +322,15 @@ def log_promotion_candidate(tag: str, source_file: Path):
             encoding="utf-8",
         )
     # The tag is model output about a clipped page, and the file name is the
-    # page's title: neither may break the table or run as Templater code.
-    safe_tag = str(tag).replace("`", "'").replace("|", "/").replace("\n", " ")
-    safe_name = source_file.name.replace("|", "/").replace("\n", " ")
-    line = templater_guard.neutralize(
-        f"| {datetime.now().strftime('%Y-%m-%d %H:%M')} | {safe_name} | `{safe_tag}` |\n")
+    # page's title: neither may break the table, load anything when the note
+    # opens, or run as Templater code. str.split() drops every line break
+    # (CR, LF, U+2028, U+2029, U+0085 ...), which a CR once slipped through
+    # (F14); then the row goes through the shared sanitizer.
+    safe_tag = " ".join(str(tag).split()).replace("`", "'").replace("|", "/")
+    safe_name = " ".join(source_file.name.split()).replace("|", "/").replace("`", "'")
+    row, _counts = output_sanitizer.sanitize_report(
+        f"| {datetime.now().strftime('%Y-%m-%d %H:%M')} | {safe_name} | `{safe_tag}` |")
+    line = templater_guard.neutralize(row + "\n")
     with PROMOTION_CANDIDATES_FILE.open("a", encoding="utf-8") as f:
         f.write(line)
 
@@ -724,7 +729,11 @@ def main():
         files_to_process = []
         for folder in WATCH_FOLDERS:
             if folder.exists():
-                files_to_process.extend(sorted(folder.rglob("*.md")))
+                # Not hidden notes: a dot-named file is invisible in
+                # Obsidian, so tagging it is work on a note nobody sees
+                # (F37, review B4).
+                files_to_process.extend(sorted(
+                    p for p in folder.rglob("*.md") if not p.name.startswith(".")))
             else:
                 print(f"   Folder not found (will be watched when created): {folder.name}")
 

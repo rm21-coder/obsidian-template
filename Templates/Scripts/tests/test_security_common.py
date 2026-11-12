@@ -248,7 +248,7 @@ class TestDpapiFailurePathAnyPlatform:
         assert key_path.read_bytes() == b"blob from another profile"
         err = capsys.readouterr().err
         assert "could not be decrypted (OSError); not creating a new key" in err
-        assert "delete that file and re-adopt the plugin allowlist" in err
+        assert "delete that file, then re-sign the plugin allowlist with plugin_integrity_check.py --update" in err
 
     def test_a_decrypted_short_key_is_still_replaced(self, monkeypatch,
                                                      tmp_path) -> None:
@@ -709,7 +709,8 @@ class TestInstallControls:
             (src / rel).write_bytes((SCRIPTS / rel).read_bytes())
         return src
 
-    def test_it_copies_each_control_owner_only_and_drops_old_bytecode(self, tmp_path) -> None:
+    def test_it_copies_each_control_owner_only_and_drops_old_bytecode(
+            self, tmp_path, allow_subprocess) -> None:  # W1: icacls on Windows
         src, dest = self._src(tmp_path), tmp_path / "state" / "bin"
         (dest / "__pycache__").mkdir(parents=True)
         (dest / "__pycache__" / "security_common.cpython-39.pyc").write_bytes(b"stale")
@@ -772,7 +773,7 @@ class TestInstallControls:
         assert sc._cli(["install-controls", str(tmp_path / "nowhere"), str(tmp_path / "bin")]) == 1
         assert "[install-controls] FAILED:" in capsys.readouterr().err
 
-    def test_the_cli_installs(self, tmp_path, capsys) -> None:
+    def test_the_cli_installs(self, tmp_path, capsys, allow_subprocess) -> None:  # W1: icacls on Windows
         src = self._src(tmp_path)
         assert sc._cli(["install-controls", str(src), str(tmp_path / "bin")]) == 0
         assert "installed 3 files into" in capsys.readouterr().out or sys.platform == "win32"

@@ -388,7 +388,10 @@ class _FakeIMAP:
         return self
 
     def login(self, user, password): return "OK", []
-    def select(self, box): return "OK", []
+
+    def select(self, box, readonly=False):
+        self.readonly = readonly
+        return "OK", []
 
     def search(self, charset, criterion):
         ids = b" ".join(str(i + 1).encode() for i in range(len(self._raw)))
@@ -570,9 +573,9 @@ class TestUnreadableKeystoreMessages:
 
     def test_token(self, monkeypatch, tmp_path, caplog) -> None:
         assert self._main(monkeypatch, tmp_path, caplog, {}) == 1
-        assert ("SOURCE_MAIL_TOKEN is not set (checked keystore and .env); the "
-                "keystore could not be read, so SOURCE_MAIL_TOKEN may well be "
-                "stored; do not store it again") in caplog.text
+        assert ("SOURCE_MAIL_TOKEN is not available; the keystore could not be "
+                "read, so SOURCE_MAIL_TOKEN may well be stored; do not store it "
+                "again") in caplog.text
 
     def test_app_password(self, monkeypatch, tmp_path, caplog) -> None:
         assert self._main(monkeypatch, tmp_path, caplog,
@@ -658,6 +661,20 @@ class TestReplaySeenCache:
             allowed=["phone@example.com"], root=tmp_path, dry_run=True)
         assert (a, r) == (1, 0)
         assert not (tmp_path / smp.SEEN_CACHE_NAME).exists()
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_a_dry_run_opens_the_mailbox_read_only(
+            self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, dry_run) -> None:
+        """N1: selected read-write, the RFC822 fetch sets \\Seen on a real
+        server, so a dry run consumed the drops it said it left unread."""
+        fake = _FakeIMAP([_raw_drop(_signed())])
+        monkeypatch.setattr(smp.imaplib, "IMAP4_SSL", fake)
+        smp.process_mailbox(user="u", password="p", key=KEY,
+                            allowed=["phone@example.com"], root=tmp_path,
+                            dry_run=dry_run)
+        assert fake.readonly is dry_run
+        if dry_run:
+            assert fake.stored == []
 
     def test_replay_rejected_with_the_default_root(
             self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

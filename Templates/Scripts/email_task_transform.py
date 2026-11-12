@@ -21,9 +21,11 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import re
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import output_sanitizer
 import templater_guard
 
 KINDS = ("approval", "request", "team_ask")
@@ -46,7 +48,19 @@ _SCHEME_RE = re.compile(
     r"\S*://\S*|\b(?:mailto|tel|sms|obsidian|file|javascript|vbscript|data|"
     r"ms-[a-z]+):\S*", re.I)
 _SPACE_RE = re.compile(r"\s+")
-_ADDRESS_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# A conservative dot-atom address (F25): the address is shown in the note
+# when no display name survives cleaning, so it may hold nothing markdown,
+# HTML or a link could act on. The apostrophe stays (o'brien@...); "%" does
+# not, since "%%" opens an Obsidian comment.
+_ADDRESS_RE = re.compile(
+    r"^[a-z0-9_+'\-]+(?:\.[a-z0-9_+'\-]+)*@[a-z0-9\-]+(?:\.[a-z0-9\-]+)*\.[a-z]{2,}$")
+# Anything address-shaped. A real sender can use "&", "=", "/", "~" or a
+# non-ASCII address, which the pattern above refuses: such an item is kept
+# under a fixed name rather than dropped (review B2), because dropping it
+# let the sender decide whether the "tried to instruct the assistant"
+# warning appeared, and lost real requests silently on every run.
+_ADDRESS_SHAPE_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+UNSHOWN_SENDER = "a sender whose address cannot be shown"
 _FM_LINE_RE = re.compile(r"^([A-Za-z][A-Za-z0-9 _-]*):[ \t]*(.*)$")
 
 PRIORITY_MARK = {"high": "⏫", "medium": "\U0001f53c"}
@@ -67,6 +81,28 @@ def clean_text(value, limit: int) -> str:
 def clean_address(value) -> str:
     text = ("" if value is None else str(value)).strip().lower()
     return text if _ADDRESS_RE.match(text) and len(text) <= 254 else ""
+
+
+def _sender(value):
+    """(address to show and match on, key for the own-address check), or
+    None when it is not an address at all. An address-shaped value the
+    conservative pattern refuses gives ("", the raw text): its item is kept,
+    under UNSHOWN_SENDER, and never matched to a priority."""
+    raw = ("" if value is None else str(value)).strip().lower()
+    shown = clean_address(raw)
+    if shown:
+        return shown, shown
+    if len(raw) <= 254 and _ADDRESS_SHAPE_RE.match(raw):
+        print("email_task_transform: a sender address uses characters that "
+              "are not shown; its item is kept under a placeholder name",
+              file=sys.stderr)
+        return "", raw
+    return None
+
+
+def _sender_name(item, shown: str) -> str:
+    return (clean_text(item.get("sender_name"), MAX_NAME_CHARS)
+            or (clean_text(shown, MAX_NAME_CHARS) if shown else UNSHOWN_SENDER))
 
 
 # The message-link shapes Outlook uses (review R11, 2026-10-26): the OWA read
@@ -176,13 +212,20 @@ def people_priorities(vault: Path) -> dict:
 def priority(req: dict, config: dict, people: dict) -> str:
     """"high", "medium" or "" from the user's data, never the email's say."""
     sender = req["sender_address"]
-    if sender in {clean_address(a) for a in config.get("high_priority_senders", [])}:
-        return "high"
-    level = people.get(sender)
-    if level in ("high", "medium"):
-        return level
-    if level == "none":
-        return ""
+    # A sender shown under the placeholder has no address to match, and a
+    # list entry the address pattern refuses is "" too: without this guard
+    # the two matched, so a sender could pick up the high mark by choosing an
+    # address with "=" in it (review C2). The user's data says nothing about
+    # an address it cannot see.
+    if sender:
+        high = {clean_address(a) for a in config.get("high_priority_senders", [])}
+        if sender in {a for a in high if a}:
+            return "high"
+        level = people.get(sender)
+        if level in ("high", "medium"):
+            return level
+        if level == "none":
+            return ""
     if config.get("title_priority") and req.get("senior_title") is True:
         return "medium"
     return ""
@@ -213,10 +256,11 @@ def validate(raw, handled: set, own: set) -> list:
         if not mid or mid in handled:
             continue
         kind = item.get("kind")
-        sender = clean_address(item.get("sender_address"))
+        who = _sender(item.get("sender_address"))
         task = clean_text(item.get("task"), MAX_TASK_CHARS)
-        if kind not in KINDS or not sender or not task or sender in own:
+        if kind not in KINDS or who is None or not task or who[1] in own:
             continue
+        sender = who[0]
         key = (mid, task.lower())
         if key in seen or per_message.get(mid, 0) >= MAX_TASKS_PER_MESSAGE:
             continue
@@ -224,7 +268,7 @@ def validate(raw, handled: set, own: set) -> list:
         per_message[mid] = per_message.get(mid, 0) + 1
         out.append({
             "message_id": mid, "kind": kind, "sender_address": sender,
-            "sender_name": clean_text(item.get("sender_name"), MAX_NAME_CHARS) or sender,
+            "sender_name": _sender_name(item, sender),
             "task": task, "due": item.get("due"), "weblink": item.get("weblink"),
             "subject": clean_text(item.get("subject"), MAX_SUBJECT_CHARS),
             "senior_title": item.get("senior_title") is True,
@@ -246,12 +290,15 @@ def validate_flagged(raw, handled: set, own: set) -> list:
         if not isinstance(item, dict):
             continue
         mid = _message_id(item.get("message_id"))
-        sender = clean_address(item.get("sender_address"))
-        if not mid or mid in handled or mid in seen or not sender or sender in own:
+        # Kept whatever the address (review C3): the warning is fixed text,
+        # so a sender must not be able to suppress it by sending from an
+        # address that is not address-shaped ('"it support"@evil.example').
+        who = _sender(item.get("sender_address")) or ("", "")
+        if not mid or mid in handled or mid in seen or (who[1] and who[1] in own):
             continue
         seen.add(mid)
-        out.append({"message_id": mid, "sender_address": sender,
-                    "sender_name": clean_text(item.get("sender_name"), MAX_NAME_CHARS) or sender,
+        out.append({"message_id": mid, "sender_address": who[0],
+                    "sender_name": _sender_name(item, who[0]),
                     "weblink": item.get("weblink")})
     return out
 
@@ -315,7 +362,10 @@ def append_tasks(note: Path, lines: list, today: _dt.date) -> None:
     note.parent.mkdir(parents=True, exist_ok=True)
     existing = note.read_text(encoding="utf-8") if note.exists() else NOTE_HEADER
     heading = "## %s" % today.isoformat()
-    block = templater_guard.neutralize("\n".join(lines))
+    # Every field was cleaned already; this catches whatever survives that
+    # (F25). The Outlook link is https, which the sanitizer leaves whole.
+    block, _counts = output_sanitizer.sanitize_report("\n".join(lines))
+    block = templater_guard.neutralize(block)
     if heading not in existing.splitlines():
         block = "\n%s\n\n%s" % (heading, block)
     text = existing.rstrip("\n") + "\n" + block + "\n"

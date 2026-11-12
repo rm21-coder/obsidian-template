@@ -196,6 +196,25 @@ def today_local() -> _dt.date:
 # Section 1: Open to-dos
 # ---------------------------------------------------------------------------
 
+# A note the converters wrote from an outside document (markitdown_cleanup's
+# frontmatter). Its task lines are marked, not taken as the user's own: a
+# document can carry "- [ ] ... #task" (F27). The converters also break the
+# tag; this is the second layer, for notes converted before that change.
+CONVERTED_MARK = "[from a converted document] "
+_CONVERTED_SOURCE_RE = re.compile(r"""^source:\s*["']?markitdown["']?\s*$""")
+
+
+def _converted_from_outside(lines: list) -> bool:
+    if not lines or lines[0].strip() != "---":
+        return False
+    for ln in lines[1:200]:
+        if ln.strip() == "---":
+            return False
+        if _CONVERTED_SOURCE_RE.match(ln.strip()):
+            return True
+    return False
+
+
 def collect_todos() -> list[tuple[Path, str]]:
     """Walk the vault and return a flat list of (source_rel_path, text)
     tuples for each task -- matching the Obsidian Tasks plugin's behavior
@@ -214,7 +233,9 @@ def collect_todos() -> list[tuple[Path, str]]:
             continue
         dirs[:] = [d for d in dirs if d not in TODO_EXCLUDE_DIRS]
         for fn in files:
-            if not fn.endswith(".md"):
+            # A dot-named note is hidden in Obsidian: never a task the user
+            # can see they own (review C5; the RAG sync and tagger skip it).
+            if not fn.endswith(".md") or fn.startswith("."):
                 continue
             fp = Path(root) / fn
             try:
@@ -225,6 +246,7 @@ def collect_todos() -> list[tuple[Path, str]]:
             except OSError:
                 continue
             rel = vault_rel(fp)
+            outside = _converted_from_outside(lines)
             for ln in lines:
                 m = TODO_RE.match(ln)
                 if not m:
@@ -234,7 +256,7 @@ def collect_todos() -> list[tuple[Path, str]]:
                     continue  # missing #task -- not a task per Obsidian
                 text = strip_task_metadata(raw)
                 if text:
-                    items.append((rel, text))
+                    items.append((rel, CONVERTED_MARK + text if outside else text))
     items.sort(key=lambda it: it[1].lower())
     return items
 

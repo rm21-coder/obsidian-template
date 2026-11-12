@@ -62,14 +62,14 @@ prompt_env_secret SOURCE_MAIL_APP_PASSWORD \
   Verification is on, and keeps it hidden if 2SV is passkey-only." \
     "https://myaccount.google.com/apppasswords"
 
-# Review S3: a Keychain that cannot be read (2) says nothing about whether a
+# Review S3: a Keychain that cannot be read says nothing about whether a
 # token is stored, and generating a new one would orphan the one the phone
-# holds. Only "not held anywhere" (1), or --force, generates.
-keystore_has SOURCE_MAIL_TOKEN && token_rc=0 || token_rc=$?
-if [[ "$token_rc" -eq 2 ]]; then
-    warn "  SOURCE_MAIL_TOKEN: the Keychain could not be read; not generating a"
-    warn "  new token (the phone may hold the current one). Re-run once it answers."
-elif [[ "$token_rc" -eq 0 && "${FORCE:-0}" -ne 1 ]]; then
+# holds. Only "not held anywhere", or --force, generates (keystore_plan).
+keystore_plan SOURCE_MAIL_TOKEN
+if [[ "$KEYSTORE_PLAN" == skip ]]; then
+    warn "  SOURCE_MAIL_TOKEN: not generating a new token (the phone may hold the"
+    warn "  current one)."
+elif [[ "$KEYSTORE_PLAN" == keep ]]; then
     ok "  SOURCE_MAIL_TOKEN already set; leaving unchanged"
 else
     # Generated rather than prompted: this one is shared with the phone, and a

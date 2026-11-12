@@ -15,7 +15,8 @@
 # Modes
 # -----
 #   --full      every pass (default)
-#   --changed   only the passes the working diff implicates
+#   --changed   only the passes the working diff implicates; with nothing
+#               in the working diff it checks nothing, says so, and exits 3
 #   --fast      secrets + shell + hooks - cheap enough to gate every commit
 #   --dast      the dynamic checks alone
 #
@@ -183,6 +184,16 @@ _say "security-checks.sh - mode=$MODE - $(date '+%Y-%m-%d %H:%M:%S')"
 _say "repo:      $REPO_ROOT"
 _say "commit:    $(git rev-parse --short HEAD 2>/dev/null || echo 'not a checkout')"
 _say "artifacts: $OUT"
+
+# N2 (2026-11-10): with nothing in the working diff, --changed ran no pass
+# and still printed RESULT: PASS. A run that checks nothing must say so, and
+# must not exit 0.
+if [[ "$MODE" == "changed" && -z "$(changed_files)" ]]; then
+    _say ""
+    _say "RESULT: NOTHING CHECKED - the working tree has no changes, so --changed"
+    _say "        has nothing to look at. To check committed code, run --full."
+    exit 3
+fi
 
 # One interpreter for every Python step, chosen and checked once. A bare
 # `python3` broke the whole suite on Windows, where it can be the Microsoft

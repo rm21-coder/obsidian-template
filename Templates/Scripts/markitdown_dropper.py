@@ -147,7 +147,14 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
         return False, (f"{src.name}: refused: {size:,} bytes is over the "
                        f"{MAX_SOURCE_BYTES:,}-byte limit; not converted")
 
-    out = unique_destination(dest_dir, src.stem)
+    # The note is named after an outside file: no markdown or HTML syntax
+    # and no leading dot may come with the name (F15, F37). An older
+    # output_sanitizer.py beside this file lacks the helpers: refuse rather
+    # than write a note the checks below cannot make safe.
+    if not hasattr(output_sanitizer, "safe_note_stem"):
+        return False, (f"{src.name}: not converted: output_sanitizer.py is older "
+                       "than this converter; deploy both together")
+    out = unique_destination(dest_dir, output_sanitizer.safe_note_stem(src.stem))
     try:
         result = md.convert(str(src))
     except Exception as e:
@@ -194,6 +201,8 @@ def convert_one(md: MarkItDown, src_path: str, dest_dir: Path) -> tuple[bool, st
         # A document's remote images, HTML and non-web links would act when
         # the note opens; only the embeds cleanup wrote stay (F-20261020 5278628).
         body, _counts = output_sanitizer.sanitize_keeping_embeds(body, _embed_names(summary))
+        # A "- [ ] ... #task" line in a document is not the user's task (F27).
+        body, _tasks = output_sanitizer.defuse_task_tags(body)
         out.write_text(templater_guard.neutralize(body), encoding="utf-8")
     except Exception as e:
         return False, f"{src.name}: write failed: {e}"

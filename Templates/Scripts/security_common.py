@@ -531,7 +531,8 @@ def _dpapi_get_or_create(service: str) -> bytes | None:
             # reports ALLOWLIST_TAMPER. Fail closed and say how to recover.
             print("security_common: %s could not be decrypted (%s); not "
                   "creating a new key. If the key is truly lost, delete that "
-                  "file and re-adopt the plugin allowlist."
+                  "file, then re-sign the plugin allowlist with "
+                  "plugin_integrity_check.py --update."
                   % (key_path, type(e).__name__), file=sys.stderr)
             return None
         if len(k) >= 16:

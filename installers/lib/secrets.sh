@@ -235,19 +235,65 @@ _retire_stale_keychain_item() {
     info "       python3 Templates/Scripts/secret_store.py rm $key"
 }
 
+# report_key_resolution <key> <scripts-dir>: say (for 90-verify) whether the
+# jobs can resolve key, by the same rule as secret_store.get_secret.
+report_key_resolution() {
+    local key="$1" scripts="$2" rc
+    if [[ -n "$(env_config_value KEYVAULT_URL)" ]]; then
+        # With the vault on, neither the Keychain nor .env is the source
+        # (review S7), so the Keychain is not read at all (T3): only
+        # secret_store can say where it resolves.
+        info "  Key Vault is on: check $key with"
+        info "     python3 $scripts/secret_store.py status"
+        return 0
+    fi
+    keystore_has "$key" && rc=0 || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
+        ok "  $key resolves (Keychain, or .env where the Keychain lacks it)"
+    elif [[ "$rc" -eq 2 ]]; then
+        warn "  $key: the Keychain could not be read, so the scheduled"
+        warn "  runs get no key until it answers. Do not store it again."
+    else
+        warn "  $key not resolvable - the scheduled tagger/voice runs will fail"
+        info "     store it with: python3 $scripts/secret_store.py set $key"
+    fi
+    return 0
+}
+
+# keystore_plan <key>: what a step that would create or replace key should
+# do, in KEYSTORE_PLAN (a variable, not output: the Keychain latch must not
+# die in a $(...) subshell). "keep" when it is held and --force is not set;
+# "create" when nothing holds it, or with --force; "skip" when the Keychain
+# could not be read, which says nothing about what it holds, so nothing may
+# be prompted for, generated or written (S3). Says why when it skips.
+keystore_plan() {
+    local key="$1" rc
+    keystore_has "$key" && rc=0 || rc=$?
+    if [[ "$rc" -eq 2 ]]; then
+        KEYSTORE_PLAN=skip
+        if [[ "${KEYCHAIN_WEDGED:-0}" -eq 1 ]]; then
+            warn "  $key: skipped; the Keychain is not answering this run (see above)"
+        else
+            warn "  $key: the Keychain could not be read; not prompting,"
+            warn "  generating or writing. Re-run once it answers."
+        fi
+    elif [[ "$rc" -eq 0 && "${FORCE:-0}" -ne 1 ]]; then
+        KEYSTORE_PLAN=keep
+    else
+        KEYSTORE_PLAN=create
+    fi
+    return 0
+}
+
 # prompt_env_secret <key> <human-description> <url-to-get-key>
 # Silent input (key doesn't echo). Honors --force: when FORCE=1, prompts
 # even if the key is already set, so the user can paste a new value.
 # Secrets land in the platform keystore (macOS Keychain), not .env.
 prompt_env_secret() {
-    local key="$1" desc="$2" url="$3" rc
-    keystore_has "$key" && rc=0 || rc=$?
-    if [[ "$rc" -eq 2 ]]; then
-        warn "  $key: the Keychain could not be read; not prompting or"
-        warn "  writing. Re-run once it answers."
-        return 0
-    fi
-    if [[ "$rc" -eq 0 && "${FORCE:-0}" -ne 1 ]]; then
+    local key="$1" desc="$2" url="$3"
+    keystore_plan "$key"
+    [[ "$KEYSTORE_PLAN" == skip ]] && return 0
+    if [[ "$KEYSTORE_PLAN" == keep ]]; then
         ok "  $key already set; leaving unchanged (use --force to overwrite)"
         return 0
     fi
@@ -311,7 +357,7 @@ KEYCHAIN_TIMEOUT_SECONDS=15
 #     bounds itself independently, so the cost of rediscovery is one dialog.
 #   - It therefore also dies inside $(...). Every caller below is invoked as a
 #     statement or an `if` condition, never in a command substitution, and it
-#     must stay that way: `x="$(keychain_has ...)"` would silently un-latch.
+#     must stay that way: `x="$(keystore_has ...)"` would silently un-latch.
 #     There is a static test pinning this (test_static.py).
 #
 # A file-based latch would fix both, and was rejected: a marker keyed to a PID
@@ -325,14 +371,15 @@ KEYCHAIN_WEDGED=0
 # The latch is the point, not the timeout. perl exits 142 (128 + SIGALRM) when
 # the alarm fires, and a caller that only checks "non-zero" cannot tell that
 # from a legitimate "no such item". That ambiguity is how ONE hang becomes
-# THREE: keychain_has reads 142 as "absent", so prompt_keychain_secret prompts,
-# so keychain_set writes - firing more calls at a Keychain that already proved
+# THREE: a reader takes 142 as "absent", so the caller prompts,
+# so the write fires - more calls at a Keychain that already proved
 # it is blocked on a consent dialog nobody can answer. Each one queues another
 # dialog, and that stack blocks every later Keychain operation on the machine,
 # git-over-HTTPS through the osxkeychain helper included. A retry after a hang
 # is the specific thing that must never happen, so the first timeout takes the
-# Keychain out of play for the rest of the run and secrets fall back to .env -
-# which is exactly why that fallback exists.
+# Keychain out of play for the rest of the run. Since review S3 (2026-11-10)
+# a secret is then skipped, not written to .env: a Keychain that cannot be
+# read says nothing about what it holds (T2).
 #
 # The path is explicit because /usr/bin/security is Apple-signed and stable
 # across `brew upgrade python`, so ACL grants keyed to it survive; macOS ships
@@ -361,11 +408,20 @@ _security() {
 _keychain_latch() {
     [[ "${KEYCHAIN_WEDGED:-0}" -eq 1 ]] && return 0
     KEYCHAIN_WEDGED=1
+    _keychain_explain "$1"
+}
+
+# _keychain_explain <what hung>: what the latch means, said once (T2). The
+# caller may have sent _security's output to /dev/null (_keychain_state
+# does), so it can call this again afterwards.
+_keychain_explain() {
     err "  Keychain call timed out: $1"
     err "  It is blocked on a consent dialog that cannot be answered here."
-    err "  NOT retrying, and skipping the Keychain for the rest of this run."
-    info "     secrets fall back to $SECRETS_ENV for now"
-    info "     once any pending dialog is dismissed, store them with:"
+    err "  NOT retrying: no Keychain read or write for the rest of this run, so"
+    err "  every later secret is skipped (none is prompted for, none goes to .env)."
+    info "     dismiss any pending dialog and re-run. If the same item hangs"
+    info "     again, remove that item (named above) and store it fresh:"
+    info "       python3 Templates/Scripts/secret_store.py rm <NAME>"
     info "       python3 Templates/Scripts/secret_store.py set <NAME>"
 }
 
@@ -416,9 +472,13 @@ _secret_store_set() {
 # item (exit 44), 2 it could not be read (a timeout, a locked Keychain, a
 # denied ACL). The same line secret_store.py draws (review S3).
 _keychain_state() {
-    local service="$1" account="${2:-$USER}" rc
+    local service="$1" account="${2:-$USER}" rc was="${KEYCHAIN_WEDGED:-0}"
     _security "$KEYCHAIN_TIMEOUT_SECONDS" find-generic-password \
         -a "$account" -s "$service" -w >/dev/null 2>&1 && rc=0 || rc=$?
+    # The latch's explanation went to /dev/null with the rest (T2): say it.
+    if [[ "$was" -ne 1 && "${KEYCHAIN_WEDGED:-0}" -eq 1 ]]; then
+        _keychain_explain "the Keychain read of $service"
+    fi
     case "$rc" in
         0) return 0 ;;
         44) return 1 ;;
@@ -426,54 +486,4 @@ _keychain_state() {
     esac
 }
 
-keychain_has() {
-    _keychain_state "$@"
-}
 
-keychain_set() {
-    local service="$1" account="${2:-$USER}" value="$3"
-    # secret_store.py binds to the invoking user (getpass.getuser()), so it
-    # cannot honour a different account. Refuse rather than write the secret
-    # somewhere its reader will never look.
-    if [[ "$account" != "$USER" ]]; then
-        err "  keychain_set: account '$account' is not the current user; refusing"
-        return 1
-    fi
-    if _secret_store_set "$service" "$value"; then
-        return 0
-    fi
-    err "  Keychain write failed for $service"
-    info "     do NOT re-run it if it timed out - a queued consent dialog"
-    info "     blocks later Keychain reads. Store it by hand once, with:"
-    info "       python3 Templates/Scripts/secret_store.py set $service"
-    return 1
-}
-
-prompt_keychain_secret() {
-    local service="$1" desc="$2" url="$3" account="${4:-$USER}" rc
-    keychain_has "$service" "$account" && rc=0 || rc=$?
-    if [[ "$rc" -eq 2 ]]; then
-        warn "  Keychain entry $service could not be read; not prompting or writing"
-        return 0
-    fi
-    if [[ "$rc" -eq 0 && "${FORCE:-0}" -ne 1 ]]; then
-        ok "  Keychain entry already set: service=$service, account=$account (use --force to overwrite)"
-        return 0
-    fi
-    if [[ "${INTERACTIVE:-1}" -eq 0 ]]; then
-        warn "  Keychain entry missing for $service; --auto mode skipping prompt"
-        return 0
-    fi
-    echo
-    info "$desc"
-    info "  Get a key at: $url"
-    local val
-    read -r -s -p "  Paste secret for $service (or press enter to skip): " val
-    echo
-    if [[ -z "$val" ]]; then
-        warn "  skipped $service; set later with: python3 Templates/Scripts/secret_store.py set $service"
-        return 0
-    fi
-    keychain_set "$service" "$account" "$val" || return 1
-    ok "  Keychain entry stored: service=$service"
-}

@@ -58,6 +58,7 @@ import shutil
 import subprocess
 import sys
 import templater_guard  # noqa: E402  -- outside text must not run as Templater code
+import output_sanitizer  # noqa: E402  -- nor load anything when the note opens
 
 import textwrap
 from datetime import date, datetime
@@ -493,6 +494,11 @@ def summarize(transcript: str, *, model: str, verbose: bool) -> str:
 def safe_filename(title: str, max_len: int = 120) -> str:
     name = SAFE_FILENAME.sub("", title).strip()
     name = re.sub(r"\s+", " ", name)
+    # A leading dot made a hidden note that is still tagged and indexed
+    # (F37; review B4). The podcast writer already strips it.
+    name = name.lstrip(". ")
+    # Nor a Windows device name ("CON.md"), the converters' rule (review C5).
+    name = output_sanitizer.avoid_device_name(name, max_len)
     if len(name) > max_len:
         name = name[:max_len].rstrip()
     return name or "Untitled"
@@ -641,6 +647,12 @@ def process_video(url: str, *, out_dir: Path, model: str,
     summary = summarize(transcript, model=model, verbose=verbose)
     suggested = parse_suggested_tags(summary)
     body = strip_suggested_tags_section(summary)
+    # The summary is model output about someone else's video: nothing in it
+    # may load or act when the note opens (F12). Before the description is
+    # taken from it, so that copy is clean too.
+    body, _counts = output_sanitizer.sanitize_report(body)
+    # Nor may it plant a task on the To-Do page or dashboard (F27, review B4).
+    body, _tasks = output_sanitizer.defuse_task_tags(body)
     description = first_paragraph(body)
 
     frontmatter = build_frontmatter(info, suggested, description)

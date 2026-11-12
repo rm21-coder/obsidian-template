@@ -130,7 +130,9 @@ highlighting still works.
 `tests/test_templater_guard.py` lists every guarded writer. Any new script
 that writes outside text into the vault belongs on that list. A writer whose
 outside text can carry images, HTML or links also belongs in
-`SANITIZED_WRITERS` in `tests/test_output_sanitizer.py`.
+`SANITIZED_WRITERS` in `tests/test_output_sanitizer.py`, and gets a
+behavioural test in `tests/test_writers_sanitize.py` that writes a hostile
+payload through it and checks the note on disk.
 
 The guard has five limits:
 

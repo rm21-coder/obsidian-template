@@ -190,8 +190,8 @@ def test_an_unreadable_keystore_is_not_reported_as_a_missing_key(
         llm_endpoint.client()
     message = str(excinfo.value)
     assert excinfo.value.unavailable is True
-    assert message.startswith("EXAMPLE_AI_API_KEY: the keystore could not be "
-                              "read, so it may well be stored; do not store it again")
+    assert message.startswith("EXAMPLE_AI_API_KEY: the keystore or Key Vault could "
+                              "not be read, so it may well be stored; do not store it again")
     assert "secret_store.py set" not in message
 
 

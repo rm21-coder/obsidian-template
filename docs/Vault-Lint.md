@@ -153,7 +153,10 @@ looking clean. Fix those with `--fix-malformed` or by hand.
 diacritic or casing slip, a reversed `First Last` / `Last, First`, or a single
 very-close spelling match — and unlinks the rest, keeping the display text. When
 a target is genuinely ambiguous (four notes named `King, *` for a `[[king]]`
-link) it unlinks rather than guessing an attribution.
+link) it unlinks rather than guessing an attribution. It leaves a link in place,
+and reports it as skipped, when unlinking would leave the line holding anything
+that loads or acts when the note opens (an image, an HTML tag, a non-web link,
+Templater code): `<[[x|img src=...]]>` would otherwise become a live `<img>`.
 
 ## The weekly job
 
@@ -179,7 +182,7 @@ lines of unreferenced People notes and buries what needs action.
 ## Footprint
 
 - One LaunchAgent, one weekly run, one log file.
-- No dependencies, no network. The rollback manifests (in `~/.local/state/obsidian-template/rollback/`) are
+- No third-party dependencies (it imports two sibling scripts, `output_sanitizer.py` and `templater_guard.py`), no network. The rollback manifests (in `~/.local/state/obsidian-template/rollback/`) are
   the only files it writes outside the vault's notes.
 - A full sweep over ~2,500 notes takes a couple of seconds.
 

@@ -618,7 +618,12 @@ def test_keyvault_firewall_refusal_is_named_and_does_not_fall_back(
     assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
     err = capsys.readouterr().err
     assert "SOURCE_MAIL_TOKEN: Key Vault refused the connection (ForbiddenByFirewall): off VPN?" in err
-    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "missing"
+    # T1: a vault that could not be asked is not a missing secret.
+    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "vault-error"
+    hint = secret_store.not_found_hint("SOURCE_MAIL_TOKEN")
+    assert hint.startswith("Key Vault could not be asked, so SOURCE_MAIL_TOKEN "
+                           "may well be stored there; nothing to store")
+    assert " set " not in hint
 
 
 def test_keyvault_unreachable_is_named(monkeypatch, keyvault, capsys):
@@ -845,7 +850,17 @@ def test_status_survives_an_unreadable_certificate_key(
     monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
     _cert_read(monkeypatch, fake_security, 36)
     assert secret_store._cli(["status", "SOURCE_MAIL_TOKEN"]) == 1
-    assert "SOURCE_MAIL_TOKEN: MISSING" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    # T1: this used to say MISSING, which reads as "store it".
+    assert ("SOURCE_MAIL_TOKEN: UNAVAILABLE (Key Vault could not be asked; the "
+            "line above says why)") in out
+
+
+def test_a_secret_the_vault_lacks_is_still_missing(monkeypatch, keyvault, capsys):
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "missing"
+    assert secret_store.not_found_hint("SOURCE_MAIL_TOKEN").startswith("store it with")
 
 
 def test_not_found_hint_never_advises_storing_after_a_failed_read(
@@ -908,3 +923,15 @@ def test_secret_store_imports_beside_a_security_common_without_the_builder(
                         str(tmp_path)], capture_output=True, text=True, timeout=60)
     assert p.returncode == 0, p.stderr
     assert p.stdout.strip() == "4000"
+
+
+def test_a_vault_failure_is_remembered_through_the_fallback(monkeypatch, keyvault,
+                                                            fake_security, capsys):
+    """Review B8: off VPN, fallback on, the Keychain lacking it: this ended as
+    "missing, store it"."""
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    monkeypatch.setenv("KEYVAULT_KEYCHAIN_FALLBACK", "1")
+    keyvault.network_down = True
+    assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
+    assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "vault-error"
+    assert " set " not in secret_store.not_found_hint("SOURCE_MAIL_TOKEN")

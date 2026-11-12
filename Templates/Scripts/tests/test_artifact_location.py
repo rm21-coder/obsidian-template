@@ -118,3 +118,25 @@ def test_an_inherited_print_root_does_not_skip_the_run(checkout, tmp_path):
     assert r.stdout.strip() != str(art), "printed the artifact root instead of running"
     # The run started: it made its stamped artifact directory.
     assert list(art.glob("checks-*")), r.stdout + r.stderr
+
+
+def test_changed_on_a_clean_tree_says_nothing_was_checked(tmp_path, allow_subprocess):
+    """N2: with nothing in the working diff, --changed ran no pass and still
+    printed RESULT: PASS (checks-20261110-115843). It must say so and must
+    not exit 0, or a caller reads it as a passing check. (A plain checkout:
+    the shared fixture's worktree shows as untracked, which is a change.)"""
+    main = tmp_path / "obsidian-template"
+    (main / "installers" / "lib").mkdir(parents=True)
+    shutil.copy2(CHECKS, main / "installers" / "lib" / "security-checks.sh")
+    _git(main, "init", "-q")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "suite")
+    env = {k: v for k, v in os.environ.items() if k != "SECURITY_ARTIFACTS_DIR"}
+    env["SECURITY_ARTIFACTS_DIR"] = str(tmp_path / "art")
+    r = subprocess.run(["bash", str(main / "installers" / "lib" / "security-checks.sh"), "--changed"],
+                       cwd=main, capture_output=True, text=True, timeout=120, env=env)
+    assert r.returncode == 3, r.stdout + r.stderr
+    assert "RESULT: NOTHING CHECKED" in r.stdout
+    assert "RESULT: PASS" not in r.stdout
+    (summary,) = (tmp_path / "art").glob("checks-*/summary.txt")
+    assert "NOTHING CHECKED" in summary.read_text()

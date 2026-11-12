@@ -968,7 +968,8 @@ class TestInstalledCopy:
         assert json.loads(r.stdout)["status"] == "no_baseline", r.stderr
 
     def test_the_installed_copy_reports_a_vault_copy_that_differs(
-            self, tmp_path: Path, tmp_state_dir: Path, monkeypatch) -> None:
+            self, tmp_path: Path, tmp_state_dir: Path, monkeypatch,
+            allow_subprocess) -> None:  # W1: install_controls runs icacls on Windows
         scripts = _vault_scripts(tmp_path)
         sc.install_controls(scripts, tmp_state_dir / "bin")
         monkeypatch.setattr(im, "SELF_DIR", tmp_state_dir / "bin")
@@ -992,7 +993,8 @@ class TestInstalledCopy:
 
     def test_a_mismatch_reaches_the_alert_even_when_the_vault_copy_was_baselined(
             self, tmp_path: Path, sample_vault: Path, tmp_state_dir: Path,
-            silent_notify: list, monkeypatch) -> None:
+            silent_notify: list, monkeypatch,
+            allow_subprocess) -> None:  # W1: install_controls runs icacls on Windows
         scripts = _vault_scripts(tmp_path)
         sc.install_controls(scripts, tmp_state_dir / "bin")
         monkeypatch.setattr(im, "SELF_DIR", tmp_state_dir / "bin")

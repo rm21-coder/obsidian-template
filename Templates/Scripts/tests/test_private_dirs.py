@@ -83,7 +83,8 @@ def test_a_failed_windows_grant_raises_instead_of_passing_silently(tmp_path, mon
         sc.make_private_dir(tmp_path / "bin")
 
 
-def test_an_unlistable_folder_fails_loudly_with_the_remedy(tmp_path, monkeypatch):
+def test_an_unlistable_folder_fails_loudly_with_the_remedy(tmp_path, monkeypatch, allow_subprocess):
+    # W1: on Windows make_private_dir runs icacls first; the gate stopped it.
     def listdir(path):
         raise PermissionError(13, "Access is denied")
     monkeypatch.setattr(sc.os, "listdir", listdir)

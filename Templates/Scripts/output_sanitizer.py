@@ -31,13 +31,23 @@ module handles what the renderer loads, that one what plugins run.
 The cost: model tags and ports such as "llama3.1:8b" are left alone, but
 mailto: links and <https://...> autolinks stop working, and local embeds
 ("![[x.png]]") are defused too -- a caller that writes its own embeds
-restores exactly those (sanitize_keeping_embeds).
+restores exactly those (sanitize_keeping_embeds). Since the F11 fix
+(2026-11-12), a scheme glued to a web URL is defused even when it is
+harmless ("git+https://", "svn+https://", "view-source:https://"), a web URL
+stops at "|" (so a "|" inside one, as in some font URLs, leaves the rest as
+text that may be defused), and a URL glued to the word before it
+("e.g.https://...") is not treated as a URL. Each costs an invisible
+character in the copy, never a live link (review B6). In converted text,
+defuse_task_tags breaks "#task" wherever it appears, so a URL anchor
+("...#task-list"), a heading link ("[[Plan#Tasks]]") or CSS ("#taskbar")
+gets the same invisible character (review C5).
 
 Standard library only; Python 3.9 compatible (Apple's /usr/bin/python3
 runs some of the callers).
 """
 from __future__ import annotations
 
+import bisect
 import html
 import re
 
@@ -45,8 +55,13 @@ ZWSP = "\u200b"
 _ZWSP = ZWSP
 
 _IMAGE_RE = re.compile(r"!(?=\[)")
-_HTML_TAG_RE = re.compile(r"<(?=[A-Za-z/!?])")
-_WEB_URL_RE = re.compile(r"https?://[^\s<>\"'`()\[\]]*", re.I)
+# "<" before "[[" too (F16): a tool that later unlinks the wikilink (vault_lint
+# --fix-links does) would otherwise turn "<[[x|img src=y]]>" into a live tag.
+_HTML_TAG_RE = re.compile(r"<(?=[A-Za-z/!?]|\[\[)")
+# A web URL starts only where no scheme character precedes it, so the
+# "https://" inside "x-safari-https://" is not one, and stops at "|", a table
+# cell separator (F11).
+_WEB_URL_RE = re.compile(r"(?<![A-Za-z0-9+.\-])https?://[^\s<>\"'`()\[\]|]*", re.I)
 _COLON = r"(?::|&#0*58;?|&#[xX]0*3[aA];?|&colon;|\\:)"
 _ASCII_SPACE = " \t\r\n\f\v"
 _SCHEME_COLON_RE = re.compile(
@@ -86,6 +101,21 @@ _CLASS_SPLIT = re.compile(r"[\n\r\f]")
 _DIRECTIVE_RE = re.compile(r"%%\{.*?(?:\}%%|\Z)", re.S)
 _IMPORT_RE = re.compile(r"@(?=import)", re.I)
 _THEMECSS_RE = re.compile(r"(theme)(?=css)", re.I)
+
+
+def _web_spans(text: str) -> tuple:
+    """The web URLs in `text`, as sorted, non-overlapping (start, end) pairs,
+    and their starts for bisect."""
+    spans = [(m.start(), m.end()) for m in _WEB_URL_RE.finditer(text)]
+    return spans, [a for a, _b in spans]
+
+
+def _inside(pos: int, spans: list, starts: list) -> bool:
+    """Whether `pos` falls inside a web URL. A bisect, not a walk over every
+    URL: the walk made a text with many URLs and many scheme-shaped tokens
+    cost their product (review B1, 200 KB in 25 s)."""
+    i = bisect.bisect_right(starts, pos) - 1
+    return i >= 0 and pos < spans[i][1]
 
 
 def _scheme_is_live(name: str, nxt: str) -> bool:
@@ -130,36 +160,44 @@ def _defuse_encoded(segment: str, counts: dict) -> str:
     if "&" not in segment and "\\" not in segment:
         return segment
     decoded, ends = _decode_with_ends(segment)
-    web = [(m.start(), m.end()) for m in _WEB_URL_RE.finditer(decoded)]
+    spans, starts = _web_spans(decoded)
     cuts = []
     for m in _SCHEME_COLON_RE.finditer(decoded):
-        if any(a <= m.start() < b for a, b in web):
+        if _inside(m.start(), spans, starts):
             continue
         if _scheme_is_live(m.group(1), m.group(2)):
             cuts.append(ends[m.end(1) - 1])
-    for at in sorted(set(cuts), reverse=True):
+    # One join, not a slice per cut: a slice per cut is quadratic over the
+    # whole text (review B1).
+    out, prev = [], 0
+    for at in sorted(set(cuts)):
         counts["schemes"] += 1
-        segment = segment[:at] + ZWSP + segment[at:]
-    return segment
+        out.append(segment[prev:at])
+        out.append(ZWSP)
+        prev = at
+    out.append(segment[prev:])
+    return "".join(out)
 
 
 def _defuse_schemes(text: str, counts: dict) -> str:
+    """Every live non-web scheme gets a zero-width space after its name.
+
+    Matched over the whole text, and skipped only when the scheme starts
+    inside a web URL (so citations keep working). The text used to be cut
+    at web URLs first, which ended "ms-word:" at its colon, so the
+    character after it, the "h" of "https://", was never seen and
+    "ms-word:https://..." stayed live (F11)."""
+    spans, starts = _web_spans(text)
+
     def scheme(m: re.Match) -> str:
+        if _inside(m.start(), spans, starts):
+            return m.group(0)
         if not _scheme_is_live(m.group(1), m.group(2)):
             return m.group(0)
         counts["schemes"] += 1
         return m.group(1) + ZWSP
 
-    def both(segment: str) -> str:
-        return _defuse_encoded(_SCHEME_COLON_RE.sub(scheme, segment), counts)
-
-    out, pos = [], 0
-    for m in _WEB_URL_RE.finditer(text):
-        out.append(both(text[pos:m.start()]))
-        out.append(m.group(0))
-        pos = m.end()
-    out.append(both(text[pos:]))
-    return "".join(out)
+    return _defuse_encoded(_SCHEME_COLON_RE.sub(scheme, text), counts)
 
 
 def _defuse_diagrams(text: str, counts: dict) -> str:
@@ -232,3 +270,59 @@ def sanitize_keeping_embeds(text: str, names) -> tuple[str, dict]:
         text, n = embed.subn(lambda _m: "![[" + name + "]]", text)
         counts["images"] -= n
     return text, counts
+
+
+# ---- converted documents: tasks and note names -------------------------------
+
+# Wherever "#task" appears, not only as a whole word: the Tasks plugin's
+# global filter is a plain string, and if it matches by substring, "(#task)",
+# "x#task" or "#tasks" would still count (review B3).
+_TASK_TAG_RE = re.compile(r"#(?=task)", re.I)
+
+
+def defuse_task_tags(text: str) -> tuple[str, int]:
+    """`text` with every "#task" broken by a zero-width space, wherever it
+    appears, and how many. The Tasks plugin (globalFilter "#task") and the
+    dashboard count a checkbox line as the user's own task only if it
+    carries that string, so a document from outside could otherwise plant
+    one (F27). The line still reads the same."""
+    return _TASK_TAG_RE.subn("#" + ZWSP, text)
+
+
+# Characters a note name must not carry from an outside file name into any
+# page that lists vault paths (F15): markdown and HTML syntax, the wikilink
+# separators, and path or control characters.
+_STEM_UNSAFE_RE = re.compile(r"[`\[\]()<>&!|#^%{}*\\/:\"?~$=;\x00-\x1f\x7f]+")
+
+
+# Windows device names, with or without an extension (review B7), the
+# superscript digits Windows also reserves included (review C5).
+_WINDOWS_RESERVED = {"con", "prn", "aux", "nul"} | {
+    "%s%s" % (p, n) for p in ("com", "lpt")
+    for n in list("123456789") + ["\u00b9", "\u00b2", "\u00b3"]}
+
+
+def avoid_device_name(name: str, max_len: int = 120) -> str:
+    """`name` unless its part before the first dot is a Windows device
+    name; then "-document" goes after that part (no characters the name
+    filters remove), and the result stays within max_len."""
+    base, dot, rest = name.partition(".")
+    if base.strip().lower() not in _WINDOWS_RESERVED:
+        return name
+    out = base.rstrip() + "-document" + dot + rest
+    return out[:max_len].rstrip(" .")
+
+
+def safe_note_stem(stem: str, fallback: str = "converted") -> str:
+    """A note name built from an outside file name: unsafe characters become
+    spaces, runs of space collapse, and no leading dot (a hidden note that
+    is still tagged and indexed, F37), and no Windows device name. Never
+    empty; at most 120 characters."""
+    t = _STEM_UNSAFE_RE.sub(" ", str(stem))
+    t = "".join(ch for ch in t if ch.isprintable())
+    t = " ".join(t.split()).lstrip(". -")
+    t = t[:120].rstrip(" .")
+    # Before the first dot: Windows reserves "prn.txt" as well as "prn".
+    t = avoid_device_name(t)
+    return t or fallback
+

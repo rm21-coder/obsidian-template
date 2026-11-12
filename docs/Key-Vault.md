@@ -114,7 +114,10 @@ On the Mac:
 
    This prints each secret's source (`keyvault`, `keystore`, `.env`,
    `MISSING`), never a value, names any `.env` copy that is being ignored, and
-   exits 1 if any secret is missing from the vault.
+   exits 1 if any secret is missing from the vault. `UNAVAILABLE` means the
+   vault (off VPN, the firewall, the sign-in, an unreadable certificate key)
+   or the Keychain could not be asked: the secret may well be stored, so do
+   not store it again; the line above it says why.
 
 5. Once the jobs have run cleanly against the vault, rotate each key at its
    source, write the new value only to the vault, and delete the Keychain

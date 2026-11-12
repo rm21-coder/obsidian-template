@@ -63,6 +63,13 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 
+# Same-folder helpers. The plist, component 55 and the Windows runner start
+# this file as a script (no -I), so its own folder is first on sys.path.
+# Under `python3 -I` these imports fail (Apple's 3.9 included): do not add
+# -I without putting the folder on sys.path here first.
+import output_sanitizer  # noqa: E402
+import templater_guard  # noqa: E402
+
 # Cross-platform: force UTF-8 on stdout/stderr so printing a note title that
 # contains non-ASCII characters can't crash the run on Windows, whose console
 # defaults to a legacy code page (cp1252). Harmless no-op on macOS/Linux.
@@ -880,6 +887,24 @@ def resolve_target(target, targets):
     return None
 
 
+def _unlink_makes_it_live(old: str, new: str) -> bool:
+    """Whether the rewritten line holds anything that loads or acts when the
+    note opens (anything the sanitizer or the Templater guard would change),
+    or a "#task" the line did not have.
+
+    The whole line, not a before/after count of openers: a count let one
+    opener the unlink removed offset one it created (review B5). A line
+    whose own text already held such markup is left alone and reported,
+    which costs only a fix the user can make by hand. The task check is a
+    count, and only ever adds: "#[[zq7x|task]]" unlinks to "#task", a task
+    planted through a converted document (review C1)."""
+    if new.lower().count("#task") > old.lower().count("#task"):
+        return True
+    if output_sanitizer.sanitize_report(new)[0] != new:
+        return True
+    return templater_guard.neutralize(new) != new
+
+
 def fix_links(notes, broken):
     """Relink what resolves confidently, unlink the rest. Returns change records."""
     names = set()
@@ -901,7 +926,7 @@ def fix_links(notes, broken):
         original = path.read_text(encoding="utf-8")
         fenced, spans = _protected_spans(original)
         lines = original.split("\n")
-        relinked, unlinked, skipped = [], [], []
+        relinked, unlinked, skipped, unsafe = [], [], [], []
 
         for i, line in enumerate(lines):
             if i in fenced:
@@ -926,7 +951,21 @@ def fix_links(notes, broken):
                 display = raw.split("|", 1)[1] if "|" in raw else target
                 return display
 
+            before, rbefore = len(unlinked), len(relinked)
             new_line = _WIKILINK.sub(replace, line)
+            # Only an unlink drops brackets; a line that was only relinked
+            # keeps them and cannot become live (review C4).
+            if (new_line != line and len(unlinked) > before
+                    and _unlink_makes_it_live(line, new_line)):
+                # F16: dropping the brackets would let the alias join its
+                # neighbours into a live tag, image, scheme, Templater code
+                # or a task ("<[[x|img src=y]]>", "#[[x|task]]"). Leave this
+                # line's links as they are and report them instead.
+                unsafe.extend(unlinked[before:])
+                unsafe.extend(t for t, _f in relinked[rbefore:])
+                del unlinked[before:]
+                del relinked[rbefore:]
+                continue
             if new_line != line:
                 lines[i] = new_line
 
@@ -934,10 +973,13 @@ def fix_links(notes, broken):
         # A relink can turn '[[[Nguyen, Chris]]' into '[[[Nguyen, Chris]]' with
         # the target corrected but the stray bracket still there; drop it.
         new_text = re.sub(r"\[\[\[(?=[^\[\]]+\]\])", "[[", new_text)
-        if new_text != original:
+        # A note whose only outcome is a link left in place for safety is
+        # still reported (review C4), with nothing to write.
+        if new_text != original or unsafe:
             changes.append({"path": str(path), "rel": source, "original": original,
                             "new": new_text, "relinked": relinked,
-                            "unlinked": unlinked, "skipped": skipped})
+                            "unlinked": unlinked, "skipped": skipped,
+                            "unsafe": unsafe})
     return changes
 
 
@@ -1377,13 +1419,18 @@ def main():
                 relinked = [r for c in link_changes for r in c["relinked"]]
                 unlinked = [u for c in link_changes for u in c["unlinked"]]
                 protected = [s for c in link_changes for s in c["skipped"]]
-                for c in link_changes:
+                unsafe = [(c["rel"], s) for c in link_changes for s in c.get("unsafe", [])]
+                written = [c for c in link_changes if c["new"] != c["original"]]
+                for c in written:
                     Path(c["path"]).write_text(c["new"], encoding="utf-8")
                     changes.append({"path": c["path"], "rel": c["rel"],
                                     "before": ["broken links"], "after": ["<links fixed>"],
                                     "original": c["original"]})
                 print("Links: relinked {}, unlinked {}, across {} notes.".format(
-                    len(relinked), len(unlinked), len(link_changes)))
+                    len(relinked), len(unlinked), len(written)))
+                for rel, t in sorted(set(unsafe)):
+                    print("    left in place  [[{}]] in {}: unlinking would make the line "
+                          "load or run something; fix by hand".format(t, rel))
                 for was, now in sorted(set(relinked)):
                     print("    relinked  [[{}]] -> [[{}]]".format(was, now))
                 for t in sorted(set(unlinked)):

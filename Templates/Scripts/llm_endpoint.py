@@ -80,8 +80,8 @@ class MissingCredential(EndpointError):
             # Review S2: the keystore read failed; the key may well be stored,
             # and writing to a Keychain that just failed is never the fix.
             super().__init__(
-                f"{name}: the keystore could not be read, so it may well be "
-                "stored; do not store it again. Fix the keystore (the "
+                f"{name}: the keystore or Key Vault could not be read, so it "
+                "may well be stored; do not store it again. Fix that (the "
                 "secret_store line above says why) and re-run.")
             return
         super().__init__(
@@ -251,7 +251,7 @@ def client(**kwargs):
     key = get_secret(name)
     if not key:
         raise MissingCredential(
-            name, unavailable=last_source(name) == "unavailable")
+            name, unavailable=last_source(name) in ("unavailable", "vault-error"))
     c = anthropic.Anthropic(api_key=key, **kwargs)
     if kwargs.get("base_url"):
         _translate_models(c)
