@@ -41,7 +41,7 @@ then call scripts directly, e.g. `.\Templates\Scripts\windows\install.ps1`.)
 
 `install.ps1` runs straight through and will:
 
-- Check for Python 3.11-3.14 (3.12-3.14 on ARM64) and run the classification audit (refuses to
+- Check for Python 3.12-3.14 and run the classification audit (refuses to
   install if the repo somehow carries non-public content)
 - Install Obsidian via `winget` if it isn't already present
 - Link `%USERPROFILE%\Obsidian` to wherever you cloned the repo, via a
@@ -319,11 +319,10 @@ next runs.
   `Templates/Scripts/tests/test_static.py::TestPowerShellEncoding`. Keep it
   that way — a stray em-dash inside a double-quoted string makes 5.1 stop
   parsing mid-file, and the script simply never runs.
-- **Python 3.11+** — installed automatically by `install.ps1` if missing
-  (`winget install Python.Python.3.12`); the pinned dependencies need 3.11
-  (3.10 is end of life), so 3.11 is the floor. **On ARM64 the floor is 3.12**: dependencies
-  install from wheels only, and `pyyaml` publishes no `win_arm64` wheel for
-  3.11. **3.14 is the ceiling** everywhere: the lock is resolved and
+- **Python 3.12+** — installed automatically by `install.ps1` if missing
+  (`winget install Python.Python.3.12`). 3.12 is the floor on every
+  platform: the fixed `soupsieve` (4.0) needs 3.11.5 or later, and `pyyaml`
+  publishes no `win_arm64` wheel for 3.11. **3.14 is the ceiling** everywhere: the lock is resolved and
   wheel-checked up to 3.14, and a newer Python has no wheels yet for its
   compiled packages. `install.ps1` looks for 3.13, 3.12 and 3.14 before
   whatever `py -3` picks, and both it and `update.ps1` refuse an interpreter

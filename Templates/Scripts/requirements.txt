@@ -9,6 +9,9 @@ certifi>=2026.10.19
 # -112940 and GHSA-xmj3-9gf7-h52w, flagged by the sca pass on 2026-10-26.
 filelock>=4.2.1
 setuptools>=84.1.0 ; platform_machine == 'arm64' and sys_platform == 'darwin'
+# soupsieve (a beautifulsoup4 dependency): floor for CVE-2026-126190/-126191/
+# -126193, flagged by the sca pass on 2026-11-15.
+soupsieve>=4.0.0
 
 # Optional feature scripts (bundled in core per the Windows "deploy completely"
 # goal). yt-dlp: youtube_summarize.py. markitdown: markitdown_cleanup/_dropper

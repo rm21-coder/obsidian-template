@@ -8,3 +8,6 @@ PySide6
 # PYSEC-2026-4320; pillow (a markitdown dependency) nine CVEs fixed in 13.0.0.
 certifi>=2026.10.19
 pillow>=13.0.0
+# soupsieve (a beautifulsoup4 dependency): floor for CVE-2026-126190/-126191/
+# -126193, flagged by the sca pass on 2026-11-15.
+soupsieve>=4.0.0

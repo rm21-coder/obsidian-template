@@ -21,7 +21,7 @@ for the full setup guide.
   (scripts, tasks, the Obsidian app) resolves. Override with `$env:OBSIDIAN_VAULT`
   if you must, but the junction is the canonical setup.
 - Scripts: `<vault>\Templates\Scripts\`.
-- Python venv: `<vault>\Templates\Scripts\.venv\Scripts\python.exe` (3.11+).
+- Python venv: `<vault>\Templates\Scripts\.venv\Scripts\python.exe` (3.12+).
 - Secrets: a DPAPI-encrypted keystore via `..\secret_store.py`, with
   `$env:USERPROFILE\dev\secrets\.env` for config (gitignored, never
   committed). A value in the keystore wins; `.env` supplies a secret only

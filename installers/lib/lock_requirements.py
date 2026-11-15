@@ -49,17 +49,17 @@ INDEX = "https://pypi.org/simple"
 MACOS_FLOOR = "14.0"             # av publishes macOS 14+ wheels only
 COMPILE_COMMAND = "python3 installers/lib/lock_requirements.py"
 
-# Every (platform, Python) an install can run on. Windows ARM64 starts at
-# 3.12: pyyaml publishes no win_arm64 wheel for 3.11, and the Windows
-# installer refuses 3.11 there for that reason. Intel Macs are not a target:
+# Every (platform, Python) an install can run on. 3.12 is the floor
+# everywhere: soupsieve 4.0 (the fix for CVE-2026-126190) needs 3.11.5+, and
+# pyyaml publishes no win_arm64 wheel for 3.11. Intel Macs are not a target:
 # onnxruntime (pulled in by markitdown's magika) stopped shipping them. The
 # installers refuse any Python above the highest version listed here.
 TARGETS = [
-    ("aarch64-apple-darwin", ("3.11", "3.12", "3.13", "3.14")),
-    ("x86_64-pc-windows-msvc", ("3.11", "3.12", "3.13", "3.14")),
+    ("aarch64-apple-darwin", ("3.12", "3.13", "3.14")),
+    ("x86_64-pc-windows-msvc", ("3.12", "3.13", "3.14")),
     ("aarch64-pc-windows-msvc", ("3.12", "3.13", "3.14")),
 ]
-PYTHON_FLOOR = "3.11"            # filelock 4.2.1+ (CVE fixes) needs it; 3.10 is end of life
+PYTHON_FLOOR = "3.12"            # soupsieve 4.0 (CVE fix) needs 3.11.5+; raised 2026-11-15
 PYTHON_CEILING = "3.14"
 
 
