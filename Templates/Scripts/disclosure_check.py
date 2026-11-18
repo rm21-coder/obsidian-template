@@ -61,6 +61,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import classification_tier  # noqa: E402
+import templater_guard  # noqa: E402
 
 VAULT_ROOT = Path(__file__).parent.parent.parent.resolve()
 
@@ -127,8 +128,19 @@ _MEDIA_EXT = re.compile(
 # Not anchored to line start: a fence inside a callout ("> ```query"), a
 # blockquote or a list item still renders. Case-insensitive is stricter than
 # Obsidian, which is the safe side.
-_QUERY_FENCE_RE = re.compile(
-    r"(`{3,}|~{3,})[ \t]*(dataview|dataviewjs|tasks|base|query|bases)\b", re.I)
+#
+# The language is read as Obsidian reads it, through templater_guard's fence
+# reader: entities and backslash escapes decoded (`&#113;uery`), and a class
+# smuggled in after LF/FF/CR (`x&#10;language-dataview`) counted (v2.6 F23).
+# Matching the raw text let those render as queries in a note the gate
+# called CLEAR.
+_QUERY_LANG_RE = re.compile(r"(dataview|dataviewjs|tasks|base|query|bases)\b")
+
+
+def _query_fences(text: str) -> list:
+    """The fence-opener matches whose language, as rendered, is a query."""
+    return [m for m, langs in templater_guard.fences(text)
+            if any(_QUERY_LANG_RE.match(lang) for lang in langs)]
 # Raw-HTML embeds (`<span class="internal-embed" src="Note">`). The old
 # single regex missed the attributes in the other order or an unquoted src
 # (finding 5278117) and was cubic on "<internal-embed " repeated (5268561).
@@ -435,7 +447,7 @@ def _query_references(text: str) -> list[str]:
 def _query_blocks(text: str) -> list[str]:
     """The bodies of query fences and inline queries."""
     blocks = []
-    for m in _QUERY_FENCE_RE.finditer(text):
+    for m in _query_fences(text):
         fence = m.group(1)
         end = text.find(fence[0] * 3, m.end())
         blocks.append(text[m.end(): end if end != -1 else m.end() + 20000])
@@ -464,7 +476,7 @@ def _meta_bind_inline(text: str) -> bool:
     included, from any note."""
     return bool(_RAW_CODE_RE.search(text)
                 or _MB_FIELD_RE.search(text) or _MB_FIELD_RE.search(_decoded(text))
-                or _QUERY_FENCE_RE.search(text) or _INLINE_QUERY_RE.search(text))
+                or _query_fences(text) or _INLINE_QUERY_RE.search(text))
 
 
 _LISTDIR_CACHE: dict[Path, list[str]] = {}
@@ -627,7 +639,7 @@ def references(path: Path, text: str) -> tuple[list[str], list[str]]:
     for block in _query_blocks(text):
         targets += ["\x00query:" + r for r in _query_references(block)]
     opaque = []
-    if _QUERY_FENCE_RE.search(text):
+    if _query_fences(text):
         opaque.append("contains a query block, which renders other notes' "
                       "content the gate cannot evaluate")
     if _INLINE_QUERY_RE.search(text):

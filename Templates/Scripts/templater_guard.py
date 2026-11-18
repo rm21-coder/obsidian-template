@@ -76,12 +76,19 @@ _PCT = r"(?:\\?%|&percnt;?|&#0*37;?|&#x0*25;?)"   # "\%" is a markdown escape
 _OPENER = re.compile(rf"({_LT})({_PCT})", re.I)
 
 
-# Code block languages that installed plugins, or Obsidian itself (Bases),
-# render. Prefixes, lower case.
-PLUGIN_BLOCKS = ("tasks", "dataview", "meta-bind", "mdm", "excalidraw", "base")
-# The language runs to the line end or the next fence-like run, so a second
-# run on the same line is checked too.
-_FENCE = re.compile(r"(`{3,}|~{3,})([^\r\n`~]*(?:[`~]{1,2}[^\r\n`~]+)*)")
+# Code block languages that installed plugins, or Obsidian itself (Bases, and
+# the core search embed `query`, v2.6 F23), render. Prefixes, lower case.
+PLUGIN_BLOCKS = ("tasks", "dataview", "meta-bind", "mdm", "excalidraw", "base",
+                 "query")
+# The language runs to the line end or the next fence-like run (three or
+# more of one character), which finditer then matches on its own, so a second
+# run on the same line is checked too. A tilde fence's info may hold backticks
+# and tildes (CommonMark), so there a mixed run such as "~``" does not end it:
+# `~~~x~``&#10;language-dataview` is one info string (v2.6 review RC1). The
+# branches have disjoint first characters, so the match stays linear (RC12).
+_FENCE = re.compile(r"(`{3,}|~{3,})("
+                    r"(?<=~)(?:[^\r\n`~]|`{1,2}(?!`)|~{1,2}(?!~))*"
+                    r"|[^\r\n`~]*(?:[`~]{1,2}[^\r\n`~]+)*)")
 _BACKSLASH_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 # What JS trim() removes and str.strip() may not.
 _TRIM = " \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006" \
@@ -190,6 +197,36 @@ def _info_language(info: str) -> str:
     return _decoded(info).strip(_TRIM).strip().lower()
 
 
+def fence_languages(info: str) -> list[str]:
+    """Every language a fence with this info string can be given, lower case.
+    The export gate reads fences through this, so it sees what neutralize()
+    defuses (v2.6 F23). Three readings, as tests/test_templater_guard.py's
+    oracle models Obsidian:
+
+      * reading view: the info is backslash-unescaped and entity-decoded; the
+        class is "language-" plus that up to the first space or tab, and the
+        DOM splits a class on LF, FF, CR and space, so every resulting
+        "language-X" piece names a language;
+      * Live Preview: the raw text after the fence, up to the first character
+        outside [\\w/+#-];
+      * the looser reading earlier models used: JS trim(), first word.
+    """
+    decoded = _decoded(info)
+    token = re.split(r"[ \t]", decoded.lstrip(" \t"), maxsplit=1)[0]
+    langs = [cls[len("language-"):] for cls in re.split(r"[\n\r\f ]", "language-" + token)
+             if cls.startswith("language-")]
+    langs.append(re.match(r"[ \t]*([\w/+#-]*)", info).group(1))
+    langs.append((decoded.strip(_TRIM).split() or [""])[0])
+    return [lang.lower() for lang in langs]
+
+
+def fences(text: str):
+    """Every fence opener in `text`, as (match, languages). match.end() is the
+    end of the info string."""
+    for m in _FENCE.finditer(text or ""):
+        yield m, fence_languages(m.group(2))
+
+
 def _fence(m: re.Match) -> str:
     fence, info = m.group(1), m.group(2)
     if _CLASS_SPLIT.search(_decoded(info)):
@@ -197,7 +234,7 @@ def _fence(m: re.Match) -> str:
         # becomes a space (which ends the language).
         info = info.replace("&", "&amp;").replace("\f", " ")
         return fence + ZWSP + info
-    if _info_language(info).startswith(PLUGIN_BLOCKS):
+    if any(lang.startswith(PLUGIN_BLOCKS) for lang in fence_languages(info)):
         return fence + ZWSP + info
     return m.group(0)
 

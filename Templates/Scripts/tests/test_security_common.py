@@ -784,3 +784,58 @@ class TestInstallControls:
         assert sc.is_installed_copy(tmp_path / "sandbox" / "bin")
         assert sc.is_installed_copy(sc.default_state_dir() / "bin")
         assert not sc.is_installed_copy(SCRIPTS)
+
+
+class TestIsLink:
+    """v2.6 W5: Path.is_symlink() is False for a Windows directory junction,
+    which any user can create, while is_dir() follows it."""
+
+    @pytest.mark.parametrize("tag,link", [
+        (0xA0000003, True),     # IO_REPARSE_TAG_MOUNT_POINT: a junction
+        (0x9000001A, False),    # IO_REPARSE_TAG_CLOUD: a OneDrive placeholder
+        (0x80000013, False),    # IO_REPARSE_TAG_DEDUP
+    ])
+    def test_only_a_junction_reparse_point_is_a_link(self, tmp_path, monkeypatch,
+                                                     tag, link) -> None:
+        import stat as st
+        from types import SimpleNamespace
+        real_lstat = os.lstat
+        target = str(tmp_path / "j")
+        fake = SimpleNamespace(st_mode=st.S_IFDIR | 0o755, st_reparse_tag=tag,
+                               st_file_attributes=st.FILE_ATTRIBUTE_REPARSE_POINT)
+        monkeypatch.setattr(sc.os, "lstat",
+                            lambda p: fake if str(p) == target else real_lstat(p))
+        assert sc.is_link(target) is link
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="stat defines the tag only on Windows")
+    def test_the_literal_matches_windows(self) -> None:
+        import stat as st
+        assert st.IO_REPARSE_TAG_MOUNT_POINT == sc._IO_REPARSE_TAG_MOUNT_POINT
+
+    def test_a_plain_directory_and_a_missing_path_are_not(self, tmp_path) -> None:
+        assert sc.is_link(tmp_path) is False
+        assert sc.is_link(tmp_path / "nothing") is False
+
+    @requires_symlinks
+    def test_a_symlink_is_a_link(self, tmp_path) -> None:
+        (tmp_path / "l").symlink_to(tmp_path, target_is_directory=True)
+        assert sc.is_link(tmp_path / "l") is True
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
+    def test_a_real_junction_is_a_link_and_is_refused(self, tmp_path, allow_subprocess) -> None:
+        import _winapi
+        (tmp_path / "real").mkdir()
+        _winapi.CreateJunction(str(tmp_path / "real"), str(tmp_path / "bin"))
+        assert not (tmp_path / "bin").is_symlink()      # the gap W5 closes
+        assert sc.is_link(tmp_path / "bin") is True
+        with pytest.raises(ValueError, match="is not a directory"):
+            sc.install_controls(TestInstallControls()._src(tmp_path), tmp_path / "bin")
+        assert list((tmp_path / "real").iterdir()) == []
+
+    def test_install_controls_refuses_a_destination_is_link_flags(
+            self, tmp_path, monkeypatch) -> None:
+        dest = tmp_path / "bin"
+        monkeypatch.setattr(sc, "is_link", lambda p: Path(p) == dest)
+        with pytest.raises(ValueError, match="is not a directory"):
+            sc.install_controls(TestInstallControls()._src(tmp_path), dest)
+        assert not dest.exists()

@@ -354,6 +354,29 @@ def _subject_md(subject: str) -> str:
     return _MD_ACTIVE.sub(r'\\\1', text)
 
 
+# The digest's floor: what Meetings/ notes default to (F-20261020 5278121).
+DIGEST_FLOOR = 'confidential'
+
+
+def digest_tier(listed) -> str:
+    """The digest's tier: the highest strict tier among the meeting notes it
+    lists, never below DIGEST_FLOOR. A note whose tier is absent or does not
+    read cleanly counts as restricted (v2.6 F21): its subject, slot and
+    attendee count are in the digest, so the digest is at least its tier."""
+    if str(SCRIPTS_DIR) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS_DIR))
+    import classification_tier as ct
+    rank = ct.TIER_RANK
+    best = DIGEST_FLOOR
+    for n in listed:
+        tier, unknown = ct.effective(n.text)
+        if unknown or tier is None:
+            tier = 'restricted'
+        if rank[tier] > rank[best]:
+            best = tier
+    return best
+
+
 def write_digest(notes, gi, apply_: bool) -> str:
     subjects: dict[str, list[Note]] = defaultdict(list)
     for n in notes:
@@ -376,6 +399,7 @@ def write_digest(notes, gi, apply_: bool) -> str:
             buckets[key].append((subj, n))
 
     ranked = sorted(buckets.values(), key=lambda v: -len(v))
+    tier = digest_tier(n for v in ranked for _, n in v)
     now = dt.datetime.now().strftime('%Y-%m-%dT%H:%M')
     # Deliberately NO `categories: [[Meetings]]` and no `type:` -- those two
     # keys are what Meetings.base filters on, and a report *about* meetings
@@ -384,9 +408,8 @@ def write_digest(notes, gi, apply_: bool) -> str:
         '---',
         'title: Unmatched Meeting Subjects',
         'tags: []',
-        # Built from Meetings/ notes, whose floor is confidential
-        # (F-20261020 5278121).
-        'classification: confidential',
+        # At least the tier of every meeting note listed (v2.6 F21).
+        f'classification: {tier}',
         f'created: {now}',
         f'updated: {now}',
         '---',
@@ -429,6 +452,9 @@ def write_digest(notes, gi, apply_: bool) -> str:
     sys.path.insert(0, str(SCRIPTS_DIR))
     import templater_guard
     text = templater_guard.neutralize('\n'.join(out))
+    import classification_tier as ct
+    if ct.effective(text) != (tier, []):
+        raise ValueError(f'digest does not read as {tier}; not written')
     if apply_:
         DIGEST_NOTE.parent.mkdir(parents=True, exist_ok=True)
         DIGEST_NOTE.write_text(text, encoding='utf-8')

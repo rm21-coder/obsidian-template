@@ -124,7 +124,11 @@ finds it: entities and backslash escapes decoded, case ignored, leading
 whitespace (JavaScript's `trim()` set) skipped, on any line, so fences inside
 list items and quotes count. A language that would smuggle in a second CSS
 class (a form feed, or an encoded line break, before `language-tasks`) is
-rewritten so it cannot. Other code blocks keep their language, so syntax
+rewritten so it cannot. A tilde fence's info string is read to the end of
+the line, since it may hold backticks and tildes. The blocks guarded are the
+plugins' (Tasks, Dataview, Meta Bind, Metadata Menu, Excalidraw), Bases, and
+Obsidian's core `query` search block; the export gate reads fences through
+the same function. Other code blocks keep their language, so syntax
 highlighting still works.
 
 `tests/test_templater_guard.py` lists every guarded writer. Any new script
@@ -151,9 +155,6 @@ The guard has five limits:
   switched to reading view in that window. A plugin block renders in Live
   Preview too, so opening a clipping of a hostile page in that window would
   run it.
-- **Search blocks stay live.** Obsidian's core `query` block is left alone. It
-  lists vault search results inside the note, on screen only, with no way to
-  send them anywhere.
 - **Exotic YAML keys are not parsed.** An Excalidraw key spelled with escapes
   in an explicit-key or multi-line flow layout (`? ` with the key on the next
   line, or `{? "…"` across lines) can still open a note as a drawing. Its

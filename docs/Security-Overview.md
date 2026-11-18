@@ -219,8 +219,8 @@ the way Obsidian reads them, so encoded variants are covered. A test lists
 every guarded writer.
 
 Its stated limits: copied text keeps the zero-width space, setext `===`
-headings lose their formatting, the core search `query` block is left alone,
-some exotic Excalidraw YAML layouts are not parsed, and a new web clipping
+headings lose their formatting (and outside text loses working core search
+`query` embeds, which the guard now defuses too), some exotic Excalidraw YAML layouts are not parsed, and a new web clipping
 stays raw until `strip_ads` rewrites it: seconds on macOS (a folder watch), up
 to five minutes on Windows (a schedule). A plugin block in a hostile clipping
 opened inside that window would render.

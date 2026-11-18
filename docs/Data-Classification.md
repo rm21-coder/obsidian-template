@@ -150,6 +150,16 @@ to add one key would rewrite quoting and date forms across the whole vault and
 bury the real change in diff noise. Existing keys are replaced in place; new
 ones are appended before the closing fence.
 
+**A job that quotes other notes never moves text down a tier.** Meeting prep
+quotes an open follow-up only from a note whose tier reads cleanly and ranks
+no higher than the meeting note's; an untiered or unreadable note, and any
+note carrying a `generator:` marker (a job wrote it, not you), is never
+quoted. The callout says how many lines were held back, never which. The
+unmatched-meeting digest takes the highest tier among the meetings it lists
+(an untiered one counts as `restricted`). The backfill
+(`add_classification.py`) finds frontmatter exactly as the gates do, byte-order
+marks included, and refuses any write that would not read as the tier it set.
+
 **The tracking hash covers the body only.** See the Obsidian interaction below —
 this is not an optimisation, it is what stops an infinite rewrite loop.
 
@@ -354,7 +364,7 @@ each one a restricted note exported as "clear". So now:
 | Situation | Result |
 |---|---|
 | Embed resolves to nothing in the vault | **Blocks**; `--override` allowed (you can see the target does not exist) |
-| Query block (`dataview`, `dataviewjs`, `tasks`, `base`, inline `` `= …` ``) or an embedded `.base` | **Blocks**; `--override` allowed — look at what it renders first; the gate cannot |
+| Query block (`dataview`, `dataviewjs`, `tasks`, `base`, `query`, inline `` `= …` ``) or an embedded `.base`. The fence language is read as Obsidian reads it: entities and escapes decoded (`&#113;uery`), and a class smuggled in after a line break (`x&#10;language-dataview`) counted | **Blocks**; `--override` allowed — look at what it renders first; the gate cannot |
 | An unparseable canvas, an unreadable dependency, a closure deeper than 6 | **Blocks; cannot be overridden** — a restricted note may be behind it |
 | A declared tier the gate does not recognise — including beside a recognised one — or frontmatter it cannot read reliably (a JSON/flow mapping, a quoted key, a nested or multi-line `classification`) | **Blocks; cannot be overridden**, and `--treat-unclassified` does not apply |
 | A query or base that names a restricted note, or a folder holding one | **Blocks; cannot be overridden** — quoted names, `[[links]]` and `file:`/`path:` tokens inside queries and bases are resolved and judged |

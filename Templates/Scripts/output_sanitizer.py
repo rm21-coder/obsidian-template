@@ -88,9 +88,12 @@ _DECODE_TOKEN_RE = re.compile(
     r"&(?:#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[A-Za-z][A-Za-z0-9]*;?)"
     r"|\\[!-/:-@\[-`{-~]")
 
-# Fenced code: the same matcher and language rule templater_guard uses
-# (_FENCE, _info_language), copied so this module stands alone.
-_FENCE_RE = re.compile(r"(`{3,}|~{3,})([^\r\n`~]*(?:[`~]{1,2}[^\r\n`~]+)*)")
+# Fenced code: the same matcher templater_guard uses (_FENCE), copied so this
+# module stands alone. A tilde fence's info may hold mixed runs such as "~``"
+# (v2.6 review RC11); linear, as there (RC12).
+_FENCE_RE = re.compile(r"(`{3,}|~{3,})("
+                       r"(?<=~)(?:[^\r\n`~]|`{1,2}(?!`)|~{1,2}(?!~))*"
+                       r"|[^\r\n`~]*(?:[`~]{1,2}[^\r\n`~]+)*)")
 _BACKSLASH_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _TRIM = " \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006" \
         "\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"

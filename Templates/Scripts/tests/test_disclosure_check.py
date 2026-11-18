@@ -978,3 +978,40 @@ def test_withheld_manifest_is_outside_dest_and_dest_has_counts_only(
     if os.name != "nt":
         assert (manifests[0].stat().st_mode & 0o777) == 0o600
     assert str(manifests[0]) in capsys.readouterr().out
+
+
+# --- v2.6 F23: a query fence is seen however its language is spelled --------
+
+@pytest.mark.parametrize("body", [
+    "```&#113;uery\nfile:Other\n```",
+    "```&#116;asks\nnot done\n```",
+    "```x&#10;language-dataview\nLIST\n```",
+    "```x\flanguage-tasks\nnot done\n```",
+    "```&#x71;uery\nfile:Other\n```",
+    "~~~&#100;ataview\nLIST\n~~~",
+    "> ```&#113;uery\n> file:Other\n> ```",          # inside a callout
+])
+def test_an_encoded_query_fence_is_dynamic_content(vault: Path, body: str):
+    host = note(vault, "Host", body=body, tier="public")
+    res = D.evaluate([host], "public")[0]
+    assert res["blocked"], res
+    assert any(r.startswith("dynamic content:") for r in res["reasons"]), res["reasons"]
+
+
+@pytest.mark.parametrize("body", [
+    "```&#113;uery\nfile:Secret\n```",
+    "```x&#10;language-query\nfile:Secret\n```",
+    '```x&#10;language-dataview\nLIST FROM "Knowledge"\n```',
+])
+def test_an_encoded_query_naming_a_restricted_note_cannot_be_overridden(vault: Path, body: str):
+    _restricted(vault)
+    host = note(vault, "Host", body=body, tier="public", folder="Other")
+    _assert_restricted_blocks(D.evaluate([host], "public")[0])
+
+
+@pytest.mark.parametrize("body", ["```python\nx = 1\n```", "```&#112;ython\nx\n```",
+                                  "```queryx-not\nx\n```"])
+def test_an_ordinary_fence_is_not_a_query(vault: Path, body: str):
+    host = note(vault, "Host", body=body, tier="public")
+    res = D.evaluate([host], "public")[0]
+    assert not res["blocked"], res

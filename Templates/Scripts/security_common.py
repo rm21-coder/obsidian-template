@@ -713,6 +713,30 @@ def _sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+# winnt.h; the stat module defines it only on Windows builds.
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
+
+
+def is_link(path) -> bool:
+    """True when `path` is a symlink or a Windows directory junction, which a
+    non-admin can create (`mklink /J`) and which Path.is_symlink() reports as
+    False while is_dir() follows it (v2.6 W5). False when nothing is there.
+
+    Only the redirecting reparse tag counts: OneDrive Files-On-Demand
+    placeholders and deduplicated files are reparse points too, and refusing
+    them would break a synced vault without stopping any redirect. Every
+    check that refuses a link in place of a real directory uses this."""
+    import stat as _st
+    try:
+        st = os.lstat(path)
+    except (OSError, ValueError):
+        return False
+    if _st.S_ISLNK(st.st_mode):
+        return True
+    return (bool(getattr(st, "st_file_attributes", 0) & _st.FILE_ATTRIBUTE_REPARSE_POINT)
+            and getattr(st, "st_reparse_tag", 0) == _IO_REPARSE_TAG_MOUNT_POINT)
+
+
 def install_controls(src: Path, dest: Path | None = None) -> list:
     """Copy control_files() from `src` (a Templates/Scripts folder) into
     `dest` (default controls_dir()), owner-only, and check each copy against
@@ -731,17 +755,17 @@ def install_controls(src: Path, dest: Path | None = None) -> list:
             raise ValueError(f"{path} is not a regular file")
         blobs[rel] = path.read_bytes()
     new_parent = not dest.parent.exists()
-    if dest.is_symlink():
+    if is_link(dest):
         raise ValueError(f"{dest} is not a directory")
     if new_parent:              # the state dir, created here: owner-only too
         make_private_dir(dest.parent, parents=True)
     make_private_dir(dest)      # N11: never mkdir(mode=0o700) on Windows
-    if dest.is_symlink() or not dest.is_dir():
+    if is_link(dest) or not dest.is_dir():
         raise ValueError(f"{dest} is not a directory")
     for rel, data in blobs.items():
         target = dest / rel
         if target.parent != dest:
-            if target.parent.is_symlink():
+            if is_link(target.parent):
                 raise ValueError(f"{target.parent} is a symlink")
             make_private_dir(target.parent)
         tmp = target.with_name(target.name + ".tmp")

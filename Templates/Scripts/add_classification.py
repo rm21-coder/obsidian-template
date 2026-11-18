@@ -55,12 +55,15 @@ BACKUP_ROOT = (
     Path.home() / ".local" / "share" / "obsidian-rag-sync" / "classification-backup"
 )
 
-# Match a frontmatter block at the very top of the file: --- ... ---
-# Captures the YAML body so we can scan it for an existing `classification` key.
-FM_RE = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?", re.DOTALL)
+# Frontmatter is found, and an existing tier read, exactly as every gate
+# finds and reads them: classification_tier (v2.6 F22). The backfill's own
+# regex needed "---" at offset 0, so a note starting with a byte-order mark
+# looked untiered and got a lower block prepended above its real one.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import classification_tier  # noqa: E402
 
-# Match an existing classification key anywhere in a YAML block, at column 0.
-CLASS_KEY_RE = re.compile(r"(?m)^classification\s*:", re.IGNORECASE)
+_LINE_SPLIT = re.compile(r"(\r\n|\r|\n)")
+_OPEN_LINE = re.compile(r"\A\ufeff{0,2}---\Z")
 
 # A frontmatter `source:` (or `url:`) pointing at an http(s) address — the mark
 # of a web clipping. Matched against the frontmatter body only, so a link in the
@@ -79,48 +82,56 @@ def default_for(rel: Path, text: str = "") -> str:
     return GLOBAL_DEFAULT
 
 
-def already_has(fm_body: str) -> bool:
-    return bool(CLASS_KEY_RE.search(fm_body))
+def already_has(text: str) -> bool:
+    """True when the note declares anything about its tier that the strict
+    reader sees -- a recognised value, or one it cannot read. Either way the
+    backfill has no business adding a second declaration."""
+    return bool(classification_tier.declared(text))
+
+
+class Refused(ValueError):
+    """The rewrite would not read as exactly the tier it set."""
 
 
 def insert_classification(text: str, value: str) -> str | None:
     """Return new text with classification inserted, or None if no change needed.
 
     Three cases:
-      1. File already has classification → return None (no-op).
-      2. File has frontmatter but no classification → insert key before the
-         closing `---` fence.
-      3. File has no frontmatter → prepend a minimal `--- classification: X ---`
-         block.
-    """
-    m = FM_RE.match(text)
-    if m:
-        fm_body = m.group(1)
-        if already_has(fm_body):
-            return None
-        # Insert `classification: value` as a new line at the END of the YAML
-        # body, just before the closing fence. We preserve whatever trailing
-        # whitespace shape the YAML body has.
-        new_body = fm_body.rstrip("\n") + f"\nclassification: {value}\n"
-        # Reconstruct the file with the same closing-fence form as the original.
-        # m.group(0) is the entire matched FM block including fences.
-        original_block = m.group(0)
-        # Find where the closing fence starts in original_block.
-        # The block is: ---\n  <body>  \n---\n? — replace the body cleanly.
-        # Determine the line-ending used.
-        lf = "\r\n" if "\r\n" in original_block else "\n"
-        closing = f"---{lf}" if original_block.endswith(lf) else "---"
-        new_block = f"---{lf}{new_body.rstrip(chr(10))}{lf}{closing}"
-        # Preserve whatever came after the closing fence (the body of the note).
-        rest = text[m.end():]
-        return new_block + rest
+      1. The note already declares a tier, readable or not → None (no-op).
+      2. It has frontmatter (as classification_tier.frontmatter finds it: up
+         to two byte-order marks, closed by the first line starting "---")
+         but no tier → the key goes in as the last line before the close,
+         with the note's own line ending.
+      3. No frontmatter → a minimal `--- classification: X ---` block is
+         prepended.
 
-    # No frontmatter at all — prepend a minimal block.
-    minimal = f"---\nclassification: {value}\n---\n"
-    # If the file is empty or starts with content, add a separating blank line.
-    if text and not text.startswith("\n"):
-        return minimal + "\n" + text
-    return minimal + text
+    Raises Refused unless the result reads as exactly `value` and no lower
+    than before (classification_tier.tier_not_lowered).
+    """
+    if already_has(text):
+        return None
+    new = None
+    if classification_tier.frontmatter(text) is not None:
+        parts = _LINE_SPLIT.split(text)        # line, sep, line, sep, ...
+        lines, seps = parts[0::2], parts[1::2] + [""]
+        if _OPEN_LINE.match(lines[0]):
+            close = next((i for i in range(1, len(lines))
+                          if lines[i].startswith("---")), None)
+            if close is not None:
+                lf = seps[0]
+                lines.insert(close, f"classification: {value}")
+                seps.insert(close, lf)
+                new = "".join(ln + sp for ln, sp in zip(lines, seps))
+    if new is None:
+        # The note's own first line ending, so a CRLF note stays CRLF (RC14).
+        found = _LINE_SPLIT.search(text)
+        nl = found.group(0) if found else "\n"
+        minimal = f"---{nl}classification: {value}{nl}---{nl}"
+        # If the file is empty or starts with content, add a separating blank line.
+        new = minimal + (nl + text if text and not text.startswith(("\n", "\r")) else text)
+    if not classification_tier.tier_not_lowered(text, new, expected=value):
+        raise Refused(f"the result does not read as `{value}`")
+    return new
 
 
 def should_skip_path(rel: Path) -> bool:
@@ -132,25 +143,37 @@ def process_file(
 ) -> tuple[str, Path, str | None]:
     """Return (status, rel, value_used).
 
-    status ∈ {"modified", "skip-has-class", "skip-folder", "error"}
+    status ∈ {"modified", "skip-has-class", "skip-unreadable", "skip-too-large",
+              "skip-folder", "error", "refused"}
     """
     rel = file_path.relative_to(vault_root)
     if should_skip_path(rel):
         return ("skip-folder", rel, None)
 
     try:
-        text = file_path.read_text(encoding="utf-8")
+        # Untranslated, so the note keeps its own line endings (review RC4).
+        text = classification_tier.read_note(file_path, newline="")
+    except classification_tier.NoteTooLarge:
+        return ("skip-too-large", rel, None)        # reported by path (RC13)
     except Exception:
         return ("error", rel, None)
 
+    # Something is declared but no gate can evaluate it: left alone, and
+    # reported by path, since every gate will refuse it (review RC5).
+    tier, unknown = classification_tier.effective(text)
+    if classification_tier.declared(text) and (tier is None or unknown):
+        return ("skip-unreadable", rel, None)
+
     # Only the frontmatter is consulted for the source-URL signal, so a link in
     # the note's prose can't reclassify it.
-    fm_match = FM_RE.match(text)
-    value = default_for(rel, fm_match.group(1) if fm_match else "")
+    value = default_for(rel, classification_tier.frontmatter(text) or "")
     if value not in VALID:
         return ("error", rel, None)
 
-    new_text = insert_classification(text, value)
+    try:
+        new_text = insert_classification(text, value)
+    except Refused:
+        return ("refused", rel, value)
     if new_text is None:
         return ("skip-has-class", rel, None)
 
@@ -158,7 +181,8 @@ def process_file(
         backup_path = backup_root / rel
         backup_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(file_path, backup_path)
-        file_path.write_text(new_text, encoding="utf-8")
+        with open(file_path, "w", encoding="utf-8", newline="") as fh:
+            fh.write(new_text)
 
     return ("modified", rel, value)
 
@@ -222,6 +246,16 @@ def main() -> int:
         f = by_folder.setdefault(
             top, {"modified": 0, "skip-has-class": 0, "error": 0}
         )
+        if status == "refused":
+            print(f"REFUSED (the write would not read as `{value}`): {rel}")
+            status = "error"
+        elif status == "skip-unreadable":
+            print(f"UNREADABLE TIER (left alone; every gate refuses it, fix by hand): {rel}")
+            status = "error"
+        elif status == "skip-too-large":
+            print(f"TOO LARGE (over the {classification_tier.MAX_NOTE_BYTES}-byte read cap; "
+                  f"left alone, tier it by hand): {rel}")
+            status = "error"
         f[status] = f.get(status, 0) + 1
         if status == "modified":
             by_value[value] = by_value.get(value, 0) + 1

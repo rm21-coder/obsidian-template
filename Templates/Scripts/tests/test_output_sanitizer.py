@@ -109,10 +109,19 @@ def live_schemes(t):
 
 
 def live_mermaid(t):
-    """A fence whose language, decoded and trimmed, is mermaid."""
-    for fence in re.finditer(r"(?:`{3,}|~{3,})([^\r\n`~]*)", t):
-        lang = html.unescape(_ESCAPE.sub(r"\1", fence.group(1))).strip().lower()
-        if lang.startswith("mermaid"):
+    """A fence whose language is mermaid, read as Obsidian's reading view does:
+    after any fence-like run (over-approximating where a fence starts) the
+    info runs to the line end -- CommonMark lets a tilde fence's info hold
+    backticks and tildes (review RC11) -- it is unescaped and decoded, cut at
+    the first space or tab, and the class "language-<that>" is split on LF,
+    CR and FF. Plus the plain decoded-and-trimmed reading."""
+    for fence in re.finditer(r"(?=(?:```|~~~)([^\r\n]*))", t):
+        info = html.unescape(_ESCAPE.sub(r"\1", fence.group(1).lstrip("`~")))
+        if info.strip().lower().startswith("mermaid"):
+            return True
+        token = re.split(r"[ \t]", info.lstrip(" \t"), maxsplit=1)[0]
+        if any(c.lower().startswith("language-mermaid")
+               for c in re.split(r"[\n\r\f ]", "language-" + token)):
             return True
     return False
 
@@ -369,3 +378,36 @@ def test_b7_no_windows_device_name(stem):
 def test_b7_ordinary_names_untouched():
     assert o.safe_note_stem("console") == "console"
     assert o.safe_note_stem("Comms plan") == "Comms plan"
+
+
+# --- v2.6 review RC11: a tilde fence's info string runs to the line end ---
+
+@pytest.mark.parametrize("raw", [
+    "~~~x~``&#10;language-mermaid\ngraph TD\n~~~\n",
+    "~~~x`~`&#10;language-mermaid\ngraph TD\n~~~\n",
+    "~~~x~~`\flanguage-mermaid\ngraph TD\n~~~\n",
+    "~~~x ```&#10;language-mermaid\n",
+    "~~~ ```mermaid\n",
+])
+def test_tilde_fence_info_with_backticks_is_read_to_line_end(raw):
+    assert live_mermaid(raw), raw          # the oracle sees it as written
+    out, counts = S(raw)
+    assert not live_mermaid(out), out
+    assert counts["diagrams"] == 1
+    assert S(out) == (out, {"images": 0, "html": 0, "schemes": 0, "diagrams": 0})
+
+
+# --- closing review RC12: the fence pass stays linear on one long line ---
+
+@pytest.mark.parametrize("unit", ["~~~a", "~``", "~`", "~~a", "```a~~"])
+def test_fence_pass_is_linear_on_one_long_line(unit):
+    import time
+    def cost(n):
+        s = ("~~~" if not unit.startswith(("~~~", "```")) else "") + unit * n + "\n"
+        t = time.perf_counter()
+        S(s)
+        return time.perf_counter() - t
+    small, big = cost(4000), cost(32000)
+    # 8x the input: linear is ~8x; the quadratic repair was ~64x (and a
+    # regression fails in seconds, not hours). A floor keeps timer noise out.
+    assert big < max(small, 0.02) * 24, (small, big)

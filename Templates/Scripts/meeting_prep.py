@@ -29,6 +29,7 @@ import datetime as dt
 import os
 import re
 import sys
+import classification_tier  # noqa: E402
 import templater_guard  # noqa: E402
 
 from pathlib import Path
@@ -46,6 +47,13 @@ MEETINGS = VAULT / "Meetings"
 # Templates.
 EXCLUDE_DIRS = {".obsidian", ".trash", "Clippings", "Creations", "Z_archive",
                 "Z_attachments"}
+# Folders are not authorship: a model-written report the operator files into
+# Knowledge/ is still the model's text (v2.6 F20). A job that writes notes for
+# the operator to keep marks them `generator: <job>` in their frontmatter, and
+# a note carrying that key is never a source of "your" follow-ups. None of the
+# jobs in this repository writes a task-bearing note the operator files, so
+# the marker is for jobs a user adds; folder exclusions still apply.
+GENERATOR_KEY_RE = re.compile(r"(?m)^generator[ \t]*:")
 
 BEGIN_MARK = "<!-- BEGIN: AUTO-INSERTED OPEN FOLLOW-UPS -->"
 END_MARK = "<!-- END: AUTO-INSERTED OPEN FOLLOW-UPS -->"
@@ -192,11 +200,30 @@ def parse_meeting_start(path: Path) -> dt.datetime | None:
         return None
 
 
-def find_open_tasks_for(person: str, skip_path: Path) -> list[tuple[str, str]]:
-    """Find open `- [ ]` tasks whose line contains [[person]] or any People alias.
+def source_admissible(text: str, dest_tier: str) -> bool:
+    """True when lines of the note `text` may be quoted into a note of
+    `dest_tier` (v2.6 F19): the operator wrote it (no generator marker), its
+    tier reads cleanly with the strict reader, and it ranks no higher than
+    the destination's. An untiered or unreadable source is never quoted."""
+    fm = classification_tier.frontmatter(text)
+    if fm is not None and GENERATOR_KEY_RE.search(fm):
+        return False
+    tier, unknown = classification_tier.effective(text)
+    if unknown or tier is None:
+        return False
+    return classification_tier.TIER_RANK[tier] <= classification_tier.TIER_RANK[dest_tier]
+
+
+def find_open_tasks_for(person: str, skip_path: Path, dest_tier: str,
+                        withheld: list | None = None) -> list[tuple[str, str]]:
+    """Find open `- [ ]` tasks whose line contains [[person]] or any People alias,
+    in notes that may be quoted into a note of `dest_tier` (source_admissible).
 
     Aliases are pulled from `People/<person>.md` frontmatter (`aliases:` field).
     Each match is returned at most once, even if multiple needles hit the same line.
+    A match in a note that may not be quoted is not returned; its count is
+    appended to `withheld` when given, so the block can say lines were held
+    back without saying which.
     """
     needles = [f"[[{a}]]" for a in get_person_aliases(person)]
     results: list[tuple[str, str]] = []
@@ -209,12 +236,18 @@ def find_open_tasks_for(person: str, skip_path: Path) -> list[tuple[str, str]]:
             if fp == skip_path:
                 continue
             try:
-                with open(fp, "r", encoding="utf-8", errors="replace") as f:
-                    for line in f:
-                        if any(n in line for n in needles) and OPEN_TASK_RE.match(line):
-                            results.append((fp.stem, line.rstrip()))
-            except OSError:
+                text = classification_tier.read_note(fp, errors="replace")
+            except OSError:          # NoteTooLarge included: never quoted
                 continue
+            hits = [line.rstrip() for line in text.split("\n")
+                    if any(n in line for n in needles) and OPEN_TASK_RE.match(line)]
+            if not hits:
+                continue
+            if not source_admissible(text, dest_tier):
+                if withheld is not None:
+                    withheld.append(len(hits))
+                continue
+            results.extend((fp.stem, h) for h in hits)
     results.sort(key=lambda x: x[0])
     return results
 
@@ -237,7 +270,8 @@ def render_task_line(src: str, raw: str) -> str:
 
 
 def build_block(now: dt.datetime, mode: str,
-                attendee_tasks: dict[str, list[tuple[str, str]]]) -> str:
+                attendee_tasks: dict[str, list[tuple[str, str]]],
+                withheld: int = 0) -> str:
     total = sum(len(v) for v in attendee_tasks.values())
     stamp = now.strftime("%Y-%m-%dT%H:%M")
     label = "auto-inserted" if mode == "morning" else "refreshed pre-meeting"
@@ -247,6 +281,9 @@ def build_block(now: dt.datetime, mode: str,
         f"> [!todo]+ Open follow-ups ({total}) — {label} {stamp}",
         "> Move items down into the agenda or ignore. Check off the source task to drop it from this list.",
     ]
+    if withheld:
+        lines.append(f"> {withheld} more held back: their notes are classified above "
+                     "this one, carry no readable tier, or were written by a job.")
     for person, tasks in attendee_tasks.items():
         lines.append(">")
         lines.append(f"> **[[{person}]]**")
@@ -286,13 +323,14 @@ def find_today_meetings() -> list[Path]:
     return sorted(p for p in MEETINGS.glob("*.md") if p.name.startswith(today))
 
 
-def collect_attendee_tasks(path: Path) -> tuple[list[str], dict[str, list[tuple[str, str]]]]:
+def collect_attendee_tasks(path: Path, dest_tier: str, withheld: list | None = None
+                           ) -> tuple[list[str], dict[str, list[tuple[str, str]]]]:
     text = path.read_text(encoding="utf-8")
     fm, _ = split_frontmatter(text)
     people = parse_people(fm)
     out: dict[str, list[tuple[str, str]]] = {}
     for person in people:
-        tasks = find_open_tasks_for(person, path)
+        tasks = find_open_tasks_for(person, path, dest_tier, withheld)
         if tasks:
             out[person] = tasks
     return people, out
@@ -310,7 +348,16 @@ def write_block(path: Path, mode: str, dry_run: bool, now: dt.datetime) -> str:
     fm, body = split_frontmatter(cleaned_text)
     if not fm:
         return f"skip (malformed frontmatter) {path.name}"
-    people, attendee_tasks = collect_attendee_tasks(path)
+    dest_tier, unknown = classification_tier.effective(text)
+    if unknown or dest_tier is None:
+        # Nothing can be shown to rank at or below this note. An old block
+        # goes: it was quoted against a tier the note no longer reads as.
+        if BEGIN_MARK in text and not dry_run:
+            path.write_text(f"{fm}\n\n{body}" if body else f"{fm}\n", encoding="utf-8")
+            return f"removed block, tier unreadable {path.name}"
+        return f"skip (tier unreadable or absent) {path.name}"
+    withheld: list = []
+    people, attendee_tasks = collect_attendee_tasks(path, dest_tier, withheld)
     if not people:
         return f"skip (no people) {path.name}"
     if not attendee_tasks:
@@ -320,13 +367,17 @@ def write_block(path: Path, mode: str, dry_run: bool, now: dt.datetime) -> str:
             return f"removed empty block {path.name}"
         return f"skip (no open follow-ups) {path.name}"
     # Quotes task lines from other notes, some older than templater_guard.
-    block = templater_guard.neutralize(build_block(now, mode, attendee_tasks))
+    held = sum(withheld)
+    block = templater_guard.neutralize(build_block(now, mode, attendee_tasks, held))
     new_text = f"{fm}\n\n{block}\n\n{body}" if body else f"{fm}\n\n{block}\n"
+    if not classification_tier.tier_not_lowered(text, new_text, expected=dest_tier):
+        return f"refused (the write would change the tier) {path.name}"
     total = sum(len(v) for v in attendee_tasks.values())
+    note = f", {held} held back" if held else ""
     if dry_run:
-        return f"DRY-RUN would write {mode} block ({total}) to {path.name}"
+        return f"DRY-RUN would write {mode} block ({total}{note}) to {path.name}"
     path.write_text(new_text, encoding="utf-8")
-    return f"wrote {mode} block ({total}) to {path.name}"
+    return f"wrote {mode} block ({total}{note}) to {path.name}"
 
 
 def decide_mode(path: Path, now: dt.datetime) -> str | None:

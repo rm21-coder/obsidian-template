@@ -36,6 +36,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from security_common import is_link
+
 # N11 (2026-10-23): on Windows mkdir(mode=0o700) writes an owner-only ACL
 # (Python 3.12.4+); made from an elevated prompt, the owner is the
 # Administrators group and the user's own tasks cannot use the folder. There
@@ -103,11 +105,11 @@ def ensure_dirs() -> list[Path]:
         _owner_only(path, 0o700)
         for sub in RETIRE_SUBDIRS:
             retired = path / sub
-            if retired.is_symlink() or not retired.is_dir():
+            if is_link(retired) or not retired.is_dir():
                 continue
             _owner_only(retired, 0o700)
             for f in retired.iterdir():
-                if f.is_file() and not f.is_symlink():
+                if f.is_file() and not is_link(f):
                     _owner_only(f, 0o600)
         created.append(path)
     return created

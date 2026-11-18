@@ -89,7 +89,7 @@ WRITERS = {
     "markitdown_dropper.py": ["templater_guard.neutralize(body)"],
     "markitdown_cleanup.py": ["cleaned = templater_guard.neutralize(cleaned)"],
     "strip_ads.py": ["templater_guard.neutralize(strip_ads(original))"],
-    "meeting_prep.py": ["templater_guard.neutralize(build_block(now, mode, attendee_tasks))"],
+    "meeting_prep.py": ["templater_guard.neutralize(build_block(now, mode, attendee_tasks, held))"],
     "tag_clippings.py": ["line = templater_guard.neutralize("],
     "classify_notes.py": [
         "flat = templater_guard.neutralize(flat)",
@@ -132,8 +132,8 @@ import subprocess
 
 PLUGIN_LANGS = ("tasks", "dataview", "dataviewjs", "meta-bind", "meta-bind-button",
                 "meta-bind-embed", "meta-bind-js-view", "mdm", "excalidraw-script-install",
-                "base")
-PLUGIN_PREFIXES = ("tasks", "dataview", "meta-bind", "mdm", "excalidraw", "base")
+                "base", "query")              # query: Obsidian's core search embed (v2.6 F23)
+PLUGIN_PREFIXES = ("tasks", "dataview", "meta-bind", "mdm", "excalidraw", "base", "query")
 # Everything JS trim() drops beyond space and tab; U+200B it keeps.
 JS_WS = ("\n\r\v\f\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007"
          "\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff")
@@ -221,7 +221,7 @@ def test_no_plugin_block_survives_in_any_form(lang: str, shape: str) -> None:
     first = lang[0]
     raw = shape.format(l=lang, L=lang.upper(), r=lang[1:], n=ord(first),
                        h=format(ord(first), "x"), name={"t": "#116;", "d": "#100;",
-                                                       "m": "#109;", "e": "#101;", "b": "#98;"}[first])
+                                                       "m": "#109;", "e": "#101;", "b": "#98;", "q": "#113;"}[first])
     assert plugin_fences(raw), f"case does not reach the oracle: {raw!r}"
     out = G.neutralize(raw)
     assert not plugin_fences(out), out
@@ -292,7 +292,7 @@ def test_excalidraw_drawing_keys_are_defused() -> None:
 
 
 def test_ordinary_code_blocks_are_left_alone() -> None:
-    for lang in ("python", "js", "json", "bash", "mermaid", "query", "text", ""):
+    for lang in ("python", "js", "json", "bash", "mermaid", "text", ""):
         text = f"```{lang}\nx = 1\n```\n~~~{lang}\n~~~"
         assert G.neutralize(text) == text, lang
 
@@ -358,3 +358,71 @@ def test_the_guard_source_is_ascii() -> None:
     patterns match."""
     src = (SCRIPTS / "templater_guard.py").read_text(encoding="utf-8")
     assert all(ord(c) < 128 for c in src)
+
+
+# --- v2.6 F23: the gate and the guard read a fence's language the same way ---
+
+@pytest.mark.parametrize("lang", PLUGIN_LANGS)
+@pytest.mark.parametrize("shape", [
+    "```{l}", "```&#{n};{r}", "```&#x{h};{r}", "```x\flanguage-{l}",
+    "```x&#10;language-{l}", "```&#10;language-{l}", "~~~x\\&#10;language-{l}",
+    "```\u00a0{l}", "``` \ufeff{l}",
+    # review RC1: a tilde fence's info may hold backticks and tildes
+    "~~~x~``&#10;language-{l}", "~~~x`~`&#10;language-{l}", "~~~x~~`\flanguage-{l}",
+    "~~~x ```&#10;language-{l}", "~~~~x~~~~~`&#10;language-{l}",
+])
+def test_fence_languages_sees_every_language_the_oracle_sees(lang, shape):
+    raw = shape.format(l=lang, r=lang[1:], n=ord(lang[0]), h=format(ord(lang[0]), "x"))
+    seen = {x for _, langs in G.fences(raw) for x in langs}
+    assert plugin_fences(raw), raw
+    assert set(plugin_fences(raw)) <= {x for x in seen if x.startswith(PLUGIN_PREFIXES)}, (raw, seen)
+
+
+@pytest.mark.parametrize("raw", ["```query\nfile:Secret\n```", "```&#113;uery\nfile:Secret\n```",
+                                 "```x&#10;language-query\nfile:Secret\n```"])
+def test_outside_text_keeps_no_core_search_embed(raw):
+    out = G.neutralize(raw)
+    assert not [x for _, langs in G.fences(out) for x in langs if x == "query"], out
+
+
+# --- v2.6 review RC1/RC2: the info string's end, from CommonMark's rule ---
+# Written from the spec, not from either reader: a tilde fence's info string
+# runs to the line end and may contain backticks and tildes; a backtick
+# fence's may not contain a backtick.
+
+@pytest.mark.parametrize("raw", [
+    "~~~x~``&#10;language-dataview\nLIST FROM \"Knowledge\"\n~~~\n",
+    "~~~x`~`&#10;language-tasks\nnot done\n~~~\n",
+    "~~~a```b``c&#10;language-query\nfile:x\n~~~\n",
+])
+def test_tilde_info_with_backticks_names_the_language(raw):
+    info = raw.split("\n", 1)[0][3:]
+    want = info.rsplit("language-", 1)[1]
+    seen = {x for _, langs in G.fences(raw) for x in langs}
+    assert want in seen, (raw, seen)
+    out = G.neutralize(raw)
+    assert not plugin_fences(out), out
+    assert want not in {x for _, langs in G.fences(out) for x in langs}, out
+
+
+def test_backtick_info_still_stops_at_a_backtick():
+    # Not a fence at all (a backtick in a backtick fence's info), so nothing
+    # past the backtick is read as this fence's info.
+    m, langs = next(G.fences("```x`y\n"))
+    assert m.group(2) == "x`y" and langs[0] == "x`y"
+
+
+# --- closing review RC12: the fence pass stays linear on one long line ---
+
+@pytest.mark.parametrize("unit", ["~~~a", "~``", "~`", "~~a", "```a~~"])
+def test_fence_pass_is_linear_on_one_long_line(unit):
+    import time
+    def cost(n):
+        s = ("~~~" if not unit.startswith(("~~~", "```")) else "") + unit * n + "\n"
+        t = time.perf_counter()
+        G.neutralize(s); list(G.fences(s))
+        return time.perf_counter() - t
+    small, big = cost(4000), cost(32000)
+    # 8x the input: linear is ~8x; the quadratic repair was ~64x (and a
+    # regression fails in seconds, not hours). A floor keeps timer noise out.
+    assert big < max(small, 0.02) * 24, (small, big)

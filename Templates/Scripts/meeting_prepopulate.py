@@ -46,6 +46,7 @@ except Exception:
 # directory is importable so the sibling module resolves under any working dir.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import script_lock  # noqa: E402  (needs the path insert above)
+import security_common  # noqa: E402
 import handoff_source as hs  # noqa: E402
 # Invite text, attendee names and locations are written into new notes; none
 # of it may run as Templater code (see templater_guard).
@@ -2151,13 +2152,13 @@ def _move_to_trash(p: Path) -> Path | None:
     """Move `p` into the vault's .trash/, never overwriting a file already
     there. Returns the new path, or None if the trash is unusable."""
     trash = _vault_trash()
-    if trash.is_symlink() or (trash.exists() and not trash.is_dir()):
+    if security_common.is_link(trash) or (trash.exists() and not trash.is_dir()):
         log.warning('  refusing %s as the trash folder: not a real directory', trash)
         return None
     trash.mkdir(parents=True, exist_ok=True)
     dest = trash / p.name
     n = 1
-    while dest.exists() or dest.is_symlink():
+    while dest.exists() or security_common.is_link(dest):
         dest = trash / f'{p.stem} {n}{p.suffix}'
         n += 1
     shutil.move(str(p), str(dest))
