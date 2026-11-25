@@ -46,6 +46,11 @@ CLI (for setup and the installer):
   python3 secret_store.py get NAME     prints the value (careful in shells
                                        with history expansion of output)
   python3 secret_store.py rm NAME
+    All four read the Key Vault settings from ~/dev/secrets/.env, as the
+    jobs do. With the vault on, `get` reads the vault; `set` refuses (exit
+    3) for a secret the vault holds, since no job would read the Keychain
+    copy; `rm` removes only a Keychain copy. Only the secrets `status`
+    lists are in the vault; every other name stays in the keystore.
   python3 secret_store.py status [NAME...]
                                        where each secret resolves from
                                        (keyvault, keystore, env); never
@@ -652,6 +657,15 @@ def not_found_hint(name: str) -> str:
         return (f"Key Vault could not be asked, so {name} may well be "
                 "stored there; nothing to store. The secret_store line above "
                 "says why (off VPN, the vault firewall, or the sign-in)")
+    if _vault_held(name):
+        # F-20261125: `set` writes only the Keychain, which no job reads
+        # while the vault is on, so it is the wrong advice here.
+        try:
+            vname = _vault_name(name)
+        except KeyVaultError:
+            vname = name
+        return (f"add it to Key Vault as {vname} (docs/Key-Vault.md shows "
+                "how); the Keychain is not read while the vault is on")
     return f"store it with: python3 secret_store.py set {name}"
 
 
@@ -708,18 +722,51 @@ def _env_file_keys(path: Path) -> dict:
     return out
 
 
+# Configuration the CLI takes from .env, never a secret value.
+_CLI_CONFIG_KEYS = ("KEYVAULT_URL", "KEYVAULT_TENANT_ID", "KEYVAULT_CLIENT_ID",
+                    "KEYVAULT_CERT_THUMBPRINT", "KEYVAULT_KEY_NAME",
+                    "KEYVAULT_KEYCHAIN_FALLBACK", "LLM_API_KEY_NAME")
+
+# The secrets the jobs read, which Key Vault holds when it is on. Every
+# other name (the certificate key, the Open WebUI admin password, ...) stays
+# in the keystore either way.
+def _vault_names() -> tuple:
+    return ((os.environ.get("LLM_API_KEY_NAME", "").strip()
+             or "ANTHROPIC_API_KEY").upper(), *_STATUS_NAMES)
+
+
+def _vault_held(name: str) -> bool:
+    """True when Key Vault is on and NAME is one of the secrets it holds."""
+    return _vault_active() and name.strip().upper() in _vault_names()
+
+
+# `set` exits with this when Key Vault is on and the name lives there: the
+# installer must not take it for a Keychain failure and fall back to .env.
+EXIT_VAULT_REFUSED = 3
+
+
+def _load_cli_config() -> dict:
+    """Bring the Key Vault settings from .env into this process, as every
+    scheduled job has them, and return the file's keys.
+
+    F-20261125: only `status` did this. Run by hand from a plain shell,
+    `get` then never asked the vault and reported a stored secret "not
+    found", and `set` wrote a Keychain item no job reads. A setting already
+    in the environment wins, as before."""
+    file_keys = _env_file_keys(SECRETS_ENV)
+    for key in _CLI_CONFIG_KEYS:
+        if key in file_keys and key not in os.environ:
+            os.environ[key] = file_keys[key]
+    return file_keys
+
+
 def _status(names: list[str]) -> int:
     """Report where each secret resolves from. Never prints a value.
 
     Exit 1 when any is missing from where it will be read: the keystore or
     vault, or (vault off) .env. A copy in .env next to a stored value is
     reported, since it is ignored (KV-1) and only invites confusion."""
-    file_keys = _env_file_keys(SECRETS_ENV)
-    for key in ("KEYVAULT_URL", "KEYVAULT_TENANT_ID", "KEYVAULT_CLIENT_ID",
-                "KEYVAULT_CERT_THUMBPRINT", "KEYVAULT_KEY_NAME",
-                "KEYVAULT_KEYCHAIN_FALLBACK", "LLM_API_KEY_NAME"):
-        if key in file_keys and key not in os.environ:
-            os.environ[key] = file_keys[key]
+    file_keys = _load_cli_config()
     if not names:
         names = [os.environ.get("LLM_API_KEY_NAME", "").strip()
                  or "ANTHROPIC_API_KEY", *_STATUS_NAMES]
@@ -767,7 +814,17 @@ def _cli(argv: list[str]) -> int:
         print(__doc__.split("CLI", 1)[1], file=sys.stderr)
         return 2
     op, name = argv
+    _load_cli_config()
+    # The vault holds this secret: the Keychain copy is not what jobs read.
+    in_vault = _vault_held(name)
     if op == "set":
+        if in_vault and not _keyvault_fallback():
+            # Refused before any prompt, so no value is read for nothing.
+            print(f"secret_store: {name}: not stored. Key Vault is on and "
+                  "the jobs read it from the vault, never the Keychain; load "
+                  "the new value into Key Vault instead (docs/Key-Vault.md)",
+                  file=sys.stderr)
+            return EXIT_VAULT_REFUSED
         if sys.stdin.isatty():
             value = getpass.getpass(f"Value for {name}: ").strip()
         else:
@@ -778,16 +835,32 @@ def _cli(argv: list[str]) -> int:
         ok = set_secret(name, value)
         print("stored" if ok else "FAILED to store", name,
               file=sys.stderr)
+        if ok and in_vault:
+            print(f"secret_store: {name}: this is the Keychain fallback copy "
+                  "(KEYVAULT_KEYCHAIN_FALLBACK); jobs read Key Vault first",
+                  file=sys.stderr)
         return 0 if ok else 1
     if op == "get":
-        value = get_secret(name)
+        if _vault_active() and not in_vault:
+            # Vault on, but not a vault secret: the keystore, which is where
+            # `set` puts it. get_secret would ask only the vault.
+            value = _keystore_get(name)
+            if value is READ_FAILED:
+                print(f"secret_store: {name}: the keystore could not be read",
+                      file=sys.stderr)
+                return 1
+        else:
+            value = get_secret(name)
         if value is None:
-            print(f"{name}: not found", file=sys.stderr)
+            print(f"{name}: not found; {not_found_hint(name)}", file=sys.stderr)
             return 1
         print(value)
         return 0
     ok = delete_secret(name)
     print("removed" if ok else "nothing removed", name, file=sys.stderr)
+    if in_vault:
+        print(f"secret_store: {name}: only a Keychain copy is ever removed "
+              "here; the Key Vault secret is unchanged", file=sys.stderr)
     return 0 if ok else 1
 
 

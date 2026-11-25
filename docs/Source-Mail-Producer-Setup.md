@@ -34,6 +34,26 @@ inside a "Run Script" action — so the Shortcut neither signs nor errors
 visibly. It simply stops before Send Email: no mail, no compose sheet, no
 error, and nothing in the Mac logs. Run it standalone once and it works.
 
+## Changing the token
+
+When `SOURCE_MAIL_TOKEN` is rotated, every device needs the new value, and
+the helper only prompts when it holds none. On each device:
+
+1. Make a throwaway Scriptable script containing only
+   `Keychain.remove("sourceMailToken")`, run it once, and delete it. If it
+   says the key does not exist, this device held no token; carry on.
+2. Copy the new token on the Mac
+   (`python3 Templates/Scripts/secret_store.py get SOURCE_MAIL_TOKEN | tr -d '\n' | pbcopy`).
+   Universal Clipboard carries it to an iPhone or iPad signed in to the same
+   Apple ID with Handoff on. Do not email or message it to yourself.
+3. Run `SourceMailDrop` standalone. It should prompt for the token: if it
+   goes straight to its menu, the old token is still stored. Paste, then
+   choose **Send a test drop**.
+4. Clear the Mac's clipboard: `pbcopy < /dev/null`.
+
+Drops signed with the old token are rejected from the moment the Mac has the
+new one, so send nothing in between.
+
 ## Building a Shortcut
 
 One Shortcut per drop kind. They differ only in how the payload is obtained

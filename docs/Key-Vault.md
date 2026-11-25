@@ -123,6 +123,43 @@ On the Mac:
    source, write the new value only to the vault, and delete the Keychain
    copies with `python3 Templates/Scripts/secret_store.py rm NAME`.
 
+## The CLI and the installer with the vault on
+
+`secret_store.py` reads the Key Vault settings from `~/dev/secrets/.env` for
+every verb, as the jobs do, so it behaves the same from a plain shell. For
+the secrets the vault holds (the gateway key, `LLM_API_KEY_NAME` or
+`ANTHROPIC_API_KEY`, and the three `status` lists):
+
+- `get NAME` reads the vault.
+- `set NAME` refuses, with exit 3, before reading any value: no job reads a
+  Keychain copy while the vault is on, so storing one would only look like a
+  rotation. With `KEYVAULT_KEYCHAIN_FALLBACK=1` it writes the Keychain
+  fallback copy and says so.
+- `rm NAME` removes only a Keychain copy; the vault secret is unchanged.
+
+Every other name (the certificate key, the Open WebUI admin password, …)
+stays in the keystore, and `set`/`get`/`rm` act on it there. The installer
+does not prompt for, or generate, a secret the vault holds; it says so and
+points at `status`. It never writes a refused value to `.env`.
+
+### Rotating a vault secret
+
+Write the new value to the vault from a hidden prompt, so it never reaches
+the screen, the shell history or a process's arguments (`zsh` syntax):
+
+```bash
+kvset() { local v; IFS= read -rs "v?Paste value for $1 (hidden): "; echo; printf '%s' "$v" | az keyvault secret set --vault-name <vault> --name "$1" --file /dev/stdin --output none && echo "loaded $1"; unset v; }
+kvset source-mail-app-password
+```
+
+`printf` is a shell builtin, so the value is never an argument to a program.
+Jobs read the latest version, so the next run uses it; check with `status`,
+then revoke the old value at its source. For `SOURCE_MAIL_TOKEN`, generate
+the value straight into the vault, then give each signing device the new one
+(`docs/Source-Mail-Producer-Setup.md`). Copy it to the clipboard with
+`secret_store.py get SOURCE_MAIL_TOKEN | tr -d '\n' | pbcopy`, and clear the
+clipboard afterwards with `pbcopy < /dev/null`.
+
 The plugin allowlist's HMAC key (`obsidian-allowlist-hmac`) is not a
 `secret_store` secret and stays in the Keychain: it anchors a security
 control that has to work with the network down.
@@ -136,6 +173,7 @@ control that has to work with the network down.
 | `Key Vault HTTP 401 invalid_client AADSTS…` | The sign-in was refused: wrong client id, or a certificate or thumbprint that does not match the app registration. |
 | `Key Vault HTTP 403 Forbidden…` | Signed in, but the identity lacks Key Vault Secrets User on this vault. |
 | `NAME: not in Key Vault` | The vault has no secret under the dashed name. |
+| `NAME: not stored. Key Vault is on …` | `secret_store.py set` was asked to store a secret the vault holds. Load it into the vault instead (above). |
 | `certificate key … is not in the Keychain` | Step 1 was not completed, or `KEYVAULT_KEY_NAME` points elsewhere. |
 | `certificate key … could not be read from the Keychain` | The Keychain is locked, an ACL prompt is pending, or the read timed out. The key may well be stored: do not store it again; unlock the Keychain or dismiss the prompt, then re-run. |
 | `Key Vault is configured but missing …` | `KEYVAULT_URL` is set without its companions. |

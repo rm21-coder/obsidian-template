@@ -44,13 +44,14 @@ _security() {
 }
 _secret_store_set() {
     [[ "${KC_FAILS:-0}" -eq 1 ]] && return 1
+    [[ "${KC_FAILS:-0}" -eq 3 ]] && return 3
     printf '%s' "$2" > "$KC/$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
 }
 '''
 
 
 def run(tmp_path: Path, script: str, env_lines: str = "", kc: dict | None = None,
-        kc_fails: bool = False, find_rc: int | None = None) -> tuple[str, str, dict]:
+        kc_fails: bool | int = False, find_rc: int | None = None) -> tuple[str, str, dict]:
     home = tmp_path / "home"
     (home / "dev" / "secrets").mkdir(parents=True)
     env_file = home / "dev" / "secrets" / ".env"
@@ -62,7 +63,7 @@ def run(tmp_path: Path, script: str, env_lines: str = "", kc: dict | None = None
     p = subprocess.run(
         ["bash", "-c", HARNESS + script],
         env={"HOME": str(home), "LIB": str(LIB), "USER": "u", "PATH": "/usr/bin:/bin",
-             "KC_FAILS": "1" if kc_fails else "0",
+             "KC_FAILS": str(int(kc_fails)),
              "KC_FIND_RC": "" if find_rc is None else str(find_rc)},
         capture_output=True, text=True, timeout=30)
     assert p.returncode == 0, p.stdout + p.stderr
@@ -264,3 +265,106 @@ def test_verify_reports_each_resolution_state(tmp_path, allow_subprocess,
     assert want in out, out
     if "Key Vault" in want:
         assert "could not be read" not in out
+
+
+
+# ---------- F-20261125: Key Vault on -------------------------------------------
+
+VAULT_ENV = "KEYVAULT_URL=https://x.vault.azure.net/\n"
+
+
+@macos_shell
+def test_a_vault_refusal_never_falls_back_to_dotenv(tmp_path, allow_subprocess):
+    """secret_store.py set exits 3 when Key Vault holds the name. Taking that
+    for a Keychain failure would write the value to .env in plain text."""
+    out, env, kc = run(tmp_path, "keystore_set SOURCE_MAIL_TOKEN abc123", VAULT_ENV,
+                       kc_fails=3)
+    assert "abc123" not in env and kc == {}
+    assert "WARN:   SOURCE_MAIL_TOKEN not stored: Key Vault is on" in out
+    assert "falling back" not in out
+
+
+@macos_shell
+def test_a_keychain_failure_still_falls_back_to_dotenv(tmp_path, allow_subprocess):
+    """The other side of the line above: exit 1 keeps the old fallback."""
+    out, env, kc = run(tmp_path, "keystore_set OPEN_WEBUI_API_KEY abc123", "",
+                       kc_fails=True)
+    assert "OPEN_WEBUI_API_KEY=abc123" in env and "falling back" in out
+
+
+@macos_shell
+def test_migrate_says_why_when_the_vault_refuses(tmp_path, allow_subprocess):
+    out, env, kc = run(tmp_path, "migrate_env_secret SOURCE_MAIL_TOKEN",
+                       VAULT_ENV + "SOURCE_MAIL_TOKEN=abc123\n", kc_fails=3)
+    assert "SOURCE_MAIL_TOKEN=abc123" in env and kc == {}
+    assert "WARN:   SOURCE_MAIL_TOKEN: Key Vault is on, so this .env copy is not used" in out
+    assert "Keychain unavailable" not in out
+
+
+@macos_shell
+@pytest.mark.parametrize("key,env_extra,held", [
+    ("SOURCE_MAIL_TOKEN", "", True),
+    ("SOURCE_MAIL_APP_PASSWORD", "", True),
+    ("OPEN_WEBUI_API_KEY", "", True),
+    ("ANTHROPIC_API_KEY", "", True),
+    ("GW_KEY", "LLM_API_KEY_NAME=gw_key\n", True),
+    ("ANTHROPIC_API_KEY", "LLM_API_KEY_NAME=gw_key\n", False),
+    ("OPEN_WEBUI_ADMIN_PASSWORD", "", False),
+])
+def test_keystore_plan_skips_only_what_the_vault_holds(tmp_path, allow_subprocess,
+                                                       key, env_extra, held):
+    """No prompt and no generated token for a secret the vault holds, since a
+    value stored here would never be used. Other names are planned as before."""
+    out, _, _ = run(tmp_path, f'keystore_plan {key}; echo "PLAN=$KEYSTORE_PLAN"',
+                    VAULT_ENV + env_extra)
+    if held:
+        assert "PLAN=skip" in out
+        assert f"OK:   {key}: Key Vault is on and holds it" in out
+    else:
+        assert "PLAN=create" in out and "Key Vault is on" not in out
+
+
+@macos_shell
+def test_keystore_plan_with_the_vault_off_is_unchanged(tmp_path, allow_subprocess):
+    out, _, _ = run(tmp_path, 'keystore_plan SOURCE_MAIL_TOKEN; echo "PLAN=$KEYSTORE_PLAN"',
+                    "# KEYVAULT_URL=https://x.vault.azure.net/\n")
+    assert "PLAN=create" in out and "Key Vault" not in out
+
+
+def test_the_vault_name_list_matches_secret_store() -> None:
+    """vault_holds (bash) and secret_store._vault_names must name the same
+    secrets: a name only one of them lists is prompted for and refused, or
+    stored where no job reads it."""
+    import re
+    import secret_store
+    text = (LIB / "secrets.sh").read_text()
+    body = text[text.index("vault_holds() {"):]
+    body = body[:body.index("\n}\n")]
+    listed = set(re.search(r'"\$gw"\|([A-Z_|]+)\)', body).group(1).split("|"))
+    assert listed == set(secret_store._STATUS_NAMES)
+    assert "ANTHROPIC_API_KEY" in body
+
+
+def test_the_real_store_helper_passes_the_vault_refusal_through(tmp_path, allow_subprocess):
+    """The stubs above return 3 themselves; this runs the real
+    _secret_store_set against a helper that exits 3, as secret_store.py does."""
+    root = tmp_path / "repo"
+    helper = root / "Templates" / "Scripts" / "secret_store.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_text(
+        "import sys\n"
+        "print('secret_store: K1: not stored. Key Vault is on', file=sys.stderr)\n"
+        "sys.exit(3)\n")
+    script = (r'''
+set -euo pipefail
+ok() { echo "OK: $*"; }; warn() { echo "WARN: $*"; }; info() { :; }; err() { echo "ERR: $*"; }
+source "$LIB/secrets.sh"
+REPO_ROOT="$ROOT"
+rc=0; _secret_store_set K1 the-value || rc=$?
+echo "RC=$rc"
+''')
+    p = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+                       env={"HOME": str(tmp_path), "LIB": str(LIB), "ROOT": str(root),
+                            "USER": "u", "PATH": "/usr/bin:/bin:/opt/homebrew/bin"})
+    assert "RC=3" in p.stdout, p.stdout + p.stderr
+    assert "WARN:   secret_store: K1: not stored. Key Vault is on" in p.stdout

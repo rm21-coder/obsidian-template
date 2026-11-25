@@ -171,7 +171,9 @@ On macOS, installer component `39-source-mail` does all of this: it prompts for
 the address, allowed senders and app password, generates the token, and keeps
 the two secrets in the Keychain. Re-running it (`./install.sh --only
 39-source-mail`) moves either secret that an older install left in `.env` into
-the Keychain. By hand, or on Windows (where the keystore is DPAPI):
+the Keychain. With Azure Key Vault on, the vault holds both, and the
+installer leaves them alone (`docs/Key-Vault.md` covers rotating them). By
+hand, or on Windows (where the keystore is DPAPI):
 
 The two non-secret settings go in `~/dev/secrets/.env` (gitignored):
 

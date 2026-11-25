@@ -129,9 +129,16 @@ migrate_env_secret() {
         fi
         return 0
     fi
-    if _secret_store_set "$key" "$envval"; then
+    rc=0
+    _secret_store_set "$key" "$envval" || rc=$?
+    if [[ "$rc" -eq 0 ]]; then
         env_unset "$key"
         ok "  $key: moved from $SECRETS_ENV into the Keychain"
+    elif [[ "$rc" -eq 3 ]]; then
+        # F-20261125: Key Vault is on and holds this name; no job reads
+        # either copy. Moved nowhere, and the operator is told why.
+        warn "  $key: Key Vault is on, so this .env copy is not used; load it"
+        warn "  into Key Vault if it is newer, then delete its line from $SECRETS_ENV"
     else
         warn "  $key: Keychain unavailable; it stays in $SECRETS_ENV (mode 0600)"
     fi
@@ -200,10 +207,19 @@ keystore_has() {
 # for a leaked key, the leaked one kept in service. The fallback therefore
 # removes that older item, or says plainly that the old value is still live.
 keystore_set() {
-    local key="$1" val="$2"
+    local key="$1" val="$2" rc=0
     if is_macos; then
-        if _secret_store_set "$key" "$val"; then
+        _secret_store_set "$key" "$val" || rc=$?
+        if [[ "$rc" -eq 0 ]]; then
             ok "  stored in Keychain: $key"
+            return 0
+        fi
+        if [[ "$rc" -eq 3 ]]; then
+            # F-20261125: refused because Key Vault holds this name. Never
+            # fall back to .env: that would put the value on disk in plain
+            # text, where no job reads it while the vault is on.
+            warn "  $key not stored: Key Vault is on; load it into the vault"
+            warn "  (docs/Key-Vault.md). Nothing was written to $SECRETS_ENV."
             return 0
         fi
         warn "  keystore unavailable for $key; falling back to $SECRETS_ENV"
@@ -260,6 +276,24 @@ report_key_resolution() {
     return 0
 }
 
+# vault_holds <key>: true on macOS when Key Vault is on (KEYVAULT_URL in
+# .env) and key is one of the secrets the jobs read from it. The same list
+# as secret_store._vault_names: the gateway key (LLM_API_KEY_NAME, default
+# ANTHROPIC_API_KEY) and the three in _STATUS_NAMES; test_secrets_sh.py
+# holds the two in step.
+vault_holds() {
+    local key gw
+    key="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+    is_macos || return 1
+    [[ -n "$(env_config_value KEYVAULT_URL)" ]] || return 1
+    gw="$(env_config_value LLM_API_KEY_NAME)"
+    gw="$(printf '%s' "${gw:-ANTHROPIC_API_KEY}" | tr '[:lower:]' '[:upper:]')"
+    case "$key" in
+        "$gw"|SOURCE_MAIL_APP_PASSWORD|SOURCE_MAIL_TOKEN|OPEN_WEBUI_API_KEY) return 0 ;;
+    esac
+    return 1
+}
+
 # keystore_plan <key>: what a step that would create or replace key should
 # do, in KEYSTORE_PLAN (a variable, not output: the Keychain latch must not
 # die in a $(...) subshell). "keep" when it is held and --force is not set;
@@ -268,6 +302,14 @@ report_key_resolution() {
 # be prompted for, generated or written (S3). Says why when it skips.
 keystore_plan() {
     local key="$1" rc
+    if vault_holds "$key"; then
+        # F-20261125: the jobs read this one from Key Vault, and a value
+        # stored here would never be used, so nothing is asked or generated.
+        KEYSTORE_PLAN=skip
+        ok "  $key: Key Vault is on and holds it; not prompting or generating"
+        info "     check it with: python3 Templates/Scripts/secret_store.py status $key"
+        return 0
+    fi
     keystore_has "$key" && rc=0 || rc=$?
     if [[ "$rc" -eq 2 ]]; then
         KEYSTORE_PLAN=skip
@@ -465,6 +507,9 @@ _secret_store_set() {
     case "$errout" in
         *"timed out"*) _keychain_latch "secret_store.py set $name" ;;
     esac
+    # 3: refused because Key Vault holds the name (F-20261125); the callers
+    # must not treat it as a Keychain failure.
+    [[ "$rc" -eq 3 ]] && return 3
     return 1
 }
 

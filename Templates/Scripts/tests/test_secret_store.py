@@ -18,6 +18,20 @@ import secret_store
 import security_common
 
 
+@pytest.fixture(autouse=True)
+def cli_reads_no_real_dotenv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """The CLI loads Key Vault settings from SECRETS_ENV into os.environ
+    (F-20261125). Point it at a file that does not exist, and register every
+    key it may set with monkeypatch first, so a value it writes is removed
+    at teardown rather than leaking into the next test."""
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", tmp_path / "absent.env")
+    for key in ("KEYVAULT_URL", "KEYVAULT_TENANT_ID", "KEYVAULT_CLIENT_ID",
+                "KEYVAULT_CERT_THUMBPRINT", "KEYVAULT_KEY_NAME",
+                "KEYVAULT_KEYCHAIN_FALLBACK", "LLM_API_KEY_NAME"):
+        monkeypatch.setenv(key, "placeholder")
+        monkeypatch.delenv(key)
+
+
 @pytest.fixture
 def linux_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Force the plain-file backend into a temp dir (fake non-mac platform)."""
@@ -860,7 +874,9 @@ def test_a_secret_the_vault_lacks_is_still_missing(monkeypatch, keyvault, capsys
     monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
     assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
     assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "missing"
-    assert secret_store.not_found_hint("SOURCE_MAIL_TOKEN").startswith("store it with")
+    # F-20261125: with the vault on, `set` (Keychain only) is the wrong advice.
+    assert secret_store.not_found_hint("SOURCE_MAIL_TOKEN").startswith(
+        "add it to Key Vault as source-mail-token")
 
 
 def test_not_found_hint_never_advises_storing_after_a_failed_read(
@@ -935,3 +951,123 @@ def test_a_vault_failure_is_remembered_through_the_fallback(monkeypatch, keyvaul
     assert secret_store.get_secret("SOURCE_MAIL_TOKEN") is None
     assert secret_store.last_source("SOURCE_MAIL_TOKEN") == "vault-error"
     assert " set " not in secret_store.not_found_hint("SOURCE_MAIL_TOKEN")
+
+
+
+# ---------- F-20261125: the CLI and the Key Vault configuration ------------
+
+def _config_only_in_dotenv(monkeypatch, tmp_path, extra=""):
+    """Move the keyvault fixture's settings out of the environment and into a
+    .env file, as in a plain shell where no job has loaded it."""
+    lines = []
+    for k in ("KEYVAULT_URL", "KEYVAULT_TENANT_ID", "KEYVAULT_CLIENT_ID",
+              "KEYVAULT_CERT_THUMBPRINT"):
+        lines.append(f"{k}={os.environ[k]}")
+        monkeypatch.delenv(k)
+    env = tmp_path / "cli.env"
+    env.write_text("\n".join(lines) + "\n" + extra)
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", env)
+
+
+def test_cli_get_reads_the_vault_with_the_config_only_in_dotenv(
+        monkeypatch, keyvault, fake_security, tmp_path, capsys):
+    """The observed failure: `get` from a plain shell said "not found" for a
+    secret the vault held, because only `status` loaded .env."""
+    _config_only_in_dotenv(monkeypatch, tmp_path)
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    keyvault.secrets["source-mail-token"] = "vault-value"
+    fake_security.store["source_mail_token"] = "stale-keychain-value"
+    assert secret_store._cli(["get", "SOURCE_MAIL_TOKEN"]) == 0
+    assert capsys.readouterr().out == "vault-value\n"
+
+
+def test_cli_set_refuses_a_vault_secret_and_reads_no_value(
+        monkeypatch, keyvault, fake_security, tmp_path, capsys):
+    _config_only_in_dotenv(monkeypatch, tmp_path)
+    stdin = io.StringIO("new-value\n")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert secret_store._cli(["set", "SOURCE_MAIL_TOKEN"]) == secret_store.EXIT_VAULT_REFUSED == 3
+    err = capsys.readouterr().err
+    assert ("secret_store: SOURCE_MAIL_TOKEN: not stored. Key Vault is on and "
+            "the jobs read it from the vault, never the Keychain") in err
+    assert "source_mail_token" not in fake_security.store
+    assert stdin.read() == "new-value\n", "the value must not be read before refusing"
+
+
+def test_cli_set_refuses_the_configured_gateway_key_name(
+        monkeypatch, keyvault, fake_security, tmp_path, capsys):
+    _config_only_in_dotenv(monkeypatch, tmp_path, "LLM_API_KEY_NAME=gw_key\n")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("v\n"))
+    assert secret_store._cli(["set", "GW_KEY"]) == 3
+    assert "GW_KEY: not stored. Key Vault is on" in capsys.readouterr().err
+
+
+def test_cli_set_and_get_still_work_for_a_keystore_name_while_the_vault_is_on(
+        monkeypatch, keyvault, fake_security, tmp_path, capsys):
+    """The Open WebUI admin password is never in the vault: refusing it, or
+    asking the vault for it, would break the installer's own step."""
+    _config_only_in_dotenv(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("admin-pw\n"))
+    assert secret_store._cli(["set", "OPEN_WEBUI_ADMIN_PASSWORD"]) == 0
+    assert fake_security.store["open_webui_admin_password"] == "admin-pw"
+    capsys.readouterr()
+    before = len(keyvault.requests)
+    assert secret_store._cli(["get", "OPEN_WEBUI_ADMIN_PASSWORD"]) == 0
+    assert capsys.readouterr().out == "admin-pw\n"
+    assert len(keyvault.requests) == before, "a keystore name must not go to the vault"
+
+
+def test_cli_set_in_fallback_mode_writes_the_keychain_and_says_so(
+        monkeypatch, keyvault, fake_security, tmp_path, capsys):
+    _config_only_in_dotenv(monkeypatch, tmp_path, "KEYVAULT_KEYCHAIN_FALLBACK=1\n")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("fb-value\n"))
+    assert secret_store._cli(["set", "SOURCE_MAIL_TOKEN"]) == 0
+    assert fake_security.store["source_mail_token"] == "fb-value"
+    assert ("SOURCE_MAIL_TOKEN: this is the Keychain fallback copy "
+            "(KEYVAULT_KEYCHAIN_FALLBACK); jobs read Key Vault first") in capsys.readouterr().err
+
+
+def test_cli_rm_of_a_vault_secret_says_the_vault_is_unchanged(
+        monkeypatch, keyvault, fake_security, tmp_path, capsys):
+    _config_only_in_dotenv(monkeypatch, tmp_path)
+    fake_security.store["source_mail_token"] = "old-copy"
+    keyvault.secrets["source-mail-token"] = "vault-value"
+    assert secret_store._cli(["rm", "SOURCE_MAIL_TOKEN"]) == 0
+    assert "source_mail_token" not in fake_security.store
+    assert keyvault.secrets["source-mail-token"] == "vault-value"
+    assert ("SOURCE_MAIL_TOKEN: only a Keychain copy is ever removed here; "
+            "the Key Vault secret is unchanged") in capsys.readouterr().err
+
+
+def test_cli_get_of_a_missing_vault_secret_gives_the_vault_route(
+        monkeypatch, keyvault, tmp_path, capsys):
+    _config_only_in_dotenv(monkeypatch, tmp_path)
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    assert secret_store._cli(["get", "SOURCE_MAIL_TOKEN"]) == 1
+    err = capsys.readouterr().err
+    assert ("SOURCE_MAIL_TOKEN: not found; add it to Key Vault as "
+            "source-mail-token (docs/Key-Vault.md shows how)") in err
+    assert "secret_store.py set" not in err
+
+
+def test_the_jobs_hint_for_a_missing_vault_secret_is_the_vault_route(
+        monkeypatch, keyvault):
+    monkeypatch.delenv("OPEN_WEBUI_API_KEY", raising=False)
+    assert secret_store.get_secret("OPEN_WEBUI_API_KEY") is None
+    hint = secret_store.not_found_hint("OPEN_WEBUI_API_KEY")
+    assert hint.startswith("add it to Key Vault as open-webui-api-key")
+    assert "secret_store.py set" not in hint
+
+
+def test_cli_with_the_vault_off_is_unchanged(monkeypatch, fake_security, tmp_path, capsys):
+    """No KEYVAULT_URL anywhere: set and get act on the keystore as before."""
+    env = tmp_path / "cli.env"
+    env.write_text("SOME_SETTING=x\n")
+    monkeypatch.setattr(secret_store, "SECRETS_ENV", env)
+    monkeypatch.delenv("SOURCE_MAIL_TOKEN", raising=False)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("kc-value\n"))
+    assert secret_store._cli(["set", "SOURCE_MAIL_TOKEN"]) == 0
+    assert fake_security.store["source_mail_token"] == "kc-value"
+    capsys.readouterr()
+    assert secret_store._cli(["get", "SOURCE_MAIL_TOKEN"]) == 0
+    assert capsys.readouterr().out == "kc-value\n"
