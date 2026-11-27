@@ -345,6 +345,7 @@ def test_the_vault_name_list_matches_secret_store() -> None:
     assert "ANTHROPIC_API_KEY" in body
 
 
+@macos_shell
 def test_the_real_store_helper_passes_the_vault_refusal_through(tmp_path, allow_subprocess):
     """The stubs above return 3 themselves; this runs the real
     _secret_store_set against a helper that exits 3, as secret_store.py does."""

@@ -649,19 +649,24 @@ def collect_rag_sync_status() -> dict | None:
 # "Verified diagnosis helpers".
 #
 # No other pipeline scripts need to change: discovery reads the installed
-# .plist files directly. The two env overrides exist only so the render can be
-# exercised against fixtures in a test; in production the defaults are used.
+# .plist files directly. MD_LAUNCHAGENTS_DIR can point the render at fixture
+# plists (no test uses it today); in production the default is used. It picks
+# which files are read, never which program runs.
 
 LAUNCHAGENTS_DIR = Path(os.environ.get(
     "MD_LAUNCHAGENTS_DIR", str(HOME / "Library" / "LaunchAgents")))
-LAUNCHCTL_BIN = os.environ.get("MD_LAUNCHCTL", "/bin/launchctl")
+# Fixed absolute paths, not environment overrides: the MD_LAUNCHCTL and
+# MD_PLUTIL overrides that stood here were used by no test, and an override
+# that picks which program runs is the thing semgrep's tainted-env rule is
+# about (suppression re-argued 2026-11-27). Tests patch the attribute.
+LAUNCHCTL_BIN = "/bin/launchctl"
 # By absolute path for the same reason as LAUNCHCTL_BIN, and as
 # security_common.POWERSHELL_EXE: a bare name is resolved through the search
 # order, which is how an impostor gets run (M-DASH 2026-09-23, CWE-426).
 POWERSHELL_EXE = str(Path(os.environ.get("SystemRoot") or r"C:\Windows")
                      / "System32" / "WindowsPowerShell" / "v1.0"
                      / "powershell.exe")
-PLUTIL_BIN    = os.environ.get("MD_PLUTIL", "/usr/bin/plutil")
+PLUTIL_BIN    = "/usr/bin/plutil"
 
 # Only agents whose program runs a script from here are treated as ours.
 PIPELINE_MARKER = "/Obsidian/Templates/Scripts/"
